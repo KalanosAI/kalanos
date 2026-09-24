@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use Kalanos in your research, please cite it using the metadata below."
+type: software
+title: "Kalanos: data quality grading for robot training datasets"
+abstract: >-
+  Kalanos grades robot training data before it is used for training. It scores
+  every recording and the dataset as a whole for timing, signal integrity and
+  motion quality, producing a 0-100 score, an A-F grade and a train-ready
+  verdict, with each finding traced to the episode, stream and channel it came
+  from. It reads LeRobot, HDF5, MCAP (ROS 2), CSV and JSON recordings, infers
+  schemas for undocumented formats, and needs no labels.
+authors:
+  - name: "Kalanos AI"
+    website: "https://kalanos.ai"
+version: "0.2.0"
+date-released: "2026-09-24"
+license: Apache-2.0
+url: "https://kalanos.ai"
+repository-code: "https://github.com/KalanosAI/kalanos"
+repository-artifact: "https://pypi.org/project/kalanos/"
+keywords:
+  - robotics
+  - robot learning
+  - imitation learning
+  - data quality
+  - dataset validation
+  - LeRobot
+  - HDF5
+  - MCAP
+  - ROS 2
+  - sensor data
