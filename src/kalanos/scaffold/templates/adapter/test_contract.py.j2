@@ -1,0 +1,35 @@
+"""The contract every Kalanos adapter has to hold."""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+from pathlib import Path
+
+# Internal
+from kalanos.testing import check_adapter
+from {{ module_name }} import {{ class_name }}
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
+def test_contract():
+    """Verify {{ class_name }} reads what it claims and declines what it does not."""
+
+    check_adapter(
+        {{ class_name }}(),
+        FIXTURES / "sample{{ suffix }}",
+        FIXTURES / "decoy.txt",
+    )

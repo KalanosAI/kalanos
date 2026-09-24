@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>kalanos report — {{ report.root }}</title>
+<style>
+  :root {
+    --paper: #f4f1ea;
+    --panel: #e9e5dc;
+    --ink: #171717;
+    --prose: #3B1410;
+    --muted: #65625c;
+    --rule: #bbb7af;
+    --accent: #e63b2e;
+    --navy: #0a2540;
+    --warning: #f59e0b;
+    --good: #176b75;
+    --sans: 'IBM Plex Sans', 'Inter', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+
+  .column {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.5rem 4rem;
+  }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  /* The score rack: one grid declared once, reused at every level so the
+     rails share an alignment column all the way down the page. A node
+     with no score skips the rail element entirely, so each track is
+     pinned explicitly rather than left to fall out from source order. */
+  .row {
+    display: grid;
+    grid-template-columns: 2.25rem 1fr minmax(6rem, 13rem) 4rem;
+    align-items: baseline;
+    column-gap: 1rem;
+    padding: 0.5rem 0;
+  }
+  .row > .chip { grid-column: 1; }
+  .row > .name { grid-column: 2; }
+  .row > .rail { grid-column: 3; }
+  .row > .score { grid-column: 4; }
+
+  .chip {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-weight: 600;
+    border-radius: 3px;
+  }
+  .grade-a, .grade-b { background: var(--good); color: var(--paper); }
+  .grade-c, .grade-d { background: var(--warning); color: var(--ink); }
+  .grade-f { background: var(--accent); color: var(--paper); font-weight: 600; }
+  .grade-none { background: var(--panel); color: var(--muted); }
+
+  .rail {
+    display: inline-block;
+    width: 100%;
+    height: 0.5rem;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .rail-fill {
+    display: block;
+    height: 100%;
+    width: var(--fill);
+    background: var(--muted);
+  }
+  .rail-fill.grade-a, .rail-fill.grade-b { background: var(--good); }
+  .rail-fill.grade-c, .rail-fill.grade-d { background: var(--warning); }
+  .rail-fill.grade-f { background: var(--accent); }
+  .rail-fill.grade-none { background: var(--rule); }
+  @media (prefers-reduced-motion: no-preference) {
+    .rail-fill {
+      animation: fill-in 480ms cubic-bezier(.2,.7,.2,1) both;
+      animation-delay: calc(var(--i, 0) * 30ms);
+    }
+    @keyframes fill-in {
+      from { width: 0; }
+      to { width: var(--fill); }
+    }
+  }
+  .rail-sm { width: 4rem; height: 0.375rem; }
+
+  .score { font-family: var(--mono); font-size: 0.8125rem; text-align: right; }
+
+  .name { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+  .name-main { font-family: var(--sans); font-weight: 600; font-size: 0.9375rem; }
+  .name-sub { font-size: 0.8125rem; color: var(--muted); }
+  .metric-list { display: flex; flex-wrap: wrap; gap: 0.15rem 0.35rem; }
+
+  .marker {
+    display: inline-block;
+    margin-right: 0.35rem;
+    transition: transform 150ms ease;
+  }
+  .marker::before { content: "▸"; }
+  details[open] > summary .marker { transform: rotate(90deg); }
+
+  summary.row {
+    list-style: none;
+    cursor: pointer;
+  }
+  summary.row::-webkit-details-marker { display: none; }
+  summary.row:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .node-body {
+    border-left: 1px solid var(--rule);
+    padding-left: 1rem;
+    margin-left: 1.125rem;
+  }
+
+  /* A solid navy surface, so the top of the page reads as a device faceplate. */
+  header.plate {
+    background: var(--navy);
+    color: var(--paper);
+  }
+  header.plate .column { padding-top: 2rem; padding-bottom: 2rem; }
+  header.plate .path { font-family: var(--mono); font-size: 1.125rem; margin: 0.5rem 0 0; }
+  header.plate .meta {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+    margin: 0.5rem 0 0;
+  }
+  .plate-main {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .plate-score { display: flex; align-items: baseline; gap: 1rem; }
+  .dataset-score {
+    font-family: var(--mono);
+    font-size: clamp(3rem, 9vw, 4.75rem);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .verdict { font-family: var(--mono); font-size: 0.8125rem; letter-spacing: 0.03em; }
+  .verdict-good { color: var(--good); }
+  .verdict-bad { color: var(--accent); }
+  .verdict-unknown { color: var(--muted); }
+
+  .tiles-bar { background: var(--panel); border-bottom: 1px solid var(--rule); }
+  .tiles {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .tile { padding: 1rem 1.5rem; border-left: 1px solid var(--rule); }
+  .tile:first-child { border-left: none; }
+  .tile-count { font-family: var(--mono); font-size: 1.5rem; margin: 0; font-variant-numeric: tabular-nums; }
+  .tile-label { font-family: var(--mono); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted); margin: 0.15rem 0 0; }
+
+  section { padding-top: 2rem; }
+
+  .empty { color: var(--muted); }
+
+  table.findings { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
+  table.findings th, table.findings td { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+  table.findings td:first-child { padding-left: 0.75rem; border-left: 3px solid var(--bar, transparent); }
+  tr.sev-critical { --bar: var(--accent); }
+  tr.sev-warning { --bar: var(--warning); }
+  .points { display: flex; align-items: center; gap: 0.5rem; }
+
+  .toolbar { display: flex; align-items: baseline; justify-content: space-between; }
+  .toolbar-buttons { display: flex; gap: 0.5rem; }
+  .toolbar-buttons button {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    padding: 0.3rem 0.6rem;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .metric {
+    display: inline-block;
+    margin: 0.15rem 0.35rem 0.15rem 0;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    border: 1px solid;
+  }
+  .metric.status-good {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--good) 14%, var(--paper));
+    border-color: var(--good);
+    color: var(--ink);
+  }
+  .metric.status-warning {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--warning) 14%, var(--paper));
+    border-color: var(--warning);
+    color: var(--ink);
+  }
+  .metric.status-critical {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--accent) 14%, var(--paper));
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+  .metric.status-not_applicable, .metric.status-report_only {
+    background: transparent;
+    border-color: var(--rule);
+    color: var(--muted);
+  }
+
+  .stream-metrics { margin-bottom: 0.25rem; }
+  .episode-metrics { margin-bottom: 0.75rem; }
+
+  table.plain { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-family: var(--mono); font-size: 0.8125rem; }
+  table.plain th, table.plain td { text-align: left; padding: 0.3rem 0.75rem; border-bottom: 1px solid var(--rule); }
+
+  @media (max-width: 40rem) {
+    .row { grid-template-columns: 2.25rem 1fr 4rem; }
+    .row > .rail { display: none; }
+    .row > .score { grid-column: 3; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+{% macro grade_chip(score) -%}
+{%- if score.score is none -%}
+<span class="chip grade-none">–</span>
+{%- else -%}
+<span class="chip grade-{{ score.grade.value | lower }}">{{ score.grade.value }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro score_rail(score) -%}
+{%- if score.score is not none -%}
+{%- set pct = [score.score, 0] | max -%}
+{%- set pct = [pct, 100] | min -%}
+{%- set grade_class = "grade-" ~ (score.grade.value | lower if score.grade else "none") -%}
+<span class="rail" style="--fill: {{ pct }}%" aria-hidden="true"><span class="rail-fill {{ grade_class }}"></span></span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro points_rail(points) -%}
+{%- set pct = [points, 0] | max -%}
+{%- set pct = [pct, 100] | min -%}
+<span class="rail rail-sm" style="--fill: {{ pct }}%" aria-hidden="true"><span class="rail-fill"></span></span>
+{%- endmacro %}
+
+{% macro finding_row(finding, index=none) -%}
+<tr class="sev-{{ finding.severity.value }}"{% if index is not none %} style="--i: {{ index }}"{% endif %}>
+  <td>{{ finding.severity.value }}</td>
+  <td class="mono">{{ finding.metric_id }}</td>
+  <td class="mono">{{ finding.episode_id }}{% if finding.stream %} &middot; {{ finding.stream }}{% endif %}{% if finding.instance %} &middot; {{ finding.instance }}{% endif %}{% if finding.channel %} &middot; {{ finding.channel }}{% endif %}</td>
+  <td class="mono">{{ "%.4g"|format(finding.value) }}{% if finding.unit %} {{ finding.unit }}{% endif %}</td>
+  <td class="points">{{ points_rail(finding.points) }}<span class="mono">{{ "%.0f"|format(finding.points) }}</span></td>
+</tr>
+{%- endmacro %}
+
+<header class="plate" data-level="dataset" data-name="{{ report.root }}" data-score="{{ report.score | score_attr }}">
+  <div class="column">
+    <p class="eyebrow" style="color: var(--paper); opacity: 0.7;">KALANOS &middot; DATASET REPORT</p>
+    <div class="plate-main">
+      <div>
+        <h1 class="path">{{ report.root }}</h1>
+        <p class="meta">
+          schema {{ report.schema_version }}
+          {%- if report.policy_version is not none %} &middot; policy v{{ report.policy_version }}{% endif -%}
+          {%- if report.duration_s is not none %} &middot; {{ "%.2f"|format(report.duration_s) }}s{% endif %}
+        </p>
+      </div>
+      <div class="plate-score">
+        {{ grade_chip(report.score) }}
+        <span class="dataset-score">{% if report.score.score is none %}&ndash;{% else %}{{ "%.1f"|format(report.score.score) }}{% endif %}</span>
+        {% if report.score.train_ready is none %}
+        <span class="verdict verdict-unknown">train-readiness unknown</span>
+        {% elif report.score.train_ready %}
+        <span class="verdict verdict-good">train ready</span>
+        {% else %}
+        <span class="verdict verdict-bad">not train ready</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="tiles-bar">
+  <div class="tiles">
+    <div class="tile">
+      <p class="tile-count">{{ report.episodes | length }}</p>
+      <p class="tile-label">RECORDINGS</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">{{ report.findings | length }}</p>
+      <p class="tile-label">FINDINGS</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">{{ report.skipped | length }}</p>
+      <p class="tile-label">NOT ANALYSED</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">{{ report.unresolved | length }}</p>
+      <p class="tile-label">NO SCHEMA</p>
+    </div>
+  </div>
+</div>
+
+<div class="column">
+
+<section class="findings-section">
+  <h2 class="eyebrow">FINDINGS</h2>
+  {% if not report.findings %}
+  <p class="empty">Nothing failed. Every graded metric came back clean.</p>
+  {% else %}
+  <table class="findings">
+    <thead>
+      <tr><th>severity</th><th>metric</th><th>location</th><th>value</th><th>points</th></tr>
+    </thead>
+    <tbody>
+    {% for finding in report.findings[:findings_preview] %}
+    {{ finding_row(finding, loop.index0) }}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if report.findings | length > findings_preview %}
+  <details>
+    <summary class="eyebrow">{{ report.findings | length - findings_preview }} more findings</summary>
+    <table class="findings">
+      <thead>
+        <tr><th>severity</th><th>metric</th><th>location</th><th>value</th><th>points</th></tr>
+      </thead>
+      <tbody>
+      {% for finding in report.findings[findings_preview:] %}
+      {{ finding_row(finding) }}
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="recordings-section">
+  <div class="toolbar">
+    <h2 class="eyebrow">RECORDINGS</h2>
+    <div class="toolbar-buttons">
+      <button type="button" id="expand-all">Expand all</button>
+      <button type="button" id="collapse-all">Collapse all</button>
+    </div>
+  </div>
+
+  {% for episode in report.episodes %}
+  <details class="node" data-node
+      data-level="episode" data-name="{{ episode.id }}" data-score="{{ episode.score | score_attr }}"
+      {% if episode_findings.get(episode.id, 0) %}open{% endif %}>
+    <summary class="row" style="--i: {{ loop.index0 }}">
+      {{ grade_chip(episode.score) }}
+      <span class="name">
+        <span class="name-main"><span class="marker" aria-hidden="true"></span>{{ episode.id }}</span>
+        <span class="name-sub mono">{{ episode.source_paths | join(", ") }}</span>
+      </span>
+      {{ score_rail(episode.score) }}
+      <span class="score">{{ episode.score | score_text }}</span>
+    </summary>
+    <div class="node-body">
+      {% if episode.metrics %}
+      <div class="stream-metrics episode-metrics">
+        {% for name, metric in episode.metrics.items() %}
+        <span class="metric status-{{ metric.status.value }}" data-status="{{ metric.status.value }}">{{ name }}: {{ metric | metric_text }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% for stream in episode.streams %}
+      <details class="node" data-node
+          data-level="stream" data-name="{{ stream.taxonomy_type }}"
+          data-instance="{{ stream.instance or '' }}" data-attribution="{{ stream.attribution.value }}"
+          data-score="{{ stream.score | score_attr }}"
+          {% if stream_findings.get((episode.id, stream.taxonomy_type, stream.instance), 0) %}open{% endif %}>
+        <summary class="row" style="--i: {{ loop.index0 }}">
+          {{ grade_chip(stream.score) }}
+          <span class="name">
+            <span class="name-main mono"><span class="marker" aria-hidden="true"></span>{{ stream.taxonomy_type }}{% if stream.attribution.value == "unattributed" %} &middot; unattributed{% elif stream.instance %} &middot; {{ stream.instance }}{% endif %}</span>
+            <span class="name-sub">{{ stream.channels | length }} channel{{ "s" if stream.channels | length != 1 }}</span>
+          </span>
+          {{ score_rail(stream.score) }}
+          <span class="score">{{ stream.score | score_text }}</span>
+        </summary>
+        <div class="node-body">
+          {% if stream.metrics %}
+          <div class="stream-metrics">
+            {% for name, metric in stream.metrics.items() %}
+            <span class="metric status-{{ metric.status.value }}" data-status="{{ metric.status.value }}">{{ name }}: {{ metric | metric_text }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% for graded in stream.channels %}
+          <div class="row" data-level="channel" data-name="{{ graded.channel.name }}" data-score="{{ graded.score | score_attr }}" style="--i: {{ loop.index0 }}">
+            {{ grade_chip(graded.score) }}
+            <span class="name">
+              <span class="name-main mono">{{ graded.channel.name }}</span>
+              {% if graded.metrics %}
+              <span class="metric-list">
+                {% for name, metric in graded.metrics.items() %}
+                <span class="metric status-{{ metric.status.value }}" data-status="{{ metric.status.value }}">{{ name }}: {{ metric | metric_text }}</span>
+                {% endfor %}
+              </span>
+              {% endif %}
+            </span>
+            {{ score_rail(graded.score) }}
+            <span class="score">{{ graded.score | score_text }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+  </details>
+  {% endfor %}
+</section>
+
+{% if report.skipped %}
+<details>
+  <summary class="eyebrow">NOT ANALYSED &middot; {{ report.skipped | length }}</summary>
+  <table class="plain">
+    <tr><th>path</th><th>reason</th></tr>
+    {% for item in report.skipped %}
+    <tr><td>{{ item.path }}</td><td>{{ item.reason.value }}</td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
+
+{% if report.unresolved %}
+<details>
+  <summary class="eyebrow">NO SCHEMA RESOLVED &middot; {{ report.unresolved | length }}</summary>
+  <table class="plain">
+    <tr><th>path</th><th>reason</th></tr>
+    {% for item in report.unresolved %}
+    <tr><td>{{ item.path }}</td><td>{{ item.reason }}</td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
+
+</div>
+
+<script>
+const nodes = document.querySelectorAll("details[data-node]");
+document.getElementById("expand-all").addEventListener("click", () => nodes.forEach(n => n.open = true));
+document.getElementById("collapse-all").addEventListener("click", () => nodes.forEach(n => n.open = false));
+</script>
+
+</body>
+</html>

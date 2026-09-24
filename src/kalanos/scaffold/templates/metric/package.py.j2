@@ -1,0 +1,68 @@
+"""The {{ name }} metric."""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+import statistics
+
+# Internal
+from kalanos.analysis.metrics.registry import metric
+from kalanos.analysis.models.metrics import (
+    Family,
+    Level,
+    MetricResult,
+    MetricStatus,
+    Requires,
+    StreamContext,
+)
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+@metric(
+    level=Level.STREAM,
+    family=Family.{{ family_constant }},
+    requires=Requires(regular_sampling=True, min_samples=2),
+)
+def {{ name }}(ctx: StreamContext) -> MetricResult:
+    """Spread of the gaps between consecutive timestamps.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable`, with a reason in `evidence`, when there are too few gaps
+        for a spread to mean anything; `report_only` otherwise.
+    """
+
+    # TODO: replace with what {{ name }} actually measures.
+    # The placeholder exists so the contract test is green before the first edit,
+    # and it must keep telling clean data from defective data once you replace it.
+    timestamps = ctx.timestamps.drop_nulls().to_list()
+    gaps = [
+        later - earlier
+        for earlier, later in zip(timestamps, timestamps[1:], strict=False)
+    ]
+    if len(gaps) < 2:
+        return MetricResult(
+            value=None,
+            unit=None,
+            status=MetricStatus.NOT_APPLICABLE,
+            evidence={"reason": "fewer than two gaps to take a spread over"},
+        )
+
+    return MetricResult(
+        value=statistics.stdev(gaps) * 1000.0,
+        unit="ms",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={"n_gaps": len(gaps)},
+    )

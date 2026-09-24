@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# direnv
+.direnv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+dist/
+*.egg-info/
+
+# Analysis output
+reports/
+
+# Local smoke-test output
+smoke-reports/

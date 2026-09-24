@@ -1,0 +1,122 @@
+{
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-34s": {
+  "CAM7F3A": {
+   "exposure_ms": 9.28,
+   "gain": 1.03
+  },
+  "CAM9B21": {
+   "exposure_ms": 8.55,
+   "gain": 1.22
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-42s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.2,
+   "gain": 1.74
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.09,
+   "gain": 1.59
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-45s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.06,
+   "gain": 1.22
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.01,
+   "gain": 1.03
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-49s": {
+  "CAM7F3A": {
+   "exposure_ms": 9.43,
+   "gain": 1.7
+  },
+  "CAM9B21": {
+   "exposure_ms": 8.84,
+   "gain": 1.45
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-54s": {
+  "CAM7F3A": {
+   "exposure_ms": 9.62,
+   "gain": 1.01
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.61,
+   "gain": 1.7
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-00m-59s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.56,
+   "gain": 1.22
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.53,
+   "gain": 1.1
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-05s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.19,
+   "gain": 1.85
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.21,
+   "gain": 1.81
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-13s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.92,
+   "gain": 1.12
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.84,
+   "gain": 1.08
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-18s": {
+  "CAM7F3A": {
+   "exposure_ms": 9.66,
+   "gain": 1.62
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.72,
+   "gain": 1.58
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-26s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.14,
+   "gain": 1.66
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.55,
+   "gain": 1.99
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-35s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.47,
+   "gain": 1.1
+  },
+  "CAM9B21": {
+   "exposure_ms": 8.56,
+   "gain": 1.64
+  }
+ },
+ "AUTOLab+5d05c5aa+2023-07-07-10h-01m-40s": {
+  "CAM7F3A": {
+   "exposure_ms": 8.33,
+   "gain": 1.36
+  },
+  "CAM9B21": {
+   "exposure_ms": 9.34,
+   "gain": 1.7
+  }
+ }
+}

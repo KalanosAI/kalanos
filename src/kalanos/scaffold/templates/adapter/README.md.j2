@@ -1,0 +1,44 @@
+# {{ dist_name }}
+
+A Kalanos adapter for the `{{ suffix }}` format.
+
+## Fill in
+
+`src/{{ module_name }}/__init__.py` ships a placeholder `parse` that reads the generated CSV fixture, so the contract test passes before you have written anything. Replace two things:
+
+- `{{ class_name }}.parse`, with the `{{ name }}` format's own reader.
+- `tests/fixtures/sample{{ suffix }}`, with a real recording small enough to commit.
+
+`detect` bids on the extension. If `{{ suffix }}` is a container other formats also use, lower the bid so a specialised reader wins those files.
+
+## Install and test
+
+```bash
+pip install -e .
+pytest
+```
+
+## Confirm Kalanos found it
+
+```bash
+kalanos adapters
+```
+
+`{{ name }}` appears with `{{ dist_name }} 0.1.0` beside it once the package is installed. A row marked FAILED carries the import error that caused it.
+
+## Optional dependencies
+
+A dependency you did not require is absent, not broken, and the listing can say so. Guard the import and name what provides it:
+
+```python
+from kalanos.analysis.entry_points import MissingDependency
+
+try:
+    import somelib
+except ImportError as exc:
+    raise MissingDependency("{{ dist_name }}", "somelib") from exc
+```
+
+The row then reads `not installed — add {{ dist_name }}[somelib]`, naming an extra of this package. Gating on a separate package instead? Name it alone, with no extra: `MissingDependency("somelib")`.
+
+Leave the imports of your required dependencies alone: a missing one of thoseis a broken install, and its import error is the message that leads somewhere.

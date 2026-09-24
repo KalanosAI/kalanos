@@ -1,0 +1,18 @@
+[project]
+name = "{{ dist_name }}"
+version = "0.1.0"
+description = "A Kalanos adapter for the {{ name }} format"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["kalanos", "polars"]
+
+# Installing this package is all Kalanos needs; discovery walks this group.
+[project.entry-points."kalanos.adapters"]
+{{ name }} = "{{ module_name }}:{{ class_name }}"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/{{ module_name }}"]

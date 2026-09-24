@@ -1,0 +1,24 @@
+"""The contract every Kalanos metric has to hold."""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Internal
+from kalanos.testing import Defect, check_metric, clean_recording, stream_context
+from {{ module_name }} import {{ name }}
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
+def test_contract():
+    """Verify {{ name }} is registered, deterministic, and catches its own defect."""
+
+    check_metric(
+        {{ name }},
+        clean=stream_context(clean_recording()),
+        fires_on=Defect.JITTER,
+    )

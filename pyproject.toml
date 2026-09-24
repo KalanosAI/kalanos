@@ -1,0 +1,103 @@
+[project]
+name = "kalanos"
+version = "0.1.0"
+description = "Data quality scoring for robotics and industrial sensor data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic",
+    "pydantic-settings",
+    "polars",
+    "pyyaml",
+    "typer",
+    "jinja2>=3.1.6",
+    "rich>=15.0.0",
+    "platformdirs>=4.11.5",
+    "universal-pathlib>=0.3.10",
+]
+
+# Extras are populated as features land, never before — an extra that installs a
+# dependency for code that does not exist yet is a lie the install can tell.
+# `all` self-references each extra (PEP 621, supported by pip>=21.2, uv, hatch)
+# instead of repeating its pins, so a new extra is one line added to both lists.
+[project.optional-dependencies]
+all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]"]
+video = ["av>=13", "numpy"]
+hdf5 = ["h5py>=3"]
+mcap = ["mcap>=1.4", "mcap-ros2-support>=0.5"]
+hf = ["huggingface-hub>=1.31.0"]
+
+[project.urls]
+Homepage = "https://github.com/KalanosAI/kalanos"
+Repository = "https://github.com/KalanosAI/kalanos"
+Issues = "https://github.com/KalanosAI/kalanos/issues"
+
+[project.scripts]
+kalanos = "kalanos.cli:app"
+
+# Built-ins register here on the same footing as any third-party package.
+[project.entry-points."kalanos.adapters"]
+csv = "kalanos.analysis.adapters.csv:CsvAdapter"
+delimited = "kalanos.analysis.adapters.delimited:DelimitedTextAdapter"
+hdf5 = "kalanos.analysis.adapters.hdf5:Hdf5Adapter"
+json = "kalanos.analysis.adapters.json:JsonAdapter"
+jsonl = "kalanos.analysis.adapters.jsonl:JsonlAdapter"
+lerobot_v2 = "kalanos.analysis.adapters.lerobot.v2:LeRobotV2Adapter"
+lerobot_v3 = "kalanos.analysis.adapters.lerobot.v3:LeRobotV3Adapter"
+mcap = "kalanos.analysis.adapters.mcap:McapAdapter"
+
+# Metric and reporter entry points name a module, not a callable:
+# importing it runs the decorations inside, which is what registers them.
+[project.entry-points."kalanos.metrics"]
+timing = "kalanos.analysis.metrics.timing"
+integrity = "kalanos.analysis.metrics.integrity"
+motion = "kalanos.analysis.metrics.motion"
+
+[project.entry-points."kalanos.reporters"]
+render = "kalanos.analysis.reporting.render"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kalanos"]
+# assets/ needs no force-include: hatchling ships every file under the package
+# directory, .yaml included. Verified by building the wheel and listing it.
+
+[dependency-groups]
+dev = [
+    "av>=13",
+    "h5py>=3.16.0",
+    "huggingface-hub>=1.31.0",
+    "mcap>=1.4",
+    "mcap-ros2-support>=0.5",
+    "numpy",
+    "pytest>=8",
+    "ruff>=0.8",
+    "tomli>=2 ; python_full_version < '3.11'",
+]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+# tests/ has no __init__.py, so `helpers` resolves as a bare top-level
+# module rather than a package import — isort can't tell that apart from
+# a real third-party dependency without this.
+known-local-folder = ["helpers"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: builds the wheel and installs it into a real venv; needs network access to resolve dependencies and dominates suite runtime, so it is excluded by default — run explicitly with `-m integration`.",
+]
+addopts = "-m 'not integration'"

@@ -1,0 +1,45 @@
+# {{ dist_name }}
+
+The `{{ name }}` metric for Kalanos, in the `{{ family }}` family.
+
+## Fill in
+
+`src/{{ module_name }}/__init__.py` ships a placeholder body — the spread of the gaps between timestamps — so the contract test passes before you have written anything. Replace the body with what `{{ name }}` actually measures.
+
+`check_metric` asserts the metric tells clean data from defective data, so name the fault your metric exists to catch as `fires_on=` in `tests/test_contract.py`, from `kalanos.testing.Defect`. Change the declaration when you replace the placeholder body.
+
+Grading also needs a `{{ family }}.{{ name }}` entry in the grading policy, with its `good`, `bad` and weight. Without one a metric stays `report_only` forever.
+
+An installed metric is listed by `kalanos metrics`, but `kalanos grade` does not run it yet: the grading pipeline reads only the metrics that ship with Kalanos. Your contract test is what exercises this one until that lands.
+
+## Install and test
+
+```bash
+pip install -e .
+pytest
+```
+
+## Confirm Kalanos found it
+
+```bash
+kalanos metrics --family {{ family }}
+```
+
+`{{ name }}` appears with `{{ dist_name }} 0.1.0` beside it once the package is installed. A row marked FAILED carries the import error that caused it.
+
+## Optional dependencies
+
+A dependency you did not require is absent, not broken, and the listing can say so. Guard the import and name what provides it:
+
+```python
+from kalanos.analysis.entry_points import MissingDependency
+
+try:
+    import somelib
+except ImportError as exc:
+    raise MissingDependency("{{ dist_name }}", "somelib") from exc
+```
+
+The row then reads `not installed — add {{ dist_name }}[somelib]`, naming an extra of this package. Gating on a separate package instead? Name it alone, with no extra: `MissingDependency("somelib")`.
+
+Leave the imports of your required dependencies alone: a missing one of those is a broken install, and its import error is the message that leads somewhere.

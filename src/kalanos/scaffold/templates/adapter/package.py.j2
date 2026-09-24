@@ -1,0 +1,54 @@
+"""Read the {{ name }} format into Kalanos episodes."""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# External
+import polars as pl
+from upath import UPath
+
+# Internal
+from kalanos.analysis.adapters.tabular import ParsedTable, TabularAdapter
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# The format announces itself by its extension alone, so this is a specific-format bid.
+# Lower it to around 0.3 if {{ suffix }} is a container other readers also claim;
+# see docs/ADAPTERS.md on picking a confidence.
+_CONFIDENCE = 0.9
+
+_SUFFIX = "{{ suffix }}"
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+class {{ class_name }}(TabularAdapter):
+    """Reads any `{{ suffix }}` file."""
+
+    name = "{{ name }}"
+
+    def detect(self, path: UPath) -> float:
+        """Bid on the extension."""
+
+        return _CONFIDENCE if path.suffix.lower() == _SUFFIX else 0.0
+
+    def parse(self, path: UPath) -> ParsedTable:
+        """Read one file into a frame of rows.
+
+        Everything after this — the time axis, splitting rows into instances,
+        sampling regularity, and resolving field names to taxonomy types —
+        is `TabularAdapter`'s.
+        """
+
+        # TODO: replace with the {{ name }} format's own reader.
+        # The placeholder reads the generated CSV fixture so the contract test is green
+        # from the first run; swap the fixture at the same time.
+        with path.open("rb") as handle:
+            return ParsedTable(frame=pl.read_csv(source=handle))

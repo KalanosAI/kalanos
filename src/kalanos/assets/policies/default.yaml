@@ -1,0 +1,173 @@
+# The policy Kalanos grades with when a user supplies none of their own.
+#
+# docs/METRICS.md is the source of truth for every value below.
+# A threshold, weight or limit that file marks "to define"
+# must never appear here as a number.
+# A value it marks "candidate" may ship as the working default,
+# provided its entry below carries a comment marking it unconfirmed —
+# see "Adding a metric" in that file before touching this one.
+
+schema_version: 1
+
+metrics:
+  # Both bounds decided: good < 1%, bad > 5%.
+  timing.drop_rate:
+    thresholds:
+      default:
+        good: 0.01
+        bad: 0.05
+
+  # Good bound only, at 100 Hz specifically, and unconfirmed against real
+  # recordings; bad is still to define. Kept one-sided on purpose: an
+  # absolute-ms band only fits ~100 Hz, and a two-sided ms band grades the
+  # jittery-clock fixture (armD) that the corpus builds to stay ungraded.
+  timing.dt_jitter_ms:
+    thresholds:
+      default:
+        good: 5.0
+
+  # Candidate: the 10%/25% deviation bounds are unconfirmed against real
+  # recordings.
+  timing.effective_hz:
+    mode: abs_dev  # grade |value - target| / |target| instead of value directly
+    target: nominal_hz  # key looked up under this metric's own `limits`
+    # an adapter's describe() naming a declared rate auto-fills the target
+    # above from DatasetInfo.nominal_rate_hz, unless this file already set it
+    target_source: nominal_rate_hz
+    thresholds:
+      default:
+        good: 0.10
+        bad: 0.25
+
+  # Candidate: the percent bounds are unconfirmed against real recordings.
+  integrity.missing_pct:
+    thresholds:
+      default:
+        good: 0.5
+        bad: 5.0
+
+  # Candidate: the 1%/20% bounds are unconfirmed against real recordings;
+  # even clean, regularly-sampled data can trip a 1% good bound on a short
+  # recording, so the lower bound wants checking against longer ones.
+  # Reward channels flatline legitimately until success, so they are
+  # neutralised rather than graded against the default band.
+  integrity.flatline_pct:
+    thresholds:
+      default:
+        good: 1.0
+        bad: 20.0
+      reward.frame_reward: {good: null, bad: null}
+      reward.success_label: {good: null, bad: null}
+      reward.value_score: {good: null, bad: null}
+      reward.discount_flag: {good: null, bad: null}
+
+  # Candidate: default and joint-velocity bad bounds unconfirmed against real
+  # recordings. Joint velocity now carries a two-sided band of its own; a
+  # type-keyed band is never merged with the default.
+  integrity.spike_pct:
+    thresholds:
+      default:
+        good: 0.1
+        bad: 2.0
+      proprio.joint_velocity:
+        good: 0.1
+        bad: 2.0
+
+  # Report-only by design: the documented threshold is a total change over
+  # an episode, which this metric's per-minute unit cannot convert to
+  # without a duration the policy does not hold.
+  integrity.drift:
+    report_only: true
+
+  # Candidate: default and per-type bad bounds unconfirmed against real
+  # recordings (the good bounds are the decided ones). Joint velocity and
+  # joint acceleration now carry two-sided bands of their own; a type-keyed
+  # band is never merged with the default.
+  integrity.snr_db:
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 30.0
+        bad: 15.0
+      proprio.joint_velocity:
+        good: 20.0
+        bad: 10.0
+      proprio.joint_acceleration:
+        good: 12.0
+        bad: 6.0
+
+  # Candidate: bad bound unconfirmed against real recordings.
+  integrity.dead_taxel_pct:
+    thresholds:
+      default:
+        good: 2.0
+        bad: 10.0
+
+  # Candidate: bad bound unconfirmed against real recordings.
+  integrity.hysteresis:
+    thresholds:
+      default:
+        good: 0.05
+        bad: 0.20
+
+  # Candidate (low confidence): bad bound unconfirmed against real recordings.
+  motion.mean_jerk_norm:
+    thresholds:
+      default:
+        good: 0.1
+        bad: 0.5
+
+  # Candidate (low confidence): bad bound unconfirmed against real recordings.
+  motion.max_abs_jerk:
+    thresholds:
+      default:
+        good: 0.1
+        bad: 0.5
+
+  # No bound decided; docs/METRICS.md marks it to define.
+  motion.action_chatter: {}
+
+  # The observed maximum is an estimate, not a declared limit;
+  # the documented good < 1% band waits on a declared limit being wired in.
+  motion.vel_saturation_pct:
+    report_only: true
+
+  # The observed range is an estimate, not a declared limit;
+  # the documented band waits on a declared limit being wired in.
+  motion.limit_proximity_pct:
+    report_only: true
+
+  # No bound decided; docs/METRICS.md marks it to define.
+  motion.still_drift: {}
+
+  # Candidate (low confidence): deliberate motion lives below ~5 Hz, so a large
+  # share of torque energy above 20 Hz is mechanical. Bounds unconfirmed against
+  # real recordings — validate before treating these as decided.
+  motion.hf_vibration_ratio:
+    thresholds:
+      default:
+        good: 0.1
+        bad: 0.3
+
+  # Report-only by design: what counts as high torque depends on the robot
+  # and the task, not on a threshold this file could hold.
+  motion.p99_torque:
+    report_only: true
+
+  motion.max_torque:
+    report_only: true
+
+  motion.mean_torque:
+    report_only: true
+
+  # Report-only by design.
+  motion.energy_proxy:
+    report_only: true
+
+missing_family: skip
+
+letters:
+  A: 90
+  B: 80
+  C: 70
+  D: 60
