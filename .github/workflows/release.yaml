@@ -1,0 +1,49 @@
+name: Release
+
+# Publishing is a tag, never a merge: push `vX.Y.Z` from main and this builds,
+# checks and uploads that exact commit. The `pypi` environment holds the job
+# until a maintainer approves it, and PyPI accepts the upload only from this
+# workflow, in this repo, in that environment (Trusted Publishing — no token
+# is stored anywhere).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kalanos/
+    permissions:
+      contents: read
+      id-token: write # lets PyPI verify this run via OIDC
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+
+      - name: Check the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag v$tag does not match pyproject.toml version $version"
+            exit 1
+          fi
+
+      - name: Run the test suite
+        run: uv run pytest
+
+      - name: Build the sdist and wheel
+        run: uv build
+
+      - name: Check the distributions render on PyPI
+        run: uvx twine check --strict dist/*
+
+      - name: Smoke-test the built wheel
+        run: uv run --isolated --no-project --with dist/*.whl kalanos --help
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
