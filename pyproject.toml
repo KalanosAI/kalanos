@@ -1,9 +1,40 @@
 [project]
 name = "kalanos"
-version = "0.1.0"
-description = "Data quality scoring for robotics and industrial sensor data"
+version = "0.2.0"
+description = "Grade robot training data before you train on it: 0-100 scores, A-F grades and train-ready verdicts for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Kalanos AI" }]
+keywords = [
+    "robotics",
+    "data-quality",
+    "dataset",
+    "lerobot",
+    "imitation-learning",
+    "robot-learning",
+    "hdf5",
+    "mcap",
+    "ros2",
+    "sensor-data",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "pydantic",
     "pydantic-settings",
@@ -28,7 +59,8 @@ mcap = ["mcap>=1.4", "mcap-ros2-support>=0.5"]
 hf = ["huggingface-hub>=1.31.0"]
 
 [project.urls]
-Homepage = "https://github.com/KalanosAI/kalanos"
+Homepage = "https://kalanos.ai"
+Documentation = "https://github.com/KalanosAI/kalanos#readme"
 Repository = "https://github.com/KalanosAI/kalanos"
 Issues = "https://github.com/KalanosAI/kalanos/issues"
 
@@ -57,13 +89,28 @@ motion = "kalanos.analysis.metrics.motion"
 render = "kalanos.analysis.reporting.render"
 
 [build-system]
-requires = ["hatchling"]
+# 1.27 is the first hatchling with PEP 639 support: the SPDX `license` string
+# and `license-files` above.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kalanos"]
 # assets/ needs no force-include: hatchling ships every file under the package
 # directory, .yaml included. Verified by building the wheel and listing it.
+
+# The sdist is an allowlist, not "everything git tracks": only what is needed to
+# build the wheel and run the tests from source. pyproject.toml, README.md and
+# LICENSE are always added by hatchling. Anything not listed here (scripts/,
+# .github/, uv.lock, local output) never reaches PyPI.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/CONTRIBUTING.md",
+    "/SECURITY.md",
+]
 
 [dependency-groups]
 dev = [

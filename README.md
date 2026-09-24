@@ -5,22 +5,23 @@
 One command gives every recording, and the dataset as a whole, a 0–100 score, an A–F grade and a train-ready verdict, with the exact episode, stream and channel behind every problem. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
 
 ```bash
-pip install git+https://github.com/KalanosAI/kalanos.git
+pip install kalanos
 kalanos grade path/to/your/dataset/
 ```
 
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![PyPI](https://img.shields.io/pypi/v/kalanos)](https://pypi.org/project/kalanos/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/KalanosAI/kalanos/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://pypi.org/project/kalanos/)
 
 ---
 
 ## Quick start
 
-**1. Install.** Kalanos is not on PyPI yet, so install from GitHub. Python 3.10 or newer; a virtual environment is recommended.
+**1. Install.** Python 3.10 or newer; a virtual environment is recommended.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install git+https://github.com/KalanosAI/kalanos.git
+pip install kalanos
 kalanos --help
 ```
 
@@ -29,10 +30,10 @@ If you see `kalanos: command not found`, the virtual environment isn't active in
 The plain install reads text formats (CSV, JSON, JSONL, delimited text) and LeRobot directories. Add extras for the rest:
 
 ```bash
-pip install 'kalanos[hf]    @ git+https://github.com/KalanosAI/kalanos.git'   # stream Hugging Face datasets
-pip install 'kalanos[hdf5]  @ git+https://github.com/KalanosAI/kalanos.git'   # HDF5 (robomimic, Isaac Lab)
-pip install 'kalanos[mcap]  @ git+https://github.com/KalanosAI/kalanos.git'   # MCAP / ROS 2
-pip install 'kalanos[all]   @ git+https://github.com/KalanosAI/kalanos.git'   # everything
+pip install 'kalanos[hf]'       # stream Hugging Face datasets
+pip install 'kalanos[hdf5]'     # HDF5 (robomimic, Isaac Lab)
+pip install 'kalanos[mcap]'     # MCAP / ROS 2
+pip install 'kalanos[all]'      # everything
 ```
 
 **2. Grade something.**
@@ -43,7 +44,7 @@ kalanos grade dataset/                         # a folder, walked recursively, s
 kalanos grade hf://datasets/lerobot/pusht      # a Hugging Face dataset, streamed, never fully downloaded
 ```
 
-**No data handy? Try the samples in this repo.** [`tests/fixtures/`](tests/fixtures/) holds small files with known, planted problems, so you can see what a finding looks like in seconds. They're not part of the pip install, so clone the repo and install from the checkout:
+**No data handy? Try the samples in this repo.** [`tests/fixtures/`](https://github.com/KalanosAI/kalanos/tree/main/tests/fixtures) holds small files with known, planted problems, so you can see what a finding looks like in seconds. They're not part of the pip install, so clone the repo and install from the checkout:
 
 ```bash
 git clone https://github.com/KalanosAI/kalanos.git && cd kalanos
@@ -55,16 +56,16 @@ kalanos grade tests/fixtures/                       # the whole corpus as one da
 
 | Sample | Format | What you should see |
 |---|---|---|
-| [`arm_multi_device.csv`](tests/fixtures/arm_multi_device.csv) | CSV, 4 devices in one file | Split into `armA`–`armD`; `armA` clean, `armB` flatlined `tcp_pose_z_mm`, `armC` a burst of dropped samples, `armD` clock jitter |
-| [`imu_stream.txt`](tests/fixtures/imu_stream.txt) | JSONL hiding in a `.txt` | Real container detected; `acc` and `gyro` arrays expanded into channels |
-| [`pose_log.txt`](tests/fixtures/pose_log.txt) | Whitespace text, header in a `#` comment | Header read from the comment; 50 Hz timing |
-| [`capture_index.json`](tests/fixtures/capture_index.json) | JSON keyed by source+hash+timestamp | Keys parsed, per-camera nesting handled; rate metrics marked not applicable |
-| [`video_meta.json`](tests/fixtures/video_meta.json) | Flat metadata, no time index | Listed under **Not analysed**, with the reason |
-| [`lerobot_v3_tiny/`](tests/fixtures/lerobot_v3_tiny/) · [`lerobot_v2_1_tiny/`](tests/fixtures/lerobot_v2_1_tiny/) · [`lerobot_v2_0_tiny/`](tests/fixtures/lerobot_v2_0_tiny/) | LeRobot directories | Episodes and fps read from `meta/info.json` |
-| [`hdf5_tiny.hdf5`](tests/fixtures/hdf5_tiny.hdf5) | HDF5 (needs `[hdf5]`) | Episodes found from group structure |
-| [`mcap_tiny.mcap`](tests/fixtures/mcap_tiny.mcap) | MCAP / ROS 2 (needs `[mcap]`) | Three topics, each resolved by message type or topic name |
+| [`arm_multi_device.csv`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/arm_multi_device.csv) | CSV, 4 devices in one file | Split into `armA`–`armD`; `armA` clean, `armB` flatlined `tcp_pose_z_mm`, `armC` a burst of dropped samples, `armD` clock jitter |
+| [`imu_stream.txt`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/imu_stream.txt) | JSONL hiding in a `.txt` | Real container detected; `acc` and `gyro` arrays expanded into channels |
+| [`pose_log.txt`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/pose_log.txt) | Whitespace text, header in a `#` comment | Header read from the comment; 50 Hz timing |
+| [`capture_index.json`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/capture_index.json) | JSON keyed by source+hash+timestamp | Keys parsed, per-camera nesting handled; rate metrics marked not applicable |
+| [`video_meta.json`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/video_meta.json) | Flat metadata, no time index | Listed under **Not analysed**, with the reason |
+| [`lerobot_v3_tiny/`](https://github.com/KalanosAI/kalanos/tree/main/tests/fixtures/lerobot_v3_tiny) · [`lerobot_v2_1_tiny/`](https://github.com/KalanosAI/kalanos/tree/main/tests/fixtures/lerobot_v2_1_tiny) · [`lerobot_v2_0_tiny/`](https://github.com/KalanosAI/kalanos/tree/main/tests/fixtures/lerobot_v2_0_tiny) | LeRobot directories | Episodes and fps read from `meta/info.json` |
+| [`hdf5_tiny.hdf5`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/hdf5_tiny.hdf5) | HDF5 (needs `[hdf5]`) | Episodes found from group structure |
+| [`mcap_tiny.mcap`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/mcap_tiny.mcap) | MCAP / ROS 2 (needs `[mcap]`) | Three topics, each resolved by message type or topic name |
 
-Full details of each sample are in [`tests/fixtures/README.md`](tests/fixtures/README.md).
+Full details of each sample are in [`tests/fixtures/README.md`](https://github.com/KalanosAI/kalanos/blob/main/tests/fixtures/README.md).
 
 **3. Keep the report.**
 
@@ -224,7 +225,7 @@ An adapter whose extra isn't installed shows as unavailable under `kalanos adapt
 
 Field names are matched against a built-in data dictionary covering the naming, units, shapes and plausible ranges used by DROID, LeRobot, MuJoCo, ROS 2 and others. Recognised signals get physics-aware checks; unrecognised ones still get the universal checks, so a mystery column that's flatlined still fails loudly.
 
-Need a format that isn't here? `kalanos new adapter <name>` scaffolds a publishable plugin. See [docs/ADAPTERS.md](docs/ADAPTERS.md).
+Need a format that isn't here? `kalanos new adapter <name>` scaffolds a publishable plugin. See [docs/ADAPTERS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/ADAPTERS.md).
 
 ---
 
@@ -267,7 +268,7 @@ Environment variables:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development gate and conventions, [docs/METRICS.md](docs/METRICS.md) for what each metric computes and how it's graded, and [docs/ADAPTERS.md](docs/ADAPTERS.md) for adding a format. Built-in adapters, metrics and reporters register through the same entry points as third-party ones, so the plugin API is exercised by the code we maintain.
+See [CONTRIBUTING.md](https://github.com/KalanosAI/kalanos/blob/main/CONTRIBUTING.md) for the development gate and conventions, [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md) for what each metric computes and how it's graded, and [docs/ADAPTERS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/ADAPTERS.md) for adding a format. Built-in adapters, metrics and reporters register through the same entry points as third-party ones, so the plugin API is exercised by the code we maintain.
 
 ### Development
 
@@ -310,4 +311,4 @@ uv run pytest
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](https://github.com/KalanosAI/kalanos/blob/main/LICENSE).
