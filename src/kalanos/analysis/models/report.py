@@ -37,7 +37,7 @@ from kalanos.analysis.models.scoring import Finding, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.0.0"
+CURRENT_SCHEMA_VERSION = "6.1.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -144,6 +144,9 @@ class GradedEpisode(BaseModel):
         regraded against the policy, via `scoring.resolve_status`.
     streams : list[GradedStream]
         The graded streams within this episode.
+    tasks : list[str] or None
+        The episode's task instructions as the source stored them — mirrors
+        `domain.Episode.tasks`, so a reader sees what each episode was told.
     """
 
     id: str
@@ -155,6 +158,7 @@ class GradedEpisode(BaseModel):
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     streams: list[GradedStream] = Field(default_factory=list)
+    tasks: list[str] | None = None
 
 
 class Report(BaseModel):

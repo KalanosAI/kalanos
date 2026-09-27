@@ -13,6 +13,7 @@ for v2.1), which this reader does not read.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -33,6 +34,7 @@ from kalanos.analysis.adapters.lerobot.common import (
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
+from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.domain import Clock, Episode, Kind, Stream
 
@@ -125,6 +127,38 @@ def _video_stream(
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
+def _read_episode_tasks(path: UPath) -> dict[int, list[str]] | None:
+    """Read each episode's task instructions from `meta/episodes.jsonl`.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+
+    Returns
+    -------
+    dict[int, list[str]] or None
+        Each episode's instructions keyed by `episode_index`; `None` when the file
+        is absent, names no `tasks` at all, or holds no non-blank instruction for
+        any episode — a dataset that carries none is not missing any.
+    """
+
+    episodes_path = path / "meta" / "episodes.jsonl"
+    if not episodes_path.exists():
+        return None
+    per_episode: dict[int, list[str]] = {}
+    with episodes_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if "tasks" in record:
+                per_episode[int(record["episode_index"])] = as_task_list(
+                    record["tasks"]
+                )
+    return dataset_tasks(per_episode) if per_episode else None
+
+
 @adapter
 class LeRobotV2Adapter(LeRobotAdapter):
     """Reads a LeRobot v2.0/v2.1 dataset directory: one parquet and mp4 per episode."""
@@ -210,6 +244,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
             total = int(info["total_episodes"])
             fps = float(info["fps"])
             chunks_size = int(info.get("chunks_size", _DEFAULT_CHUNKS_SIZE))
+            task_map = _read_episode_tasks(path)
         except AdapterRefusal:
             raise
         except Exception as exc:
@@ -260,4 +295,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
             except Exception as exc:
                 raise AdapterRefusal(path, f"episode {episode_index}: {exc}") from exc
 
-            yield Episode(id=f"episode_{episode_index:06d}", streams=streams)
+            yield Episode(
+                id=f"episode_{episode_index:06d}",
+                streams=streams,
+                tasks=None if task_map is None else task_map.get(episode_index, []),
+            )

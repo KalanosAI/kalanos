@@ -225,6 +225,7 @@ def grade_episode(
             score=episode_score,
             metrics=episode_metrics,
             streams=graded_streams,
+            tasks=episode.tasks,
         ),
         findings,
     )

@@ -321,10 +321,16 @@ class Episode(BaseModel):
         and `pipeline.run` re-mints it to that file's place under the walked root.
     streams : list[Stream]
         The signals captured during it.
+    tasks : list[str] or None
+        The natural-language instructions the episode was recorded under, exactly
+        as the source stores them, blank strings included. `None` when the dataset
+        carries no instruction for any episode, so an absent one is not a defect;
+        an empty list when the dataset carries them but this episode has none.
     """
 
     id: str
     streams: list[Stream] = Field(default_factory=list)
+    tasks: list[str] | None = None
 
     @property
     def source_paths(self) -> list[UPath]:
