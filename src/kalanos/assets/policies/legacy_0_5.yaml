@@ -1,0 +1,8 @@
+# Grades exactly as Kalanos 0.5 did: the dataset's letter is its mean's, with no
+# dataset gate. Kept so a grade published before 0.6 can be reproduced.
+#
+# Use it with `KALANOS_POLICY_PATH=legacy_0_5`.
+
+extends: default
+
+gate: null

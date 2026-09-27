@@ -63,6 +63,7 @@ from kalanos.analysis.reporting.card import (
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
 from kalanos.analysis.reporting.write import write_report
+from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import grade_for, rollup, score_metrics
 from kalanos.assets.policy import load_default_policy
 
@@ -692,10 +693,16 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
 
     [episode] = report.episodes
     assert len(episode.streams) == 4
-    assert (
-        rollup(Level.DATASET, [ge.score for ge in report.episodes], policy=policy)
-        == report.score
-    )
+    # The number, families and contributors are the rollup's exactly; the gate
+    # only caps the letter (and train-readiness) by the share of failing
+    # episodes — here the fixture's one episode, whose critical findings fail it.
+    independent = rollup(Level.DATASET, [episode.score], policy=policy)
+    assert report.score.score == independent.score
+    assert report.score.families == independent.families
+    assert report.score.n_contributing == independent.n_contributing
+    assert report.gate is not None
+    assert report.gate.uncapped_grade == independent.grade
+    assert report.score.grade == worse(independent.grade, report.gate.cap)
     assert (
         rollup(Level.EPISODE, [gs.score for gs in episode.streams], policy=policy)
         == episode.score

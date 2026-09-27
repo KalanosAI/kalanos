@@ -561,6 +561,9 @@ def render_terminal(
         ),
     )
     plate.add_row(Text(_counts_line(report), style=f"{_PAPER} dim"), "")
+    if report.gate is not None:
+        # The gate's verdict and what the grade rests on, beside every grade.
+        plate.add_row(Text(report.gate.summary, style=f"{_PAPER} dim"), "")
     console.print(
         Panel(
             renderable=plate,

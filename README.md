@@ -104,7 +104,7 @@ WARN ep_052/timing.jitter_cv
 NOT ANALYSED ───────────────────────────────────────────────────────────────
 FILE                       REASON
 meta/session.json          no_time_index
-schema 6.1.0 · policy v1 · 4.12s
+schema 6.2.0 · policy v1 · 4.12s
 ```
 
 How to read it, top to bottom:
@@ -127,6 +127,37 @@ Every metric answers one of four questions, and none of them needs labels:
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
+
+**A few bad episodes can't hide in an average.** An episode with a critical finding fails, and the share of failing episodes caps the dataset's letter: up to 5% costs nothing, then B, C, D. The report lists the failing episodes with their reasons and the grade without them ("C as-is, A after removing 8 episodes"), and every grade carries a line saying what it rests on. `KALANOS_POLICY_PATH=legacy_0_5` grades without the gate; `language_conditioned` fails episodes that lack their task instruction, for VLA training.
+
+### What grade will my data get? Worked examples
+
+Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, graded by Kalanos 0.6.0. Everything else is clean, including a realistic 0.25% clock wobble. The mean barely moves; the gate is what turns a few bad episodes into a lower letter, and "after pruning" is the grade once they are removed.
+
+| What's wrong | Grade | Mean | Failing episodes | After pruning |
+|---|---|---|---|---|
+| Nothing (clean control) | **A** | 100.0 | 0 | — |
+| 3% of samples dropped in 5 episodes | **A** | 99.6 | 0 (warning only) | — |
+| 8% of samples dropped in 2 episodes (4%) | **A** | 99.6 | 2 — within the 5% allowance | A |
+| 8% of samples dropped in 5 episodes (10%) | **B** | 98.9 | 5 | A |
+| 8% of samples dropped in 10 episodes (20%) | **C** | 97.8 | 10 | A |
+| 8% of samples dropped in 20 episodes (40%) | **D** | 95.7 | 20 | A |
+| Control glitches (sudden command jumps) in 4 episodes (8%) | **B** | 98.2 | 4 | A |
+| Clock declared 50 Hz, actually 45 Hz (10% slow) | **A** | 100.0 | 0 | — |
+| Clock declared 50 Hz, actually 40 Hz (20% slow) | **A** | 95.2 | 0 (warning: timing 66.7) | — |
+| Clock declared 50 Hz, actually 35 Hz (30% slow) | **D** | 92.9 | all 50 | — |
+| Clock jitter of 5% of the sampling period, every episode | **A** | 100.0 | 0 — jitter is measured, not yet graded | — |
+| 5% jitter **and** 8% of samples dropped in 10 episodes | **C** | 97.8 | 10 (the drops) | A |
+| 5% repeated timestamps in 10 episodes | **A** | 100.0 | 0 — measured, not yet graded | — |
+
+How to read it:
+
+- **Dropped samples**: under 1% of an episode is fine, 1-5% is a warning, over 5% fails the episode. The dataset letter then follows the share of failing episodes: up to 5% free, then B (≤15%), C (≤30%), D.
+- **Clock rate**: within 10% of the declared rate is fine, 10-25% off is a warning, beyond 25% fails every episode.
+- **Glitches** fail the episodes they hit, through the spike and noise checks.
+- **Jitter and repeated timestamps** appear in every report with their numbers but don't change the grade yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
+
+All of these thresholds are candidates, tested on synthetic and real datasets and open to revision against labelled failures.
 
 Checks that can't observe something say so rather than score it: on converted datasets whose timestamps were reconstructed from frame numbers (most LeRobot hub data), the timing checks report *capture timing is not observable* instead of a perfect score, and the noise check needs at least ~45 Hz to tell sensor noise from motion.
 

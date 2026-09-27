@@ -232,7 +232,28 @@ Family scores are weighted means of their metrics; the overall score is a weight
 
 Every score also carries a **graded fraction**: of the metrics that could have been graded at a node, how many actually were. A metric that resolved to a grade counts toward it; a metric left `report_only` for want of a band counts against it; `not_applicable` results and metrics that are `report_only` by design (`p99_torque`, `energy_proxy`, `drift`) are excluded from the denominator entirely, since a metric that was never meant to grade here is not a gap. An A over a graded fraction of 0.15 is a different claim from an A over 0.95, and the report carries the number so a reader can tell them apart. (Not to be confused with the `coverage` family; the policy key drafted as `min_coverage` is a candidate for renaming to `min_graded_fraction` to keep the two apart.)
 
-`train_ready` requires all of: `score ≥ 70`; no metric graded `critical`; the graded fraction at or above the policy's floor; and every family the policy names as required having graded at least one metric. A single `critical` channel is enough to withhold it, regardless of the mean. Until the graded-fraction work ships, `train_ready` is `score ≥ 70` alone.
+`train_ready` requires all of: `score ≥ 70`; no metric graded `critical`; the graded fraction at or above the policy's floor; and every family the policy names as required having graded at least one metric. A single `critical` channel is enough to withhold it, regardless of the mean. Today it is `score ≥ 70` at the stream and episode level; at the dataset level the gate below applies it as a share, so a large dataset is not withheld for one odd episode.
+
+### The dataset gate
+
+A mean lets a minority of bad episodes hide: eight glitched episodes in fifty still average to an A. The gate counts the episodes that fail and caps the dataset's letter by their share. The number stays the mean; the letter carries the gate, and the report's `gate` section says which episodes fail, why, and the grade the dataset would get without them.
+
+**An episode fails** when any of its metrics grades `critical` — the train-ready rule above — unless that finding is a **task trait**: the same critical finding on every episode of one task and on no episode of any other, on a task of at least 20 episodes. A trait describes the task, not a fault (grading `berkeley_autolab_ur5`, a gripper-state "flatline" hit exactly the 250 episodes of its one sweeping task, which never closes the gripper), so it is reported in `gate.task_traits` and fails nothing.
+
+| Share of failing episodes | Dataset letter capped at |
+|---|---|
+| up to 5% | no cap — the mean decides |
+| up to 15% | B |
+| up to 30% | C |
+| more | D |
+
+*Candidate*: tested on twelve datasets — six synthetic with planted defects, where the gate caught every planted glitched episode (41 of 41) and failed no clean one, and six LeRobot hub datasets — but unconfirmed against labelled real-world failures. A capped report also gives `pruned_grade` and `train_ready_after_pruning`, the verdict once the failing episodes are removed, with the list of them. A dataset is `train_ready` only when uncapped.
+
+**Every gated report states what its grade rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. An A graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the letter. There is deliberately no minimum evidence for an A: converted datasets cannot show capture timing, and a format should not cost a letter — the coverage line is what keeps such an A honest.
+
+A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction fails.
+
+**Known limitation.** `snr_db` flags a channel that holds still under a little sensor noise — an axis the robot never turns — as `critical`: without a sense of scale, a still axis and an all-noise sensor read the same, and a rule that set both aside also hid episodes destroyed by glitches. It touched 2 of 2,797 graded results in the real datasets so far; a scale-aware check is the fix.
 
 Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
 

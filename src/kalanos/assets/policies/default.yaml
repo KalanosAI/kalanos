@@ -195,6 +195,22 @@ metrics:
 
 missing_family: skip
 
+# The dataset gate (docs/METRICS.md, "The dataset gate"). Candidate: the rows
+# were tested on twelve datasets — six synthetic with planted defects (the gate
+# catches every planted spike episode and flags no clean one) and six LeRobot
+# hub datasets — but are unconfirmed against labelled real-world failures.
+# An episode fails on any critical finding that is not a task trait; the share
+# of failing episodes caps the dataset's letter. The number stays the mean.
+gate:
+  caps:
+    - {max_failing_share: 0.05, letter: null}  # a few odd episodes cost no letter
+    - {max_failing_share: 0.15, letter: B}
+    - {max_failing_share: 0.30, letter: C}
+    - {max_failing_share: 1.0, letter: D}
+  # A task needs this many episodes before a finding on all of them is read as
+  # the task's own behaviour rather than a coincidence.
+  task_trait_min_episodes: 20
+
 letters:
   A: 90
   B: 80

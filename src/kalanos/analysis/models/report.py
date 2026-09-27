@@ -28,7 +28,7 @@ from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.schema import UnresolvedSource
-from kalanos.analysis.models.scoring import Finding, ScoreResult
+from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -37,7 +37,7 @@ from kalanos.analysis.models.scoring import Finding, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.1.0"
+CURRENT_SCHEMA_VERSION = "6.2.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -161,6 +161,121 @@ class GradedEpisode(BaseModel):
     tasks: list[str] | None = None
 
 
+class FailingEpisode(BaseModel):
+    """An episode the gate counts as failing, and the critical findings why.
+
+    Attributes
+    ----------
+    episode_id : str
+        The episode, as it appears in `Report.episodes`.
+    reasons : list[str]
+        Each critical finding that failed it, as `stream[/channel].metric`.
+    """
+
+    episode_id: str
+    reasons: list[str]
+
+
+class TaskTrait(BaseModel):
+    """A critical finding on every episode of one task and on none of any other.
+
+    Attributes
+    ----------
+    task : str
+        The task instruction the episodes share.
+    finding : str
+        The finding, as `stream[/channel].metric`.
+    n_episodes : int
+        How many episodes the task has, all of which carry the finding.
+    """
+
+    task: str
+    finding: str
+    n_episodes: int
+
+
+class NotObservable(BaseModel):
+    """A metric that could not grade this dataset, and why.
+
+    Attributes
+    ----------
+    metric : str
+        The metric's bare name.
+    reason : str
+        Why it was not applicable, as the metric said.
+    share : float
+        The share of its results, from 0 to 1, that were not applicable.
+    """
+
+    metric: str
+    reason: str
+    share: float
+
+
+class Coverage(BaseModel):
+    """What a dataset's grade rests on, shown beside it on every report.
+
+    Attributes
+    ----------
+    families_graded : list[str]
+        The families that graded at least one metric.
+    graded_checks_per_episode : float or None
+        The median number of graded results in an episode.
+    not_observable : list[NotObservable]
+        Metrics that could not grade most of this dataset, with the reason.
+    """
+
+    families_graded: list[str]
+    graded_checks_per_episode: float | None
+    not_observable: list[NotObservable] = Field(default_factory=list)
+
+
+class Gate(BaseModel):
+    """The dataset gate's verdict: failing episodes cap the dataset's letter.
+
+    `Report.score.score` stays the mean of the episode scores; `Report.score.grade`
+    and `train_ready` are this gate's. The mean's own letter is `uncapped_grade`.
+
+    Attributes
+    ----------
+    n_episodes : int
+        The episodes graded.
+    failing_episodes : list[FailingEpisode]
+        The episodes with a critical finding that is not a task trait.
+    failing_share : float
+        `len(failing_episodes) / n_episodes`.
+    task_traits : list[TaskTrait]
+        Critical findings set aside as describing a task rather than a fault.
+    uncapped_grade : Grade or None
+        The letter the mean alone would get.
+    cap : Grade or None
+        The best letter the failing share allows; `None` when it allows any.
+    pruned_score : float or None
+        The mean without the failing episodes; `None` when none fail.
+    pruned_grade : Grade or None
+        `pruned_score`'s letter.
+    train_ready_after_pruning : bool or None
+        Whether the dataset is train-ready once the failing episodes are removed;
+        `None` when none fail.
+    coverage : Coverage
+        What the grade rests on.
+    summary : str
+        One plain-language line: the grade, why, and what it rests on.
+    """
+
+    n_episodes: int
+    failing_episodes: list[FailingEpisode] = Field(default_factory=list)
+    failing_share: float
+    task_traits: list[TaskTrait] = Field(default_factory=list)
+    uncapped_grade: Grade | None
+    cap: Grade | None
+    pruned_score: float | None = None
+    pruned_grade: Grade | None = None
+    train_ready_after_pruning: bool | None = None
+    coverage: Coverage
+    summary: str
+
+
 class Report(BaseModel):
     """The graded result of one analysis run.
 
@@ -211,3 +326,4 @@ class Report(BaseModel):
     duration_s: float | None = None
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
+    gate: Gate | None = None

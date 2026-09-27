@@ -1,0 +1,318 @@
+"""The dataset gate: failing episodes cap the dataset's letter.
+
+Averaging lets a minority of bad episodes hide: eight glitched episodes in fifty
+still average to an A. The gate counts the episodes that fail — any metric graded
+`critical`, per docs/METRICS.md's train-ready rule — and caps the dataset's letter
+by their share, reporting the grade the dataset would get without them.
+
+A critical finding shared by every episode of one task, and by no episode of any
+other, is a task trait rather than a fault (a sweeping task never closes the
+gripper, so its gripper state never moves) and does not fail those episodes.
+
+Every gated report also states what its grade rests on — the families graded,
+the checks per episode, and which metrics could not observe the data and why —
+so an A on thin evidence reads differently from an A on thick.
+"""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+import statistics
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+
+# Internal
+from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
+from kalanos.analysis.models.policy import GatePolicy, Policy
+from kalanos.analysis.models.report import (
+    Coverage,
+    FailingEpisode,
+    Gate,
+    GradedEpisode,
+    NotObservable,
+    TaskTrait,
+)
+from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+from kalanos.analysis.scoring.score import rollup
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# Letters from best to worst, so "worse of two" is a max over this order.
+_ORDER = [Grade.A, Grade.B, Grade.C, Grade.D, Grade.F]
+
+_GRADED = {MetricStatus.GOOD, MetricStatus.WARNING, MetricStatus.CRITICAL}
+
+# A metric that could not grade at least this share of its results is listed as
+# not observable, so a reader sees what a grade does not rest on.
+_NOT_OBSERVABLE_SHARE = 0.5
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def finding_key(finding: Finding) -> str:
+    """Name a finding by where it sits and what fired: `stream[/channel].metric`."""
+
+    where = finding.stream or "episode"
+    if finding.instance:
+        where = f"{where}[{finding.instance}]"
+    if finding.channel:
+        where = f"{where}/{finding.channel}"
+    return f"{where}.{finding.metric_id}"
+
+
+def critical_keys_by_episode(findings: Iterable[Finding]) -> dict[str, set[str]]:
+    """Each episode's critical findings, keyed by `finding_key`."""
+
+    keys: dict[str, set[str]] = defaultdict(set)
+    for finding in findings:
+        if finding.severity == Severity.CRITICAL:
+            keys[finding.episode_id].add(finding_key(finding))
+    return dict(keys)
+
+
+def task_traits(
+    critical: Mapping[str, set[str]],
+    task_of: Mapping[str, str | None],
+    min_episodes: int,
+) -> dict[str, tuple[str, int]]:
+    """Critical findings on every episode of one task and on none of any other.
+
+    Parameters
+    ----------
+    critical : Mapping[str, set[str]]
+        Each episode's critical finding keys.
+    task_of : Mapping[str, str or None]
+        Each graded episode's task, or `None` when it has none.
+    min_episodes : int
+        The fewest episodes a task needs for a shared finding to count.
+
+    Returns
+    -------
+    dict[str, tuple[str, int]]
+        Each trait's finding key, mapped to its task and that task's size.
+    """
+
+    size = Counter(task for task in task_of.values() if task is not None)
+    on: dict[str, set[str]] = defaultdict(set)
+    for episode, keys in critical.items():
+        for key in keys:
+            on[key].add(episode)
+    traits = {}
+    for key, episodes in on.items():
+        tasks = {task_of.get(episode) for episode in episodes}
+        if len(tasks) != 1 or None in tasks:
+            continue
+        [task] = tasks
+        if len(episodes) == size[task] >= min_episodes:
+            traits[key] = (task, size[task])
+    return traits
+
+
+def cap_for(share: float, gate: GatePolicy) -> Grade | None:
+    """The best letter a dataset with this share of failing episodes may get."""
+
+    for row in gate.caps:
+        if share <= row.max_failing_share:
+            return Grade(row.letter) if row.letter else None
+    return Grade.F  # unreachable: the last row reaches 1.0
+
+
+def worse(first: Grade | None, second: Grade | None) -> Grade | None:
+    """The worse of two letters, treating `None` as no constraint."""
+
+    if first is None or second is None:
+        return first or second
+    return max(first, second, key=_ORDER.index)
+
+
+def _results(episode: GradedEpisode) -> Iterable[tuple[str, MetricResult]]:
+    """Every metric result in one episode, at every level, with its metric name."""
+
+    yield from episode.metrics.items()
+    for stream in episode.streams:
+        yield from stream.metrics.items()
+        for channel in stream.channels:
+            yield from channel.metrics.items()
+
+
+def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
+    """What a dataset's grade rests on."""
+
+    graded_per_episode = []
+    total: Counter[str] = Counter()
+    not_applicable: Counter[str] = Counter()
+    reason: dict[str, str] = {}
+    for episode in episodes:
+        graded = 0
+        for name, result in _results(episode):
+            total[name] += 1
+            if result.status in _GRADED:
+                graded += 1
+            elif result.status == MetricStatus.NOT_APPLICABLE:
+                not_applicable[name] += 1
+                reason.setdefault(name, str(result.evidence.get("reason", "")))
+        graded_per_episode.append(graded)
+    graded_names = {
+        name
+        for episode in episodes
+        for name, result in _results(episode)
+        if result.status in _GRADED
+    }
+    unobservable = [
+        NotObservable(
+            metric=name,
+            reason=reason[name],
+            share=not_applicable[name] / total[name],
+        )
+        for name in sorted(not_applicable)
+        if name not in graded_names
+        and not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE
+        and reason[name]
+    ]
+    return Coverage(
+        families_graded=sorted(score.families),
+        graded_checks_per_episode=(
+            statistics.median(graded_per_episode) if graded_per_episode else None
+        ),
+        not_observable=unobservable,
+    )
+
+
+def _summary(
+    grade: Grade | None,
+    mean: float | None,
+    uncapped: Grade | None,
+    failing: int,
+    total: int,
+    pruned: Grade | None,
+    cover: Coverage,
+) -> str:
+    """One plain-language line: the grade, why, and what it rests on."""
+
+    if grade is None or mean is None:
+        head = "Not graded"
+    elif grade != uncapped:
+        head = (
+            f"{grade.value} (mean {mean:.1f}, {uncapped.value if uncapped else '?'} "
+            f"uncapped): {failing} of {total} episodes ({failing / total:.0%}) fail "
+            f"on critical findings"
+            + (f"; {pruned.value} after removing them" if pruned else "")
+        )
+    elif failing:
+        head = (
+            f"{grade.value} {mean:.1f}: {failing} of {total} episodes fail on "
+            "critical findings, within the share the grade allows"
+        )
+    else:
+        head = f"{grade.value} {mean:.1f}: no episode fails"
+    families = " and ".join(cover.families_graded) or "nothing"
+    checks = cover.graded_checks_per_episode
+    rests = f"graded on {families}" + (
+        f", {checks:.0f} checks per episode" if checks is not None else ""
+    )
+    gaps = "; ".join(f"{item.metric}: {item.reason}" for item in cover.not_observable)
+    return f"{head}. {rests[0].upper()}{rests[1:]}." + (
+        f" Not observable — {gaps}." if gaps else ""
+    )
+
+
+def apply_gate(
+    episodes: Sequence[GradedEpisode],
+    findings: Sequence[Finding],
+    score: ScoreResult,
+    policy: Policy,
+) -> tuple[ScoreResult, Gate | None]:
+    """Cap the dataset's letter by its share of failing episodes.
+
+    Parameters
+    ----------
+    episodes : Sequence[GradedEpisode]
+        Every graded episode.
+    findings : Sequence[Finding]
+        Every finding across them.
+    score : ScoreResult
+        The dataset's rolled-up score: the mean of its episodes.
+    policy : Policy
+        The policy; without a `gate`, `score` is returned unchanged.
+
+    Returns
+    -------
+    tuple[ScoreResult, Gate or None]
+        The dataset score with the gate's letter and train-readiness (its number
+        stays the mean), and the gate's verdict; `(score, None)` without a gate.
+    """
+
+    if policy.gate is None:
+        return score, None
+
+    graded = [episode for episode in episodes if episode.score.score is not None]
+    task_of = {
+        episode.id: next((t for t in (episode.tasks or []) if t.strip()), None)
+        for episode in graded
+    }
+    critical = {
+        episode: keys
+        for episode, keys in critical_keys_by_episode(findings).items()
+        if episode in task_of
+    }
+    traits = task_traits(critical, task_of, policy.gate.task_trait_min_episodes)
+    failing = [
+        FailingEpisode(episode_id=episode, reasons=sorted(keys - traits.keys()))
+        for episode, keys in sorted(critical.items())
+        if keys - traits.keys()
+    ]
+    total = len(graded)
+    share = len(failing) / total if total else 0.0
+    cap = cap_for(share, policy.gate)
+    grade = worse(score.grade, cap)
+
+    pruned_score = pruned_grade = pruned_ready = None
+    if failing:
+        failing_ids = {item.episode_id for item in failing}
+        kept = [e.score for e in graded if e.id not in failing_ids]
+        if kept:
+            pruned = rollup(Level.DATASET, kept, policy=policy)
+            pruned_score, pruned_grade = pruned.score, pruned.grade
+            pruned_ready = pruned.train_ready
+
+    cover = coverage(graded, score)
+    gate = Gate(
+        n_episodes=total,
+        failing_episodes=failing,
+        failing_share=share,
+        task_traits=[
+            TaskTrait(task=task, finding=key, n_episodes=size)
+            for key, (task, size) in sorted(traits.items())
+        ],
+        uncapped_grade=score.grade,
+        cap=cap,
+        pruned_score=pruned_score,
+        pruned_grade=pruned_grade,
+        train_ready_after_pruning=pruned_ready,
+        coverage=cover,
+        summary=_summary(
+            grade, score.score, score.grade, len(failing), total, pruned_grade, cover
+        ),
+    )
+    gated = score.model_copy(
+        update={
+            "grade": grade,
+            "train_ready": (
+                None
+                if score.train_ready is None
+                else bool(score.train_ready and cap is None)
+            ),
+        }
+    )
+    return gated, gate
+
+
+__all__ = ["apply_gate", "cap_for", "coverage", "task_traits", "worse"]

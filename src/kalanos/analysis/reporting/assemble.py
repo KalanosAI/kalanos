@@ -43,6 +43,7 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
+from kalanos.analysis.scoring.gate import apply_gate
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
 
 
@@ -288,6 +289,9 @@ def assemble_report(
     dataset_score = rollup(
         Level.DATASET, [ge.score for ge in graded_episodes], policy=policy
     )
+    # The gate caps the letter by the share of failing episodes; the number
+    # stays the mean. Without a gate in the policy, this changes nothing.
+    dataset_score, gate = apply_gate(graded_episodes, findings, dataset_score, policy)
 
     return Report(
         root=root,
@@ -300,4 +304,5 @@ def assemble_report(
         duration_s=duration_s,
         source=source,
         datasets=list(datasets),
+        gate=gate,
     )
