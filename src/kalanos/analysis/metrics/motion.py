@@ -44,7 +44,7 @@ from kalanos.analysis.optional import load_numpy
 _JOINT_POSITION = "proprio.joint_position"
 _JOINT_VELOCITY = "proprio.joint_velocity"
 _JOINT_TORQUE   = "proprio.joint_torque"
-# fmt: om
+# fmt: on
 
 # still_drift tuning: how much of the recording counts as "the tail",
 # and how settled that tail's step size must be, relative to the whole
@@ -59,13 +59,17 @@ _HF_CUTOFF_HZ = 20.0
 
 # Structural requirements, one per metric below.
 _REQUIRES_JERK = Requires(
-    regular_sampling=True, min_samples=5, taxonomy=[_JOINT_POSITION],
+    regular_sampling=True,
+    min_samples=5,
+    taxonomy=[_JOINT_POSITION],
 )
 _REQUIRES_CHATTER = Requires(
-    regular_sampling=True, min_samples=5, taxonomy=[_JOINT_VELOCITY],
+    regular_sampling=True,
+    min_samples=5,
+    taxonomy=[_JOINT_VELOCITY],
 )
-_REQUIRES_STILL_DRIFT     = Requires(min_samples=8, taxonomy=[_JOINT_POSITION])
-_REQUIRES_VEL_SATURATION  = Requires(min_samples=2, taxonomy=[_JOINT_VELOCITY])
+_REQUIRES_STILL_DRIFT = Requires(min_samples=8, taxonomy=[_JOINT_POSITION])
+_REQUIRES_VEL_SATURATION = Requires(min_samples=2, taxonomy=[_JOINT_VELOCITY])
 _REQUIRES_LIMIT_PROXIMITY = Requires(min_samples=2, taxonomy=[_JOINT_POSITION])
 _REQUIRES_HF_VIBRATION = Requires(
     regular_sampling=True,

@@ -43,6 +43,7 @@ from kalanos.testing import (
 BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "effective_hz": Defect.CLOCK_DRIFT,
     "dt_jitter_ms": Defect.JITTER,
+    "monotonic_violations": Defect.REPEATED_TIMESTAMPS,
     "drop_rate": Defect.DROPOUT,
     "missing_pct": Defect.NULLS,
     "flatline_pct": Defect.STUCK_CHANNEL,

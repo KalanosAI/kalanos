@@ -26,6 +26,11 @@ metrics:
       default:
         good: 5.0
 
+  # No bound decided; docs/METRICS.md marks it to define. Measured and shown in
+  # every report, but it grades nothing until a band is settled against real
+  # recordings.
+  timing.monotonic_violations: {}
+
   # Candidate: the 10%/25% deviation bounds are unconfirmed against real
   # recordings.
   timing.effective_hz:

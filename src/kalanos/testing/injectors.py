@@ -55,6 +55,7 @@ class Defect(str, Enum):
     NOISE         = "noise"
     DEAD_TAXEL    = "dead_taxel"
     HYSTERESIS    = "hysteresis"
+    REPEATED_TIMESTAMPS = "repeated_timestamps"
     # fmt: on
 
 
@@ -366,6 +367,46 @@ def drop_samples(stream: Stream, *, start: int = 40, count: int = 10) -> Stream:
             "payload": FramePayload(frame=new_frame),
             "timestamps": new_timestamps,
         }
+    )
+
+
+def repeat_timestamps(stream: Stream, *, start: int = 30, count: int = 5) -> Stream:
+    """Give some rows the same timestamp as the row before, as a dropped step does.
+
+    A simulator that drops a physics step often logs the next observation with the
+    previous step's time. Every other row from `start` is repeated, so the repeats
+    stay separate rather than merging into one long stall.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged. Its payload is untouched.
+    start : int
+        The first row whose timestamp repeats the one before it.
+    count : int
+        How many rows to repeat, at `start`, `start + 2`, `start + 4`, …
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` whose chosen rows carry their predecessor's timestamp.
+
+    Raises
+    ------
+    ValueError
+        If `start` is not after the first row, or the repeats run past the end.
+    """
+
+    stamps = stream.timestamps.to_list()
+    last = start + 2 * (count - 1)
+    if start < 1 or last >= len(stamps):
+        raise ValueError(
+            f"rows {start}..{last} do not fit a stream of {len(stamps)} timestamps"
+        )
+    for row in range(start, last + 1, 2):
+        stamps[row] = stamps[row - 1]
+    return stream.model_copy(
+        update={"timestamps": pl.Series(stream.timestamps.name, stamps)}
     )
 
 
@@ -905,6 +946,8 @@ def apply_defect(ctx: MetricInput, defect: Defect) -> MetricInput:
             injected = drop_samples(stream, start=start, count=count)
         case Defect.JITTER:
             injected = jitter_clock(stream)
+        case Defect.REPEATED_TIMESTAMPS:
+            injected = repeat_timestamps(stream, start=start, count=count)
         case Defect.CLOCK_DRIFT:
             injected = stretch_clock(stream)
         case Defect.FROZEN_FRAMES:
