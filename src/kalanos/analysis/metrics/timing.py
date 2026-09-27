@@ -81,6 +81,44 @@ def _ordered_timestamps(ctx: StreamContext) -> list[float]:
     return ctx.timestamps.drop_nulls().to_list()
 
 
+# Gaps all within this fraction of the median gap are exactly even: what frame
+# number ÷ fps, or a simulator's fixed step, produces — not a clock that measured
+# anything. Floating-point rounding of such stamps stays far below it; a physical
+# clock's jitter sits well above (a realistic 50 µs on a 20 ms period is 0.25%).
+_RECONSTRUCTED_TOLERANCE = 1e-4
+
+_RECONSTRUCTED_REASON = (
+    "timestamps are exactly evenly spaced (every gap within 0.01% of the period), "
+    "as when they are reconstructed from frame numbers or a simulator's fixed step, "
+    "so capture timing is not observable"
+)
+
+
+def _reconstructed_clock(gaps: list[float]) -> bool:
+    """Check whether every gap is within `_RECONSTRUCTED_TOLERANCE` of the median.
+
+    Parameters
+    ----------
+    gaps : list[float]
+        Consecutive timestamp gaps, in row order.
+
+    Returns
+    -------
+    bool
+        `True` for two or more gaps, a positive median, and none further than
+        `_RECONSTRUCTED_TOLERANCE` times the median from it.
+    """
+
+    if len(gaps) < 2:
+        return False
+    median_gap = statistics.median(gaps)
+    if median_gap <= 0:
+        return False
+    return max(abs(gap - median_gap) for gap in gaps) <= (
+        _RECONSTRUCTED_TOLERANCE * median_gap
+    )
+
+
 def _consecutive_gaps(ctx: StreamContext) -> list[float]:
     """List the gaps between consecutive non-null timestamps.
 
@@ -123,6 +161,8 @@ def effective_hz(ctx: StreamContext) -> MetricResult:
     gaps = _consecutive_gaps(ctx)
     if not gaps:
         return not_applicable("fewer than two valid timestamps to take a gap over")
+    if _reconstructed_clock(gaps):
+        return not_applicable(_RECONSTRUCTED_REASON)
 
     median_gap = statistics.median(gaps)
     if median_gap <= 0:
@@ -167,6 +207,8 @@ def dt_jitter_ms(ctx: StreamContext) -> MetricResult:
         return not_applicable("fewer than two gaps to take a spread over")
     if statistics.median(gaps) <= 0:
         return not_applicable("median gap is zero or negative")
+    if _reconstructed_clock(gaps):
+        return not_applicable(_RECONSTRUCTED_REASON)
 
     jitter_s = statistics.stdev(gaps)
     return MetricResult(
@@ -213,6 +255,8 @@ def drop_rate(ctx: StreamContext) -> MetricResult:
         return not_applicable("duration or median gap is zero or negative")
 
     expected_samples = duration / median_gap + 1
+    if _reconstructed_clock(gaps):
+        return not_applicable(_RECONSTRUCTED_REASON)
     observed_samples = len(ordered)
     fraction = max(0.0, (expected_samples - observed_samples) / expected_samples)
 

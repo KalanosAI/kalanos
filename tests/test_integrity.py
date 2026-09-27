@@ -40,10 +40,12 @@ _SOURCE_PATH = UPath("test_integrity.csv")
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _channel_ctx(values: Sequence[float | None]) -> ChannelContext:
-    """Wrap a plain list of values in a ChannelContext, on a regular 100 Hz clock."""
+def _channel_ctx(
+    values: Sequence[float | None], *, rate_hz: float = 100.0
+) -> ChannelContext:
+    """Wrap a plain list of values in a ChannelContext, on a regular clock."""
 
-    timestamps = pl.Series("time_s", [index / 100.0 for index in range(len(values))])
+    timestamps = pl.Series("time_s", [index / rate_hz for index in range(len(values))])
     payload = FramePayload(frame=pl.DataFrame({"value": values}))
     stream = Stream(
         taxonomy_type="unmapped.test",
@@ -210,3 +212,45 @@ def test_a_switch_with_glitches_on_it_is_measured_again():
 
     assert flatline_pct(ctx).status == MetricStatus.REPORT_ONLY
     assert spike_pct(ctx).status == MetricStatus.REPORT_ONLY
+
+
+def _noisy_sine(n: int, rate_hz: float) -> list[float]:
+    """A 0.5 Hz motion with a small, fixed-seed noise floor on top."""
+
+    import random
+
+    rng = random.Random(7)
+    return [
+        math.sin(2 * math.pi * 0.5 * i / rate_hz) + rng.gauss(0.0, 0.01)
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize("rate_hz", [50.0, 100.0, 1000.0])
+def test_snr_keeps_its_five_sample_window_at_50_hz_and_faster(rate_hz):
+    """At 50 Hz and above the window is unchanged: 5 samples, 0.1 s or less."""
+
+    result = snr_db(_channel_ctx(_noisy_sine(400, rate_hz), rate_hz=rate_hz))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.evidence["smoothing_window"] == 5
+    assert result.evidence["smoothing_span_s"] <= 0.1 + 1e-9
+    assert result.evidence["rate_hz"] == pytest.approx(rate_hz)
+
+
+@pytest.mark.parametrize("rate_hz", [5.0, 10.0, 15.0, 30.0])
+def test_snr_is_not_applicable_when_sampled_too_slowly_to_tell_noise_from_motion(
+    rate_hz,
+):
+    """Below ~45 Hz five samples span more than 0.1 s and smooth away real motion.
+
+    Found grading real 5-15 Hz LeRobot datasets: the ratio tracked the sampling
+    rate rather than the robot, so it is not reported rather than misreported.
+    """
+
+    result = snr_db(_channel_ctx(_noisy_sine(200, rate_hz), rate_hz=rate_hz))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert (
+        "too slowly to separate sensor noise from motion" in (result.evidence["reason"])
+    )

@@ -574,3 +574,41 @@ def test_monotonic_violations_still_runs_on_an_irregular_series():
 
     assert results["monotonic_violations"].value == 2
     assert results["drop_rate"].status == MetricStatus.NOT_APPLICABLE
+
+
+@pytest.mark.parametrize("name", ["effective_hz", "dt_jitter_ms", "drop_rate"])
+def test_rate_metrics_report_timing_not_observable_on_an_exactly_even_clock(name):
+    """Stamps reconstructed from frame numbers carry no timing to measure.
+
+    A converted LeRobot dataset stamps frame i at i / fps: every gap is equal to
+    rounding, so a perfect score would claim timing that was never observed.
+    """
+
+    stamps = [index / 30.0 for index in range(60)]
+    result = run_stream_metrics(_stream_context(stamps))[name]
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert "exactly evenly spaced" in result.evidence["reason"]
+
+
+def test_a_real_clocks_jitter_is_still_measured():
+    """A realistic 50 µs wobble on a 20 ms period (0.25%) is a measured clock."""
+
+    import random
+
+    rng = random.Random(3)
+    stamps = sorted(index * 0.02 + rng.gauss(0.0, 5e-5) for index in range(200))
+    results = run_stream_metrics(_stream_context(stamps))
+
+    for name in ("effective_hz", "dt_jitter_ms", "drop_rate"):
+        assert results[name].status != MetricStatus.NOT_APPLICABLE, name
+
+
+def test_repeats_are_still_caught_on_an_otherwise_even_clock():
+    """A dropped step on a reconstructed clock is exactly what must stay visible."""
+
+    stamps = [index / 50.0 for index in range(100)]
+    stamps[40] = stamps[39]
+    results = run_stream_metrics(_stream_context(stamps))
+
+    assert results["monotonic_violations"].value == 1

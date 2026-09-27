@@ -483,3 +483,30 @@ def test_no_asset_loader_walks_file_relative_to_itself():
             offenders.append(loader.relative_to(PACKAGE_ROOT))
 
     assert not offenders, f"asset loaders walking __file__: {offenders}"
+
+
+@pytest.mark.parametrize(
+    "taxonomy_type",
+    [
+        "action.action_vector",
+        "action.joint_position_command",
+        "action.gripper_command",
+        "reward.frame_reward",
+    ],
+)
+def test_commands_and_rewards_are_exempt_from_flatline(taxonomy_type):
+    """A command holds still legitimately, like a reward; neither is a sensor."""
+
+    band = _entry(load_default_policy(), "flatline_pct").thresholds[taxonomy_type]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_sensors_still_grade_flatline():
+    """A stuck sensor is what the metric is for: measured signals keep the band."""
+
+    thresholds = _entry(load_default_policy(), "flatline_pct").thresholds
+
+    assert "proprio.joint_position" not in thresholds
+    assert thresholds["default"].bad == pytest.approx(20.0)

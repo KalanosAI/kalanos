@@ -53,8 +53,18 @@ _REQUIRES_SPIKE_WINDOW = Requires(min_samples=_SPIKE_WINDOW)
 # Five points are the fewest a least-squares line means anything over.
 _REQUIRES_A_TREND = Requires(min_samples=5)
 
-# The window snr_db smooths over before treating what's left as noise.
+# The window snr_db smooths over before treating what's left as noise, in samples.
 _SNR_SMOOTHING_WINDOW = 5
+
+# The longest span that window may cover, in seconds. What the smoothing removes
+# is counted as noise, so the window must be short next to the motion itself:
+# 5 samples cover 0.1 s at 50 Hz, and less at any faster rate. Sampled slower, the
+# same 5 samples span more (1 s at 5 Hz) and smooth away real motion, which then
+# reads as noise — found grading real 5-15 Hz LeRobot datasets, whose ratio tracked
+# the sampling rate rather than the robot. There the ratio is not reported rather
+# than misreported. The 10% allowance keeps a real 50 Hz clock's wobble inside.
+_SNR_MAX_SPAN_SECONDS = 0.1
+_SNR_SPAN_ALLOWANCE = 1.1
 _REQUIRES_REGULAR_AND_SMOOTHABLE = Requires(regular_sampling=True, min_samples=8)
 
 _REQUIRES_TAXEL_ARRAY = Requires(min_samples=2, taxonomy=[_TAXEL_PRESSURE])
@@ -75,6 +85,27 @@ _SWITCH_REASON = (
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _sampling_rate(ctx: ChannelContext) -> float | None:
+    """The stream's sampling rate, from the median positive gap between timestamps.
+
+    Parameters
+    ----------
+    ctx : ChannelContext
+        The channel whose stream's timestamps are read.
+
+    Returns
+    -------
+    float or None
+        Samples per second, or `None` when no gap is positive.
+    """
+
+    stamps = [t for t in ctx.stream.timestamps.to_list() if t is not None]
+    gaps = sorted(b - a for a, b in zip(stamps, stamps[1:], strict=False) if b > a)
+    if not gaps:
+        return None
+    return 1.0 / gaps[len(gaps) // 2]
 
 
 def _is_switch(values: pl.Series) -> bool:
@@ -339,6 +370,8 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
         `not_applicable` when:
         - the dtype is not numeric
         - the channel takes exactly two values (a switch or flag)
+        - the stream is sampled too slowly for the smoothing window to stay
+          within `_SNR_MAX_SPAN_SECONDS` (below about 45 Hz)
         - the smoothed signal variance is zero
         - the residual variance is zero
         `report_only` otherwise.
@@ -348,6 +381,17 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
         return not_applicable("channel is not numeric; there is no signal to measure")
     if _is_switch(ctx.values):
         return not_applicable(_SWITCH_REASON.format(what="a signal-to-noise ratio"))
+
+    rate_hz = _sampling_rate(ctx)
+    if rate_hz is None:
+        return not_applicable("no positive gap between timestamps to take a rate from")
+    span_s = _SNR_SMOOTHING_WINDOW / rate_hz
+    if span_s > _SNR_MAX_SPAN_SECONDS * _SNR_SPAN_ALLOWANCE:
+        return not_applicable(
+            f"sampled at {rate_hz:.3g} Hz, too slowly to separate sensor noise from "
+            f"motion: the {_SNR_SMOOTHING_WINDOW}-sample smoothing window spans "
+            f"{span_s:.2g} s, more than {_SNR_MAX_SPAN_SECONDS} s"
+        )
 
     values = ctx.values.cast(pl.Float64)
     smoothed = values.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True)
@@ -374,6 +418,8 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
             "signal_variance": signal_variance,
             "noise_variance": noise_variance,
             "smoothing_window": _SNR_SMOOTHING_WINDOW,
+            "smoothing_span_s": span_s,
+            "rate_hz": rate_hz,
             "n_samples": len(smoothed_values),
         },
     )

@@ -65,6 +65,18 @@ metrics:
       reward.success_label: {good: null, bad: null}
       reward.value_score: {good: null, bad: null}
       reward.discount_flag: {good: null, bad: null}
+      # Commands are not sensors: an operator pausing, an idle arm or an unused
+      # action dimension holds a command still legitimately, so "unchanged" is not
+      # "stuck". Found grading real LeRobot datasets, where action channels hit
+      # this band in nearly every episode of five datasets out of six.
+      action.action_vector: {good: null, bad: null}
+      action.joint_position_command: {good: null, bad: null}
+      action.joint_velocity_command: {good: null, bad: null}
+      action.joint_torque_command: {good: null, bad: null}
+      action.cartesian_pose_command: {good: null, bad: null}
+      action.cartesian_twist_command: {good: null, bad: null}
+      action.gripper_command: {good: null, bad: null}
+      action.base_velocity_command: {good: null, bad: null}
 
   # Candidate: default and joint-velocity bad bounds unconfirmed against real
   # recordings. Joint velocity now carries a two-sided band of its own; a
