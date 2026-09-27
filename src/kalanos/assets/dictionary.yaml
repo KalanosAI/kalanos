@@ -48,7 +48,7 @@ entries:
     kind: series
     shape: per_joint
     unit: rad
-    aliases: [arm_joints, joint_angles, position, q, qpos, sensor_msgs/msg/JointState]
+    aliases: [arm_joints, joint_angles, joint_positions, position, q, qpos, robot0_joint_pos, sensor_msgs/msg/JointState]
     typical_rate_hz: [20.0, 1000.0]
     plausible_range: [-6.3, 6.3]
     group_hint: indexed
@@ -59,7 +59,7 @@ entries:
     kind: series
     shape: per_joint
     unit: rad/s
-    aliases: [dq, joint_vel, observation.velocity, qvel, velocity]
+    aliases: [dq, joint_vel, joint_velocities, observation.velocity, qvel, robot0_joint_vel, velocity]
     typical_rate_hz: [20.0, 1000.0]
     plausible_range: [-20, 20]
     group_hint: indexed
@@ -122,7 +122,7 @@ entries:
     modality: numeric
     kind: series
     shape: free
-    aliases: [O_T_EE, eef_pose, observation.ee_pos, tcp_pose]
+    aliases: [O_T_EE, ee_quat, eef_pos, eef_pose, eef_quat, observation.ee_pos, robot0_eef_pos, robot0_eef_quat, tcp_pose]
     typical_rate_hz: [20.0, 100.0]
     group_hint: axes
   proprio.ee_twist:
@@ -152,7 +152,7 @@ entries:
     kind: series
     shape: scalar
     unit: m
-    aliases: [finger_width, gripper_qpos, gripper_state, gripper_width]
+    aliases: [finger_width, gripper_qpos, gripper_state, gripper_width, robot0_gripper_qpos]
     typical_rate_hz: [20.0, 100.0]
     plausible_range: [0, 0.15]
   proprio.grasp_contact:
@@ -224,7 +224,8 @@ entries:
     kind: image
     shape: free
     aliases: [
-      hand_camera, image_wrist, observation.images.wrist, wrist_image_left, wrist_rgb]
+      hand_camera, image_wrist, observation.images.wrist, robot0_eye_in_hand_image,
+      wrist_image_left, wrist_rgb]
     typical_rate_hz: [15.0, 60.0]
   extero.exterior_rgb:
     label: Exterior / third-person RGB
@@ -474,7 +475,7 @@ entries:
     modality: numeric
     kind: series
     shape: free
-    aliases: [act, action_chunk, actions, normalized_action]
+    aliases: [act, action, action_chunk, actions, normalized_action]
     typical_rate_hz: [20.0, 50.0]
     plausible_range: [-1, 1]
   action.tokenized_action:
@@ -1167,7 +1168,7 @@ entries:
     modality: numeric
     kind: series
     shape: scalar
-    aliases: [discount, done, is_first, is_last, is_terminal]
+    aliases: [discount, done, dones, is_first, is_last, is_terminal]
   reward.success_label:
     label: Episode success / outcome label
     category: reward_evaluation

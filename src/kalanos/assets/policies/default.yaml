@@ -110,15 +110,21 @@ metrics:
         good: 0.05
         bad: 0.20
 
-  # Candidate (low confidence): bad bound unconfirmed against real recordings.
+  # Report-only until the metric is made dimensionless (docs/METRICS.md,
+  # "Jerk metrics are report-only"). Dividing by each channel's spread removes
+  # amplitude but not time, so the value carries units of 1/s^3: a perfectly
+  # smooth 0.5 Hz joint motion measures ~44, far past this band. The candidate
+  # band is kept on file so the numbers are not lost, but it does not grade.
   motion.mean_jerk_norm:
+    report_only: true
     thresholds:
       default:
         good: 0.1
         bad: 0.5
 
-  # Candidate (low confidence): bad bound unconfirmed against real recordings.
+  # Report-only for the same reason as mean_jerk_norm above.
   motion.max_abs_jerk:
+    report_only: true
     thresholds:
       default:
         good: 0.1

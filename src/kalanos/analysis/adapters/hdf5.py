@@ -2,6 +2,13 @@
 
 Treating `shape[0]` as the time axis is this adapter's assumption, not a format
 guarantee.
+
+An episode is timed from its own time dataset when it records one — a 1-D
+`timestamps`, `time`, `t` (or similar) dataset that runs forward, as robomimic and
+Isaac Lab demos often carry. It is read in seconds (its unit inferred from its step
+size), judged regular or not from its own gaps, and not graded as a channel. An
+episode without one falls back to a timebase synthesised from the declared rate,
+which never claims regular sampling.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -22,7 +29,9 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.entry_points import MissingDependency
+from kalanos.analysis.inference.regularity import entity_split_gaps, regularity
 from kalanos.analysis.inference.roles import roles
+from kalanos.analysis.inference.timestamp import infer_unit
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.domain import (
@@ -98,6 +107,19 @@ _NUMERIC_KINDS = frozenset("fiub")
 # Beyond its leading (assumed-time) axis, a dataset ranked above this is
 # image-shaped rather than a scalar or vector channel.
 _MAX_CHANNEL_RANK = 2
+
+# An episode's own time dataset, when it records one (robomimic and Isaac Lab
+# demos often do): matched on the dataset's last path segment. It becomes the
+# episode's timebase instead of a channel, so timing metrics grade the capture.
+_TIME_DATASET_NAMES = frozenset({"t", "ts", "time", "times", "timestamp", "timestamps"})
+
+# Share of consecutive steps that must be non-decreasing for a time-named
+# dataset to be trusted as a clock. Repeated timestamps (a dropped step) still
+# count as non-decreasing; a column that runs backwards does not.
+_MIN_MONOTONIC_FRACTION = 0.95
+
+# Seconds per unit, for a time dataset whose unit is read from its step size.
+_SECONDS_PER_UNIT = {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -241,6 +263,8 @@ def _series_stream(
     timestamps: pl.Series,
     dictionary: Dictionary,
     source_path: UPath,
+    *,
+    is_regular: bool = False,
 ) -> Stream:
     """Build one series Stream for `key`, one column per channel of `dataset`.
 
@@ -256,6 +280,9 @@ def _series_stream(
         The taxonomy to resolve `key` and its channel names against.
     source_path : UPath
         The file this stream was read from.
+    is_regular : bool
+        Whether the episode's own recorded timestamps are regular.
+        Always `False` for a timebase synthesised from a rate.
 
     Returns
     -------
@@ -282,11 +309,68 @@ def _series_stream(
         source_path=source_path,
         source_field=key,
         clock=Clock.UNKNOWN,
-        # The timestamps are synthesised from a rate, so declaring regularity
-        # would restate the rate rather than describe the capture.
-        is_regular=False,
+        # Only an episode's own recorded timestamps can say whether capture was
+        # regular; a timebase synthesised from a rate would just restate the rate.
+        is_regular=is_regular,
         channels=channels,
     )
+
+
+def _recorded_timebase(
+    entries: list[tuple[str, h5py.Dataset]], length: int, source_path: UPath
+) -> tuple[str, pl.Series, bool] | None:
+    """Find the episode's own time dataset and read it as a timebase in seconds.
+
+    Parameters
+    ----------
+    entries : list of (str, h5py.Dataset)
+        The episode's channel-shaped datasets, keyed by their path in the group.
+    length : int
+        The episode's step count; a time dataset must match it.
+    source_path : UPath
+        The file being read, for log messages.
+
+    Returns
+    -------
+    tuple of (str, pl.Series, bool) or None
+        The time dataset's key, its values in seconds, and whether its gaps
+        are regular — or `None` when no dataset qualifies, so the caller falls
+        back to a timebase synthesised from the declared rate.
+    """
+
+    for key, dataset in entries:
+        leaf = key.rsplit("/", 1)[-1].lower()
+        if leaf not in _TIME_DATASET_NAMES:
+            continue
+        if dataset.shape[0] != length or not (
+            dataset.ndim == 1 or (dataset.ndim == 2 and dataset.shape[1] == 1)
+        ):
+            continue
+        values = [float(value) for value in dataset[()].reshape(-1)]
+        steps = list(zip(values, values[1:], strict=False))
+        if not steps:
+            continue
+        monotonic = sum(1 for a, b in steps if b >= a) / len(steps)
+        if monotonic < _MIN_MONOTONIC_FRACTION:
+            logger.debug(
+                "%s: %r is time-named but only %.0f%% non-decreasing; not a clock",
+                source_path,
+                key,
+                100 * monotonic,
+            )
+            continue
+        positive_gaps = sorted(b - a for a, b in steps if b > a)
+        if not positive_gaps:
+            continue
+        unit = infer_unit(positive_gaps[len(positive_gaps) // 2])
+        if unit not in _SECONDS_PER_UNIT:
+            continue
+        seconds = pl.Series(
+            [value * _SECONDS_PER_UNIT[unit] for value in values], dtype=pl.Float64
+        )
+        is_regular = regularity(entity_split_gaps([seconds.to_list()])).is_regular
+        return key, seconds, is_regular
+    return None
 
 
 def _episode_streams(
@@ -297,7 +381,10 @@ def _episode_streams(
     *,
     deep: bool,
 ) -> list[Stream]:
-    """Build every Stream in one episode group, timed from a rate-synthesised timebase.
+    """Build every Stream in one episode group.
+
+    Timed from the episode's own time dataset when it records one (see
+    `_recorded_timebase`); otherwise from a timebase synthesised from `rate_hz`.
 
     Raises
     ------
@@ -319,12 +406,19 @@ def _episode_streams(
     # array (a calibration matrix, a joint-limit vector) can sort before the
     # real per-step datasets and must not hijack the episode's timebase.
     [(length, _)] = Counter(dataset.shape[0] for _, dataset in entries).most_common(1)
-    timestamps = pl.Series(
-        [index / rate_hz for index in range(length)], dtype=pl.Float64
-    )
+    recorded = _recorded_timebase(entries, length, source_path)
+    if recorded is not None:
+        time_key, timestamps, is_regular = recorded
+    else:
+        time_key, is_regular = None, False
+        timestamps = pl.Series(
+            [index / rate_hz for index in range(length)], dtype=pl.Float64
+        )
 
     streams = []
     for key, dataset in entries:
+        if key == time_key:
+            continue  # the timebase itself, not a channel to grade
         if dataset.shape[0] != length:
             logger.warning(
                 "%s: %r has %d rows, expected %d, skipping",
@@ -335,7 +429,14 @@ def _episode_streams(
             )
             continue
         streams.append(
-            _series_stream(key, dataset, timestamps, dictionary, source_path)
+            _series_stream(
+                key,
+                dataset,
+                timestamps,
+                dictionary,
+                source_path,
+                is_regular=is_regular,
+            )
         )
     return streams
 

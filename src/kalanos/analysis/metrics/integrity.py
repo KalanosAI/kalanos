@@ -60,10 +60,39 @@ _REQUIRES_REGULAR_AND_SMOOTHABLE = Requires(regular_sampling=True, min_samples=8
 _REQUIRES_TAXEL_ARRAY = Requires(min_samples=2, taxonomy=[_TAXEL_PRESSURE])
 _REQUIRES_TAXEL_CYCLE = Requires(min_samples=8, taxonomy=[_TAXEL_PRESSURE])
 
+# A channel that only ever takes two values is a switch — a gripper open/close
+# command, a done flag, a contact bit — not a sampled signal. "Unchanged for most
+# of the episode", "noisy" and "spiking" describe a signal, so the three checks
+# below stand down on one rather than grade a switch doing its job as a defect.
+# A channel stuck on a single value is still checked: that can be a dead sensor.
+_SWITCH_DISTINCT_VALUES = 2
+_SWITCH_REASON = (
+    "channel takes only two values, so it is a switch or flag rather than "
+    "a sampled signal; {what} does not apply"
+)
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _is_switch(values: pl.Series) -> bool:
+    """Check whether a numeric channel only ever takes exactly two values.
+
+    Parameters
+    ----------
+    values : pl.Series
+        The channel's values; nulls are ignored.
+
+    Returns
+    -------
+    bool
+        `True` when exactly two distinct non-null values occur.
+        One value (a constant channel) is not a switch: it may be a stuck sensor.
+    """
+
+    return values.drop_nulls().n_unique() == _SWITCH_DISTINCT_VALUES
 
 
 @metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_ANY_VALUE)
@@ -117,12 +146,15 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
     MetricResult
         `not_applicable` when:
         - the dtype is not numeric
+        - the channel takes exactly two values (a switch or flag)
         - fewer than two non-null values survive
         `report_only` otherwise, with the longest unchanged run in `evidence`.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is nothing to flatline")
+    if _is_switch(ctx.values):
+        return not_applicable(_SWITCH_REASON.format(what="flatline"))
 
     values = ctx.values.to_list()
     timestamps = ctx.stream.timestamps.to_list()
@@ -175,14 +207,17 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
     Returns
     -------
     MetricResult
-        `not_applicable` when the dtype is not numeric or every window's
-        local spread is zero or null; `report_only` otherwise.
+        `not_applicable` when the dtype is not numeric, the channel takes
+        exactly two values (a switch or flag), or every window's local spread
+        is zero or null; `report_only` otherwise.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable(
             "channel is not numeric; there is no spread to measure a spike against"
         )
+    if _is_switch(ctx.values):
+        return not_applicable(_SWITCH_REASON.format(what="a spike check"))
 
     values = ctx.values.cast(pl.Float64)
     window_sum = values.rolling_sum(window_size=_SPIKE_WINDOW, center=True)
@@ -303,6 +338,7 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
     MetricResult
         `not_applicable` when:
         - the dtype is not numeric
+        - the channel takes exactly two values (a switch or flag)
         - the smoothed signal variance is zero
         - the residual variance is zero
         `report_only` otherwise.
@@ -310,6 +346,8 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is no signal to measure")
+    if _is_switch(ctx.values):
+        return not_applicable(_SWITCH_REASON.format(what="a signal-to-noise ratio"))
 
     values = ctx.values.cast(pl.Float64)
     smoothed = values.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True)
