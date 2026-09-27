@@ -203,6 +203,55 @@ class MetricPolicy(BaseModel):
         return self
 
 
+class GateCap(BaseModel):
+    """One row of the gate's cap table.
+
+    Attributes
+    ----------
+    max_failing_share : float
+        The largest share of failing episodes, from 0 to 1, this row covers.
+    letter : {"A", "B", "C", "D", "F"} or None
+        The best letter a dataset in this row can get; `None` for no cap.
+    """
+
+    max_failing_share: float = Field(ge=0, le=1)
+    letter: Literal["A", "B", "C", "D", "F"] | None = None
+
+
+class GatePolicy(BaseModel):
+    """The dataset gate: failing episodes cap the dataset's letter.
+
+    An episode fails when any of its metrics grades `critical`, unless that
+    finding is a task trait — the same critical finding on every episode of
+    one task and on none of any other, which describes the task (a sweep never
+    closes the gripper), not a fault.
+
+    Attributes
+    ----------
+    caps : list[GateCap]
+        Rows in ascending `max_failing_share`; the first row whose share
+        covers the dataset's decides its cap. The last row must reach 1.0.
+    task_trait_min_episodes : int
+        The fewest episodes a task needs before a finding on all of them
+        counts as a task trait rather than a coincidence.
+    """
+
+    caps: list[GateCap]
+    task_trait_min_episodes: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _caps_ascend_to_one(self) -> "GatePolicy":
+        """Refuse a cap table that doesn't ascend or doesn't cover every share."""
+
+        shares = [cap.max_failing_share for cap in self.caps]
+        if not shares or shares != sorted(shares) or shares[-1] != 1.0:
+            raise ValueError(
+                "gate caps must ascend in max_failing_share and end at 1.0, "
+                f"got {shares}"
+            )
+        return self
+
+
 class Policy(BaseModel):
     """One parsed policy.yaml: the grading policy for a deployment.
 
@@ -231,6 +280,8 @@ class Policy(BaseModel):
     letters : dict[str, float]
         The minimum score each of `A`, `B`, `C`, `D` needs;
         below `D`'s minimum is `F`, which carries no minimum of its own.
+    gate : GatePolicy or None
+        The dataset gate, or `None` to grade the dataset by its mean alone.
     """
 
     schema_version: int
@@ -240,6 +291,7 @@ class Policy(BaseModel):
     fail_penalty: float | None = Field(default=None, ge=0)
     fail_penalty_cap: float | None = Field(default=None, ge=0)
     letters: dict[str, float]
+    gate: GatePolicy | None = None
 
     @model_validator(mode="after")
     def _every_metric_key_is_one_family_dot_one_name(self) -> "Policy":

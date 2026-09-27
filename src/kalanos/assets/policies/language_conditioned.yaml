@@ -1,0 +1,18 @@
+# For datasets that train a language-conditioned policy — a vision-language-action
+# model such as GR00T — where an episode without its task instruction teaches
+# acting without being told what to do. Everything else is the default policy.
+#
+# Use it with `KALANOS_POLICY_PATH=language_conditioned`, or pass
+# `policy="language_conditioned"` to `kalanos.grade`.
+
+extends: default
+
+metrics:
+  # A missing instruction is binary and, for this use, disqualifying: the
+  # episode fails. Decided by intended use rather than calibrated — no real
+  # dataset graded so far lacked one (2,897 episodes across seven datasets).
+  annotation.task_instruction_missing:
+    thresholds:
+      default:
+        good: 0.0
+        bad: 1.0

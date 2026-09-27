@@ -13,6 +13,7 @@ and `docs/ARCHITECTURE.md` for why the split from `dictionary.yaml` exists at al
 import logging
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 # External
 import yaml
@@ -39,6 +40,41 @@ logger = logging.getLogger(__name__)
 # A `Path(__file__)` walk would break for the wheel case.
 _ANCHOR_PACKAGE = "kalanos.assets"
 _DEFAULT_POLICY_RESOURCE = ("policies", "default.yaml")
+
+# Policies shipped inside the package, loadable by name as well as by path.
+PACKAGED_POLICIES = ("default", "language_conditioned", "legacy_0_5")
+
+
+def _packaged_yaml(name: str) -> str:
+    """Read a packaged policy's YAML text by name."""
+
+    return (
+        resources.files(_ANCHOR_PACKAGE)
+        .joinpath("policies", f"{name}.yaml")
+        .read_text(encoding="utf-8")
+    )
+
+
+def _resolve_extends(payload: Any, *, source: str) -> Any:
+    """Merge a policy that `extends` a packaged one over its base.
+
+    `metrics` merge entry by entry, each entry replacing the base's whole
+    entry; every other top-level key replaces the base's, so `gate: null`
+    switches the gate off.
+    """
+
+    if not isinstance(payload, dict) or "extends" not in payload:
+        return payload
+    base_name = payload.pop("extends")
+    if base_name not in PACKAGED_POLICIES:
+        raise ValueError(
+            f"{source} extends {base_name!r}; packaged policies are "
+            f"{', '.join(PACKAGED_POLICIES)}"
+        )
+    base = _resolve_extends(yaml.safe_load(_packaged_yaml(base_name)), source=base_name)
+    merged = {**base, **{k: v for k, v in payload.items() if k != "metrics"}}
+    merged["metrics"] = {**base.get("metrics", {}), **payload.get("metrics", {})}
+    return merged
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -77,7 +113,10 @@ def _parse_policy(raw_yaml: str, *, source: str) -> Policy:
     except yaml.YAMLError as exc:
         raise ValueError(f"{source} is not valid YAML: {exc}") from exc
 
-    # Step 2: it must also match the Policy schema.
+    # Step 2: a policy that extends a packaged one is merged over it.
+    payload = _resolve_extends(payload, source=source)
+
+    # Step 3: it must also match the Policy schema.
     try:
         return Policy.model_validate(payload)
     except ValidationError as exc:
@@ -119,5 +158,8 @@ def load_policy(path: Path | None) -> Policy:
     if path is None:
         logger.info("using the default policy")
         return load_default_policy()
+    if not Path(path).exists() and str(path) in PACKAGED_POLICIES:
+        logger.info("using the packaged %s policy", path)
+        return _parse_policy(_packaged_yaml(str(path)), source=f"the {path} policy")
     logger.info("using policy override %s", path)
     return _parse_policy(path.read_text(encoding="utf-8"), source=str(path))
