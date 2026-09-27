@@ -22,6 +22,7 @@ from kalanos.testing import (
     jitter_clock,
     kill_taxels,
     null_run,
+    repeat_timestamps,
     saturate_channel,
     skew_unloading,
     spike_channel,
@@ -107,6 +108,24 @@ def test_jittering_the_clock_keeps_the_timestamps_strictly_increasing():
 
     with pytest.raises(ValueError, match="monotonicity"):
         jitter_clock(clean, milliseconds=1000.0)
+
+
+def test_repeating_timestamps_copies_the_previous_one_every_other_row():
+    """Each chosen row takes its predecessor's time; every other row is untouched."""
+
+    clean = clean_recording()
+    before = clean.timestamps.to_list()
+    after = repeat_timestamps(clean, start=10, count=3).timestamps.to_list()
+
+    assert [row for row in range(len(before)) if after[row] != before[row]] == [
+        10,
+        12,
+        14,
+    ]
+    assert all(after[row] == before[row - 1] for row in (10, 12, 14))
+
+    with pytest.raises(ValueError, match="do not fit"):
+        repeat_timestamps(clean, start=0)
 
 
 def test_a_null_run_nulls_only_its_own_window():

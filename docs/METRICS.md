@@ -59,7 +59,7 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `effective_hz` | STREAM | regular sampling | Hz | Samples per second, from the median gap between timestamps. Median so one long gap cannot move it. | *candidate: within 10% of nominal good, 25% bad*; ungraded where the policy declares no nominal rate |
 | `dt_jitter_ms` | STREAM | regular sampling | ms | Standard deviation of the gaps between consecutive timestamps. | *candidate: good < 5 ms at 100 Hz*; one-sided (no bad bound), so it stays report-only |
 | `drop_rate` | STREAM | regular sampling | fraction | Fraction of expected samples that never arrived, expected being duration ÷ median gap. | good < 1%, bad > 5% |
-| `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log. | *to define* |
+| `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
 
 ---
 

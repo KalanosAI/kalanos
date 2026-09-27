@@ -530,3 +530,47 @@ def test_an_episode_metric_receives_the_episode_and_can_reach_its_streams(monkey
     result = run_episode_metrics(EpisodeContext(episode=episode))["_stream_count_gap"]
 
     assert result.value == pytest.approx(1.0)
+
+
+def test_monotonic_violations_counts_repeated_and_backwards_timestamps():
+    """Verify a repeat and a backwards step each count once, in row order.
+
+    Rows 3 and 6 repeat their predecessor (a dropped step); row 8 runs backwards
+    (a reordered log). Row order is read as given, never sorted, so the backwards
+    step is visible.
+    """
+
+    stamps = [0.00, 0.01, 0.02, 0.02, 0.03, 0.04, 0.04, 0.05, 0.045, 0.06]
+    result = run_stream_metrics(_stream_context(stamps))["monotonic_violations"]
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.unit == "count"
+    assert result.value == 3
+    assert result.evidence["n_repeated"] == 2
+    assert result.evidence["n_backwards"] == 1
+    assert result.evidence["first_sample"] == 3
+    assert result.evidence["fraction"] == pytest.approx(3 / 9)
+
+
+def test_monotonic_violations_is_zero_on_a_clean_clock():
+    """Verify a clock that always moves forward has nothing to report."""
+
+    stamps = [index * 0.01 for index in range(20)]
+    result = run_stream_metrics(_stream_context(stamps))["monotonic_violations"]
+
+    assert result.value == 0
+    assert result.evidence["first_sample"] is None
+
+
+def test_monotonic_violations_still_runs_on_an_irregular_series():
+    """Verify it does not need regular sampling, unlike the rest of the family.
+
+    A clock broken badly enough to fail the regularity test is exactly the one
+    this metric must still see.
+    """
+
+    stamps = [0.0, 0.3, 0.3, 0.31, 1.7, 1.7, 2.9]
+    results = run_stream_metrics(_stream_context(stamps, is_regular=False))
+
+    assert results["monotonic_violations"].value == 2
+    assert results["drop_rate"].status == MetricStatus.NOT_APPLICABLE

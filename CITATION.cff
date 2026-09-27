@@ -12,8 +12,8 @@ abstract: >-
 authors:
   - name: "Kalanos AI"
     website: "https://kalanos.ai"
-version: "0.2.1"
-date-released: "2026-09-26"
+version: "0.3.0"
+date-released: "2026-09-27"
 license: Apache-2.0
 url: "https://kalanos.ai"
 repository-code: "https://github.com/KalanosAI/kalanos"
