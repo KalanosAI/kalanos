@@ -32,6 +32,7 @@ from kalanos.analysis.adapters.lerobot.common import (
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
+from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.domain import Clock, Episode, Kind, Stream
 
@@ -235,6 +236,21 @@ class LeRobotV3Adapter(LeRobotAdapter):
             info = read_info(path)
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
+            # Each row of the episode index lists its task instructions, when the
+            # dataset records any; read for every episode, not just the sampled ones,
+            # since whether the dataset carries instructions at all is a dataset fact.
+            task_map = (
+                dataset_tasks(
+                    {
+                        row["episode_index"]: as_task_list(row["tasks"])
+                        for row in episode_index.select(
+                            "episode_index", "tasks"
+                        ).iter_rows(named=True)
+                    }
+                )
+                if "tasks" in episode_index.columns
+                else None
+            )
         except AdapterRefusal:
             raise
         except Exception as exc:
@@ -298,4 +314,10 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     path, f"episode {row.get('episode_index')}: {exc}"
                 ) from exc
 
-            yield Episode(id=f"episode_{row['episode_index']:06d}", streams=streams)
+            yield Episode(
+                id=f"episode_{row['episode_index']:06d}",
+                streams=streams,
+                tasks=None
+                if task_map is None
+                else task_map.get(row["episode_index"], []),
+            )

@@ -31,6 +31,7 @@ from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.entry_points import MissingDependency
 from kalanos.analysis.inference.regularity import entity_split_gaps, regularity
 from kalanos.analysis.inference.roles import roles
+from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.inference.timestamp import infer_unit
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.dictionary import Dictionary
@@ -117,6 +118,10 @@ _TIME_DATASET_NAMES = frozenset({"t", "ts", "time", "times", "timestamp", "times
 # dataset to be trusted as a clock. Repeated timestamps (a dropped step) still
 # count as non-decreasing; a column that runs backwards does not.
 _MIN_MONOTONIC_FRACTION = 0.95
+
+# Episode-group attributes that hold the instruction the episode was recorded under,
+# tried in order; the first present wins.
+_TASK_ATTRS = ("task", "language_instruction", "instruction", "lang", "language")
 
 # Seconds per unit, for a time dataset whose unit is read from its step size.
 _SECONDS_PER_UNIT = {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}
@@ -441,6 +446,15 @@ def _episode_streams(
     return streams
 
 
+def _group_tasks(group: h5py.Group) -> list[str]:
+    """Read an episode group's task instruction from the first task attribute set."""
+
+    for name in _TASK_ATTRS:
+        if name in group.attrs:
+            return as_task_list(group.attrs[name])
+    return []
+
+
 def _episode_id(group: h5py.Group) -> str:
     """Name an episode after its own HDF5 path, with the root group called `root`."""
 
@@ -553,6 +567,11 @@ class Hdf5Adapter:
                 dictionary = self._resolve_dictionary()
                 rate_hz = _declared_rate(layout.container, store) or _FALLBACK_RATE_HZ
                 groups = layout.episodes if sample is None else layout.episodes[:sample]
+                # Read from every episode group, sampled or not: whether the file
+                # carries instructions at all is a fact about the whole dataset.
+                task_map = dataset_tasks(
+                    {group.name: _group_tasks(group) for group in layout.episodes}
+                )
 
                 for group in groups:
                     try:
@@ -565,7 +584,13 @@ class Hdf5Adapter:
                         )
                     except Exception as exc:
                         raise AdapterRefusal(path, f"{group.name}: {exc}") from exc
-                    yield Episode(id=_episode_id(group), streams=streams)
+                    yield Episode(
+                        id=_episode_id(group),
+                        streams=streams,
+                        tasks=None
+                        if task_map is None
+                        else task_map.get(group.name, []),
+                    )
         except AdapterRefusal:
             raise
         except Exception as exc:

@@ -8,6 +8,8 @@ An adapter teaches Kalanos to read a format. It is the main extension point, and
 
 **An adapter reads files and produces episodes.** It does not apply thresholds, decide whether the data is good, or drop a field it fails to recognise. A column it cannot resolve becomes a stream typed `unmapped.<name>`, which reaches the report and tells the user a sensor was there. Drop it silently and the user loses a sensor without noticing.
 
+**Task instructions are optional, and exactly two states count.** If the format stores the natural-language instruction each episode was recorded under, set `Episode.tasks` to that episode's list of strings, blank ones included. Leave it `None` when the dataset carries no instruction for *any* episode, so the annotation metric reads it as not applicable rather than as every episode missing one. `kalanos.analysis.inference.tasks` holds the shared rule: `as_task_list` normalises what a source stored, and `dataset_tasks` returns `None` unless at least one episode has a non-blank instruction. Decide it from the whole dataset, not the sampled episodes.
+
 ## The protocol
 
 ```python

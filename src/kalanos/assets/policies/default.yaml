@@ -175,6 +175,12 @@ metrics:
   motion.energy_proxy:
     report_only: true
 
+  # No bound decided; docs/METRICS.md marks it to define. Whether a missing
+  # instruction should cost points depends on the policy being trained, so it
+  # is measured and shown in every report and grades nothing until a band is
+  # settled against real recordings.
+  annotation.task_instruction_missing: {}
+
 missing_family: skip
 
 letters:

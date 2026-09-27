@@ -2,7 +2,7 @@
 
 The catalogue. This file is the source of truth for what Kalanos computes; `policy.yaml` holds the thresholds and weights that grade it.
 
-This is the design. Today only `timing`, `integrity` and `motion` are implemented; every other metric below is designed and not yet built.
+This is the design. Today `timing`, `integrity` and `motion` are implemented, plus the first `annotation` metric, `task_instruction_missing`; every other metric below is designed and not yet built.
 
 Thresholds marked *to define* are undecided. They must be settled against real recordings rather than filled in with a plausible number: once written down, an invented threshold is indistinguishable from a decided one, and it will be implemented as though it were one.
 
@@ -173,13 +173,19 @@ Whether the dataset is varied enough to train on. Five hundred near-identical de
 
 ## calibration and annotation
 
-Two families the taxonomy supports and no metric yet occupies.
+Two families the taxonomy supports. `annotation` holds its first metric; `calibration` has none yet.
+
+| Metric | Family | Level | Unit | Definition | Threshold |
+|---|---|---|---|---|---|
+| `task_instruction_missing` | annotation | EPISODE | flag | The episode carries no task instruction, or only an empty or whitespace one. **Not applicable** when no episode in the dataset carries one: a dataset never annotated with language is not missing anything. | *to define* — the share of episodes that may lack one, and whether the default policy grades it at all (a missing instruction is fatal for a vision-language-action model and irrelevant for plain behaviour cloning); ships report-only |
+
+Instructions are read by the adapters — LeRobot v2/v3 from each episode's task list in `meta/`, HDF5 from an episode group's `task`, `language_instruction`, `instruction`, `lang` or `language` attribute — and every episode's instructions are in the report (`tasks`), so a reader sees what each was told. What counts as a placeholder instruction beyond an empty one is left for real recordings to show.
 
 `calibration` asks whether what is needed to interpret the data is present: frame conventions documented, camera intrinsics recorded, filter cutoffs stated, extrinsics available. The reference type catalogue names these repeatedly as quality concerns, and they are checks on metadata rather than on signals.
 
 `annotation` asks whether labels are sound: inter-rater agreement, class balance, temporal boundary precision, leakage across train and test splits. Relevant only to datasets that carry labels at all.
 
-Both are declared so that the family list is stable and the policy schema does not change when they are filled. Neither has a metric yet, and `missing_family: skip` means their absence costs nothing.
+Both are declared so that the family list is stable and the policy schema does not change when they are filled. `missing_family: skip` means a family with no graded metric costs nothing.
 
 ---
 
@@ -210,7 +216,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `max_abs_jerk` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
 | `hf_vibration_ratio` | default | 0.1 | 0.3 | candidate · low confidence |
 
-Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`) — none of them grade.
+Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 
 Family scores are weighted means of their metrics; the overall score is a weighted mean of family scores, renormalised over the families that ran, minus a capped penalty per distinct failing metric.
 

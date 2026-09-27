@@ -104,7 +104,7 @@ WARN ep_052/timing.jitter_cv
 NOT ANALYSED ───────────────────────────────────────────────────────────────
 FILE                       REASON
 meta/session.json          no_time_index
-schema 6.0.0 · policy v1 · 4.12s
+schema 6.1.0 · policy v1 · 4.12s
 ```
 
 How to read it, top to bottom:
@@ -121,13 +121,16 @@ How to read it, top to bottom:
 
 ### What it catches
 
-Every metric answers one of three questions, and none of them needs labels:
+Every metric answers one of four questions, and none of them needs labels:
 
 - **Did the clock lie?** Timestamp jitter, dropped samples, streams out of sync. When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred.
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
+- **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
-Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`) to see one group.
+Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
+
+Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `annotation`) to see one group.
 
 ### What it does not do
 
@@ -212,6 +215,8 @@ Planned: `kalanos inspect`, `--fail-under`, `--sample`.
 | `delimited` | whitespace-delimited text, with the header in a `#` comment | — |
 
 An adapter whose extra isn't installed shows as unavailable under `kalanos adapters` instead of failing the run.
+
+**Task instructions** are read where the format stores them: LeRobot v2 and v3 from each episode's task list in `meta/`, and HDF5 from an episode group's `task`, `language_instruction`, `instruction`, `lang` or `language` attribute. A dataset with no instructions at all is treated as not language-annotated, not as missing them.
 
 **No format name? Still works.** Robots and factory sensors routinely invent their own layouts, so Kalanos infers the schema when nothing declares one:
 

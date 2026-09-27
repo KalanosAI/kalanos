@@ -63,6 +63,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "max_torque": Defect.SATURATION,
     "mean_torque": Defect.SATURATION,
     "energy_proxy": None,
+    "task_instruction_missing": None,
 }
 
 _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."
