@@ -128,6 +128,8 @@ Every metric answers one of four questions, and none of them needs labels:
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
+Checks that can't observe something say so rather than score it: on converted datasets whose timestamps were reconstructed from frame numbers (most LeRobot hub data), the timing checks report *capture timing is not observable* instead of a perfect score, and the noise check needs at least ~45 Hz to tell sensor noise from motion.
+
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
 Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `annotation`) to see one group.

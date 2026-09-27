@@ -61,6 +61,8 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `drop_rate` | STREAM | regular sampling | fraction | Fraction of expected samples that never arrived, expected being duration ÷ median gap. | good < 1%, bad > 5% |
 | `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
 
+**Reconstructed clocks.** When every gap between timestamps is within 0.01% of the period, the stamps did not come from a clock that measured anything: they were reconstructed — frame number ÷ fps, as LeRobot conversions write, or a simulator's fixed step. `effective_hz`, `dt_jitter_ms` and `drop_rate` then return `not_applicable` ("capture timing is not observable") instead of a perfect score, per the rule above: a perfect score would claim timing that was never observed. Grading six converted LeRobot datasets (2,647 episodes) showed exactly this — no jitter above 0.001 ms, no drops, every rate exact — and a timing family scoring 100 without measuring. Floating-point rounding of such stamps stays far below 0.01%; a physical clock sits well above (a realistic 50 µs on a 20 ms period is 0.25%). `monotonic_violations` still runs: a repeated step is visible on any clock.
+
 ---
 
 ## integrity
@@ -70,10 +72,10 @@ Universal. Computed for every numeric channel whether or not its type was identi
 | Metric | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|
 | `missing_pct` | CHANNEL | % | Share of null or NaN values. | *candidate: good < 0.5%, bad > 5%* |
-| `flatline_pct` | CHANNEL | % | Percentage of time the value does not change, which is a stuck sensor. Evidence carries the longest run. | *candidate: good < 1%, bad > 20%*; reward signals exempt (they flatline legitimately until success) |
+| `flatline_pct` | CHANNEL | % | Percentage of time the value does not change, which is a stuck sensor. Evidence carries the longest run. | *candidate: good < 1%, bad > 20%*; reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
 | `spike_pct` | CHANNEL | % | Percentage of samples beyond 6σ of a local window. | *candidate: good < 0.1%, bad > 2%* (default and joint velocity) |
 | `drift` | CHANNEL | unit/min | Slow trend where the signal should be stationary. Evidence carries the fitted slope and r². | motor and joint temperature: Δ < 15 °C over an episode; other types graded only where the policy marks the signal stationary |
-| `snr_db` | CHANNEL | dB | Signal against the high-frequency noise floor. | *candidate:* joint velocity good > 20 / bad < 10 dB; joint acceleration good > 12 / bad < 6 dB; other types good > 30 / bad < 15 dB |
+| `snr_db` | CHANNEL | dB | Signal against the high-frequency noise floor: the variance of a 5-sample moving average against what it removes. **Not applicable below about 45 Hz**, where 5 samples span more than 0.1 s and smooth away real motion, which would then read as noise (on real 5-15 Hz LeRobot datasets the ratio tracked the sampling rate rather than the robot). At 50 Hz and above the window is unchanged. | *candidate:* joint velocity good > 20 / bad < 10 dB; joint acceleration good > 12 / bad < 6 dB; other types good > 30 / bad < 15 dB |
 | `dead_taxel_pct` | STREAM | % | Share of a tactile array's cells that never respond. | good < 2%, *candidate bad > 10%* |
 | `hysteresis` | STREAM | fraction | Difference between a tactile cell's loading and unloading response. | good < 5%, *candidate bad > 20%* |
 
@@ -205,7 +207,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `effective_hz` | default (deviation from nominal) | 10% | 25% | candidate |
 | `dt_jitter_ms` | default | 5 ms | — | candidate · one-sided, so report-only |
 | `missing_pct` | default | 0.5% | 5% | candidate |
-| `flatline_pct` | default | 1% | 20% | candidate · reward signals exempt |
+| `flatline_pct` | default | 1% | 20% | candidate · reward signals and action commands exempt |
 | `spike_pct` | default & joint_velocity | 0.1% | 2% | candidate |
 | `snr_db` | default | 30 dB | 15 dB | candidate |
 | `snr_db` | joint_velocity | 20 dB | 10 dB | candidate |

@@ -242,7 +242,9 @@ def test_rate_metrics_are_not_applicable_on_the_irregular_json_fixture(corpus_re
     assert capture_statuses
     assert all(status == MetricStatus.NOT_APPLICABLE for status in capture_statuses)
     assert csv_statuses
-    assert MetricStatus.NOT_APPLICABLE not in csv_statuses
+    # The CSV's jittery and dropped-sample instances keep a measured rate; its
+    # exactly-evenly-stamped instances report timing as not observable instead.
+    assert MetricStatus.REPORT_ONLY in csv_statuses
 
 
 def test_a_folder_with_one_gradeable_file_and_one_unclaimed_file(tmp_path):
@@ -299,16 +301,23 @@ def test_drop_rate_is_graded_for_the_csv_fixture(single_file_report):
 
 
 def test_dt_jitter_is_report_only_for_the_csv_fixture(single_file_report):
-    """Verify dt_jitter_ms stays report-only on every channel, per the policy."""
+    """Verify dt_jitter_ms is never graded, per the policy.
 
-    statuses = [
-        result.status
+    It is report-only where the clock measured something, and not applicable on
+    the instances stamped on an exactly even clock, where there is nothing to see.
+    """
+
+    results = [
+        result
         for name, result in _iter_metric_results(single_file_report)
         if name == "dt_jitter_ms"
     ]
 
-    assert statuses
-    assert all(status == MetricStatus.REPORT_ONLY for status in statuses)
+    assert any(result.status == MetricStatus.REPORT_ONLY for result in results)
+    for result in results:
+        assert result.status in (MetricStatus.REPORT_ONLY, MetricStatus.NOT_APPLICABLE)
+        if result.status == MetricStatus.NOT_APPLICABLE:
+            assert "exactly evenly spaced" in result.evidence["reason"]
 
 
 def test_grading_a_single_file_reports_that_file_alone(single_file_report):
