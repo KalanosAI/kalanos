@@ -83,6 +83,8 @@ The window `spike_pct` takes its 6σ over is *to define*: the threshold is settl
 
 The shipped metric carries the window it actually used in `evidence`, as `window_samples`, so the undecided parameter stays visible in every report rather than buried in code.
 
+**Switch channels.** A channel that takes exactly two values over an episode — a gripper open/close command, a done flag, a contact bit — is a switch, not a sampled signal. Holding one value for most of the episode is the switch doing its job, so `flatline_pct`, `spike_pct` and `snr_db` return `not_applicable` for it, with the reason in `evidence`. A channel stuck on a *single* value is still measured, since that can be a dead sensor, and a switch with a glitch on it (a third value) is measured again.
+
 ---
 
 ## motion
@@ -91,7 +93,7 @@ Whether the recorded motion is physically plausible. These need the taxonomy: je
 
 | Metric | Level | Requires | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
-| `mean_jerk_norm`, `max_abs_jerk` | STREAM | `proprio.joint_position` | normalised | Jerk is the third derivative of position: squared, averaged, and normalised by the motion's own scale. | jerk < 0.1 m/s³, *candidate bad > 0.5* |
+| `mean_jerk_norm`, `max_abs_jerk` | STREAM | `proprio.joint_position` | normalised | Jerk is the third derivative of position: squared, averaged, and normalised by the motion's own scale. | **report-only** until dimensionless — see below; *candidate band kept on file: good < 0.1, bad > 0.5* |
 | `action_chatter` | STREAM | `proprio.joint_velocity` | normalised | Average step-to-step change in velocity, normalised by its spread. | *to define* |
 | `vel_saturation_pct` | CHANNEL | `proprio.joint_velocity` + declared max | % | How often a joint ran above 90% of maximum velocity. A saturated joint clips, so the recording shows something other than what was commanded. | good < 1%; shipped metric measures against the channel's own observed maximum and stays report-only until a declared limit is supplied |
 | `limit_proximity_pct` | CHANNEL | `proprio.joint_position` + declared limits | % | Percentage of time a joint spent above 95% of its allowed range. | range adherence 99.8%; shipped metric measures against the channel's own observed range and stays report-only until declared limits are supplied |
@@ -99,6 +101,12 @@ Whether the recorded motion is physically plausible. These need the taxonomy: je
 | `hf_vibration_ratio` | CHANNEL | `proprio.joint_torque` | fraction | Share of the torque signal's energy above 20 Hz. Deliberate motion lives below about 5 Hz; energy above that is mechanical. | *candidate: good < 0.1, bad > 0.3* |
 | `p99_torque`, `max_torque`, `mean_torque` | CHANNEL | `proprio.joint_torque` | N·m | 99th percentile, peak and mean of absolute torque. | **report-only, always.** What counts as high depends entirely on the robot and the task |
 | `energy_proxy` | EPISODE | torque + velocity | J (robot units) | Sum of \|torque × velocity\| over time, roughly the mechanical work done. Two runs of one task should land close; an outlier used the robot differently. | report-only |
+
+### Jerk metrics are report-only
+
+`mean_jerk_norm` and `max_abs_jerk` divide each channel by its own standard deviation before taking the third difference. That removes amplitude but not time: the result still carries units of 1/s³, so it grows with the cube of how fast the robot moves. A perfectly smooth joint following a sine at frequency *f* measures about √2·(2π*f*)³ — roughly 0.35 at 0.1 Hz, 44 at 0.5 Hz and 180 at 0.8 Hz — against a candidate *bad* bound of 0.5. Graded against that band, any ordinary manipulation motion scores 0.
+
+So both metrics ship `report_only`: measured and shown in every report, not graded. The candidate band stays in `default.yaml` so the numbers are not lost. They return to grading once the measure is made dimensionless (normalised by the motion's duration as well as its amplitude, as log dimensionless jerk is) and a band is set against real recordings.
 
 Any metric with a precondition should skip the way `still_drift` does, by detecting the condition itself instead of relying on the policy to exclude it.
 
@@ -198,8 +206,8 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `snr_db` | joint_acceleration | 12 dB | 6 dB | candidate |
 | `dead_taxel_pct` | default | 2% | 10% | candidate |
 | `hysteresis` | default | 0.05 | 0.20 | candidate |
-| `mean_jerk_norm` | default | 0.1 | 0.5 | candidate · low confidence |
-| `max_abs_jerk` | default | 0.1 | 0.5 | candidate · low confidence |
+| `mean_jerk_norm` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
+| `max_abs_jerk` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
 | `hf_vibration_ratio` | default | 0.1 | 0.3 | candidate · low confidence |
 
 Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`) — none of them grade.

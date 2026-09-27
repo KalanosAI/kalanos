@@ -594,3 +594,44 @@ def test_the_csv_fixtures_pose_axes_resolve_through_the_packaged_dictionary():
     for column in pose_columns:
         match = _PACKAGED.resolve(column)
         assert match.taxonomy_type == "proprio.ee_pose", (column, match)
+
+
+@pytest.mark.parametrize(
+    ("name", "taxonomy_type"),
+    [
+        # LeRobot's own action key, alongside the `actions` spelling already known
+        ("action", "action.action_vector"),
+        ("observation.action", "action.action_vector"),
+        # robosuite / robomimic observation keys
+        ("robot0_joint_pos", "proprio.joint_position"),
+        ("robot0_joint_vel", "proprio.joint_velocity"),
+        ("robot0_eef_pos", "proprio.ee_pose"),
+        ("robot0_eef_quat", "proprio.ee_pose"),
+        ("robot0_gripper_qpos", "proprio.gripper_width"),
+        ("robot0_eye_in_hand_image", "extero.wrist_rgb"),
+        # the eef_* spellings Isaac Lab and robomimic write, namespaced or not
+        ("eef_pos", "proprio.ee_pose"),
+        ("observation.eef_quat", "proprio.ee_pose"),
+        ("joint_positions", "proprio.joint_position"),
+        # robomimic's per-step done flags
+        ("dones", "reward.discount_flag"),
+    ],
+)
+def test_common_robot_learning_keys_resolve(name, taxonomy_type):
+    """Verify names robosuite, robomimic, Isaac Lab and LeRobot write resolve."""
+
+    assert load_default_dictionary().resolve(name).taxonomy_type == taxonomy_type
+
+
+@pytest.mark.parametrize(
+    "name", ["observation.state", "state", "gripper", "joint_0.pos"]
+)
+def test_generic_state_keys_stay_unmapped(name):
+    """Verify names too generic to claim are still left unmapped on purpose.
+
+    LeRobot's `observation.state` is whatever each robot's state vector holds —
+    joint angles for one, an x/y position for another — so claiming it would
+    mislabel real datasets. See the rejection rules at the top of dictionary.yaml.
+    """
+
+    assert load_default_dictionary().resolve(name).taxonomy_type is None

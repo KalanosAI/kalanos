@@ -259,3 +259,166 @@ def test_describe_does_not_read_dataset_values(monkeypatch):
 
     info = Hdf5Adapter().describe(HDF5_FIXTURE)
     assert info.episode_count == 2
+
+
+def _write_demos(path, timestamps, *, key="timestamps", rate=None):
+    """Write a two-demo robomimic-shaped file, each demo carrying `timestamps`."""
+
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        if rate is not None:
+            data.attrs["fps"] = rate
+        for name in ("demo_0", "demo_1"):
+            group = data.create_group(name)
+            n = len(timestamps)
+            group.create_dataset("actions", data=np.zeros((n, 2), dtype=np.float32))
+            group.create_dataset(key, data=np.asarray(timestamps, dtype=np.float64))
+
+
+def test_an_episodes_own_timestamps_become_its_timebase(tmp_path):
+    """Verify a recorded time dataset times the episode and isn't graded as a channel.
+
+    Recorded timestamps describe the capture, so the streams are marked regular
+    when their gaps are; a declared rate alone never could.
+    """
+
+    path = tmp_path / "timed.hdf5"
+    recorded = [0.0, 0.02, 0.0401, 0.06, 0.0799, 0.1]
+    _write_demos(path, recorded, rate=5.0)  # the declared rate is deliberately wrong
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    assert [s.source_field for s in first.streams] == ["actions"]
+    stream = first.streams[0]
+    assert stream.timestamps.to_list() == pytest.approx(recorded)
+    assert stream.is_regular is True
+
+
+def test_millisecond_timestamps_are_read_in_seconds(tmp_path):
+    """Verify a time dataset recorded in milliseconds is scaled to seconds."""
+
+    path = tmp_path / "ms.hdf5"
+    _write_demos(path, [0.0, 20.0, 40.0, 60.0, 80.0], key="time")
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    assert first.streams[0].timestamps.to_list() == pytest.approx(
+        [0.0, 0.02, 0.04, 0.06, 0.08]
+    )
+
+
+def test_a_repeated_timestamp_is_kept_for_the_timing_metrics_to_find(tmp_path):
+    """Verify a dropped physics step (a repeated timestamp) still reads as a clock.
+
+    The repeat is a defect for timing metrics to grade, not a reason to throw
+    the recorded clock away and fall back to a synthesised one.
+    """
+
+    path = tmp_path / "dropout.hdf5"
+    recorded = [index * 0.02 for index in range(40)]
+    recorded[10] = recorded[9]
+    _write_demos(path, recorded)
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    stream = first.streams[0]
+    assert stream.timestamps.to_list() == pytest.approx(recorded)
+    assert stream.is_regular is True
+
+
+def test_a_time_named_dataset_that_runs_backwards_is_not_a_clock(tmp_path):
+    """Verify a non-monotonic `t` column stays a channel on a synthesised timebase."""
+
+    path = tmp_path / "not_a_clock.hdf5"
+    _write_demos(path, [3.0, 1.0, 2.0, 0.0, 5.0, 4.0], key="t", rate=10.0)
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    assert sorted(s.source_field for s in first.streams) == ["actions", "t"]
+    assert first.streams[0].timestamps.to_list() == pytest.approx(
+        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    )
+    assert all(s.is_regular is False for s in first.streams)
+
+
+def test_without_a_time_dataset_the_timebase_is_synthesised_and_not_regular(tmp_path):
+    """Verify the rate-synthesised fallback is unchanged and never claims regularity."""
+
+    path = tmp_path / "untimed.hdf5"
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        data.attrs["fps"] = 50.0
+        for name in ("demo_0", "demo_1"):
+            data.create_group(name).create_dataset(
+                "actions", data=np.zeros((4, 2), dtype=np.float32)
+            )
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    assert first.streams[0].timestamps.to_list() == pytest.approx(
+        [0.0, 0.02, 0.04, 0.06]
+    )
+    assert first.streams[0].is_regular is False
+
+
+def test_robomimic_keys_resolve_to_their_types(tmp_path):
+    """Verify robomimic's `robot0_*` observations and `dones` get taxonomy types."""
+
+    path = tmp_path / "robomimic_keys.hdf5"
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        for name in ("demo_0", "demo_1"):
+            group = data.create_group(name)
+            group.create_dataset("actions", data=np.zeros((5, 7), dtype=np.float32))
+            group.create_dataset("dones", data=np.zeros(5, dtype=np.uint8))
+            obs = group.create_group("obs")
+            obs.create_dataset("robot0_joint_pos", data=np.zeros((5, 7)))
+            obs.create_dataset("robot0_eef_pos", data=np.zeros((5, 3)))
+            obs.create_dataset("robot0_eef_quat", data=np.zeros((5, 4)))
+            obs.create_dataset("robot0_gripper_qpos", data=np.zeros((5, 2)))
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+    types = {s.source_field.rsplit("/", 1)[-1]: s.taxonomy_type for s in first.streams}
+
+    assert types == {
+        "actions": "action.action_vector",
+        "dones": "reward.discount_flag",
+        "robot0_joint_pos": "proprio.joint_position",
+        "robot0_eef_pos": "proprio.ee_pose",
+        "robot0_eef_quat": "proprio.ee_pose",
+        "robot0_gripper_qpos": "proprio.gripper_width",
+    }
+
+
+def test_smooth_joint_motion_raises_no_motion_finding(tmp_path):
+    """Verify clean, smooth robot motion in a robomimic file raises no false alarm.
+
+    Joint positions resolve now, so the motion family runs on them. Ordinary
+    motion (here 0.5 Hz sines) must not come back as critical jerk, and the two
+    values of a gripper command must not come back as a stuck channel.
+    """
+
+    from kalanos.api import grade  # local: keeps the adapter tests import-light
+
+    path = tmp_path / "smooth.hdf5"
+    t = np.arange(200) * 0.02
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        data.attrs["fps"] = 50.0
+        for index in range(3):
+            group = data.create_group(f"demo_{index}")
+            joints = np.stack(
+                [0.2 * np.sin(2 * np.pi * 0.5 * t + phase) for phase in range(6)],
+                axis=1,
+            )
+            gripper = np.where(t > t[100], 1.0, -1.0)[:, None]
+            group.create_dataset("actions", data=np.hstack([joints, gripper]))
+            group.create_dataset("timestamps", data=t)
+            group.create_group("obs").create_dataset("robot0_joint_pos", data=joints)
+
+    report = grade(path)
+
+    findings = [f for f in report.findings if f.severity is not None]
+    assert not [f for f in findings if f.family == "motion"]
+    assert not [f for f in findings if f.metric_id == "integrity.flatline_pct"]
+    assert report.score.grade == "A"

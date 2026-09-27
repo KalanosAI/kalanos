@@ -199,6 +199,20 @@ def test_the_default_policy_bands_match_the_documented_numbers():
     assert band.bad == pytest.approx(6.0)
 
 
+def test_the_jerk_metrics_are_report_only_until_they_are_dimensionless():
+    """Verify mean_jerk_norm and max_abs_jerk measure but don't grade.
+
+    Normalising by each channel's spread leaves units of 1/s^3, so ordinary smooth
+    motion lands far past the candidate band. They stay report-only, with the band
+    kept on file, until the metric is made dimensionless (docs/METRICS.md).
+    """
+
+    policy = load_default_policy()
+
+    for name in ("mean_jerk_norm", "max_abs_jerk"):
+        assert _entry(policy, name).report_only is True, name
+
+
 def test_effective_hz_grades_relative_deviation_from_a_declared_nominal_rate():
     """Verify effective_hz uses abs_dev against a nominal_hz target, per the docs.
 

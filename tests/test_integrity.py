@@ -166,3 +166,47 @@ def test_hysteresis_is_not_applicable_on_a_monotonic_rise():
     result = hysteresis(ctx)
 
     assert result.status == MetricStatus.NOT_APPLICABLE
+
+
+def test_a_two_valued_channel_is_a_switch_so_flatline_spike_and_snr_stand_down():
+    """A gripper open/close command or a done flag takes two values by design.
+
+    Staying on one value for most of the episode is that switch working, not a
+    stuck sensor, so flatline, spike and signal-to-noise don't apply to it.
+    """
+
+    gripper = [-1.0] * 30 + [1.0] * 30
+    ctx = _channel_ctx(gripper)
+
+    for check in (flatline_pct, spike_pct, snr_db):
+        result = check(ctx)
+        assert result.status == MetricStatus.NOT_APPLICABLE, check.__name__
+        assert "two values" in result.evidence["reason"], check.__name__
+
+
+def test_a_done_flag_with_a_null_is_still_a_switch():
+    """Nulls don't count as a third value."""
+
+    ctx = _channel_ctx([0.0] * 58 + [None, 1.0])
+
+    assert flatline_pct(ctx).status == MetricStatus.NOT_APPLICABLE
+
+
+def test_a_constant_channel_is_still_checked_for_flatline():
+    """One value is not a switch: a channel that never moves may be a dead sensor."""
+
+    result = flatline_pct(_channel_ctx([0.5] * 20))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == pytest.approx(100.0)
+
+
+def test_a_switch_with_glitches_on_it_is_measured_again():
+    """A third value (a glitch on the command) makes it a signal to check once more."""
+
+    values = [-1.0] * 30 + [1.0] * 30
+    values[10] = 2.7
+    ctx = _channel_ctx(values)
+
+    assert flatline_pct(ctx).status == MetricStatus.REPORT_ONLY
+    assert spike_pct(ctx).status == MetricStatus.REPORT_ONLY
