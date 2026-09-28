@@ -340,7 +340,7 @@ wheels = [
 
 [[package]]
 name = "kalanos"
-version = "0.6.4"
+version = "0.6.5"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },

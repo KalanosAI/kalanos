@@ -2,7 +2,7 @@
 
 **Grade your robot data before you train on it.**
 
-One command gives every recording, and the dataset as a whole, a 0–100 score, an A–F grade and a train-ready verdict, with the exact episode, stream and channel behind every problem. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
+One command gives the dataset a **readiness score** out of 100, names the **blocking episodes** to exclude, and scores every recording, with the exact episode, stream and channel behind every problem. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
 
 ```bash
 pip install kalanos
@@ -85,15 +85,15 @@ Every run prints a report card to the terminal. It looks like this (numbers illu
 ```
 ╭──────────────────────────────────────────────────────────────────────────╮
 │ KALANOS · DATASET REPORT                                                 │
-│ /data/my_demos                              C  71.4  ▌ NOT TRAIN READY ▐ │
+│ /data/my_demos                             READINESS 80/100  24 blocking │
 │ 120 recordings · 38 findings · 2 not analysed · 1 no schema              │
 ╰──────────────────────────────────────────────────────────────────────────╯
 RECORDINGS ─────────────────────────────────────────────────────────────────
-GRADE  RECORDING                      SCORE                METRICS
+       RECORDING                      SCORE                METRICS
                                                   PASS WARN FAIL SKIP
-  C    OVERALL             ████████░░░░  71.4     3104  212   41  880
-  F    ep_017.parquet      ███░░░░░░░░░  24.0       18    6    9    7
-  D    ep_052.parquet      ███████░░░░░  58.3       26    4    2    7
+       OVERALL             ████████░░░░  71.4     3104  212   41  880
+BLOCK  ep_017.parquet      ███░░░░░░░░░  24.0       18    6    9    7
+BLOCK  ep_052.parquet      ███████░░░░░  58.3       26    4    2    7
   …
   +112 more
 FINDINGS ───────────────────────────────────────────────────────────────────
@@ -104,16 +104,16 @@ WARN ep_052/timing.jitter_cv
 NOT ANALYSED ───────────────────────────────────────────────────────────────
 FILE                       REASON
 meta/session.json          no_time_index
-schema 6.2.0 · policy v1 · 4.12s
+schema 6.4.0 · policy v1 · 4.12s
 ```
 
 How to read it, top to bottom:
 
 | Part | What it tells you | What to do with it |
 |---|---|---|
-| **Grade, score, verdict** | Dataset-wide A–F, 0–100, and `TRAIN READY` / `NOT TRAIN READY` | The go/no-go for this dataset under the current policy |
-| **Recordings** | Every recording, worst first, with its own grade | Start at the top: these are the episodes to fix or drop |
-| **PASS / WARN / FAIL / SKIP** | How many metric checks landed in each bucket | A high grade with a large `SKIP` count means less of the data was actually graded. Check coverage before trusting it |
+| **Readiness, blocking episodes** | Readiness out of 100 (blocking episodes count as zero), how many episodes block, and a one-line reason | How much of this dataset you can train on as it is, and what excluding the blocking episodes would leave |
+| **Recordings** | Every recording, worst first, with its own score; `BLOCK` marks the ones with blocking findings | Start at the top: these are the episodes to fix or drop |
+| **PASS / WARN / FAIL / SKIP** | How many metric checks landed in each bucket | A high score with a large `SKIP` count means less of the data was actually graded. Check coverage before trusting it |
 | **Findings** | The worst problems, addressed down to `episode/stream/channel.metric`, with the measured value and evidence | Open that exact channel; no hunting |
 | **Not analysed / No schema** | Files Kalanos declined to grade, each with a reason | Nothing is dropped silently. Fix the file or confirm it's expected |
 
@@ -128,34 +128,43 @@ Every metric answers one of four questions, and none of them needs labels:
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
-**A few bad episodes can't hide in an average.** An episode with a critical finding fails, and the share of failing episodes caps the dataset's letter: up to 5% costs nothing, then B, C, D. The report lists the failing episodes with their reasons and the grade without them ("C as-is, A after removing 8 episodes"), and every grade carries a line saying what it rests on. `KALANOS_POLICY_PATH=legacy_0_5` grades without the gate; `language_conditioned` fails episodes that lack their task instruction, for VLA training.
+**A few bad episodes can't hide in an average.** An episode with a critical finding is **blocking**, and blocking episodes count as zero:
 
-### What grade will my data get? Worked examples
+```text
+Readiness = sum of passing episodes' quality scores / number of evaluated episodes
+          = passing share × passing-episode quality
+```
 
-Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, graded by Kalanos 0.6.0. Everything else is clean, including a realistic 0.25% clock wobble. The mean barely moves; the gate is what turns a few bad episodes into a lower letter, and "after pruning" is the grade once they are removed.
+So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of the dataset you can train on, times how clean it is. The report names every blocking episode with its reasons, and the readiness once they are excluded ("84 as it is, 100 after excluding 8 episodes"). Findings that describe how the data was recorded rather than a fault in some episodes (the same finding on every episode of a task, or on nearly every episode of the dataset) are reported as traits and block nothing. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` scores without blocking episodes, reproducing 0.5, and so reports no readiness.
 
-| What's wrong | Grade | Mean | Failing episodes | After pruning |
+Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them, and 0.7.0 removes them.
+
+### What will my data score? Worked examples
+
+Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, scored by Kalanos 0.6.5. Everything else is clean, including a realistic 0.25% clock wobble.
+
+| What's wrong | Readiness | Episodes passing | Blocking | After excluding them |
 |---|---|---|---|---|
-| Nothing (clean control) | **A** | 100.0 | 0 | — |
-| 3% of samples dropped in 5 episodes | **A** | 99.6 | 0 (warning only) | — |
-| 8% of samples dropped in 2 episodes (4%) | **A** | 99.6 | 2 — within the 5% allowance | A |
-| 8% of samples dropped in 5 episodes (10%) | **B** | 98.9 | 5 | A |
-| 8% of samples dropped in 10 episodes (20%) | **C** | 97.8 | 10 | A |
-| 8% of samples dropped in 20 episodes (40%) | **D** | 95.7 | 20 | A |
-| Control glitches (sudden command jumps) in 4 episodes (8%) | **B** | 98.2 | 4 | A |
-| Clock declared 50 Hz, actually 45 Hz (10% slow) | **A** | 100.0 | 0 | — |
-| Clock declared 50 Hz, actually 40 Hz (20% slow) | **A** | 95.2 | 0 (warning: timing 66.7) | — |
-| Clock declared 50 Hz, actually 35 Hz (30% slow) | **D** | 92.9 | all 50 | — |
-| Clock jitter of 5% of the sampling period, every episode | **A** | 100.0 | 0 — jitter is measured, not yet graded | — |
-| 5% jitter **and** 8% of samples dropped in 10 episodes | **C** | 97.8 | 10 (the drops) | A |
-| 5% repeated timestamps in 10 episodes | **A** | 100.0 | 0 — measured, not yet graded | — |
+| Nothing (clean control) | **100** | 50/50 | 0 | — |
+| 3% of samples dropped in 5 episodes | **100** | 50/50 | 0 (warning only) | — |
+| 8% of samples dropped in 2 episodes (4%) | **96** | 48/50 | 2 | 100 |
+| 8% of samples dropped in 5 episodes (10%) | **90** | 45/50 | 5 | 100 |
+| 8% of samples dropped in 10 episodes (20%) | **80** | 40/50 | 10 | 100 |
+| 8% of samples dropped in 20 episodes (40%) | **60** | 30/50 | 20 | 100 |
+| Control glitches (sudden command jumps) in 4 episodes (8%) | **92** | 46/50 | 4 | 100 |
+| Clock declared 50 Hz, actually 45 Hz (10% slow) | **100** | 50/50 | 0 | — |
+| Clock declared 50 Hz, actually 40 Hz (20% slow) | **95** | 50/50 | 0 (warning: lowers timing) | — |
+| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **93** | 50/50 | 0: a dataset trait (see below) | — |
+| Clock jitter of 5% of the sampling period, every episode | **100** | 50/50 | 0: jitter is measured, not yet scored | — |
+| 5% jitter **and** 8% of samples dropped in 10 episodes | **80** | 40/50 | 10 (the drops) | 100 |
+| 5% repeated timestamps in 10 episodes | **100** | 50/50 | 0: measured, not yet scored | — |
 
 How to read it:
 
-- **Dropped samples**: under 1% of an episode is fine, 1-5% is a warning, over 5% fails the episode. The dataset letter then follows the share of failing episodes: up to 5% free, then B (≤15%), C (≤30%), D.
-- **Clock rate**: within 10% of the declared rate is fine, 10-25% off is a warning, beyond 25% fails every episode.
-- **Glitches** fail the episodes they hit, through the spike and noise checks.
-- **Jitter and repeated timestamps** appear in every report with their numbers but don't change the grade yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
+- **Dropped samples**: under 1% of an episode is fine, 1–5% is a warning that lowers its quality, over 5% makes the episode blocking. Readiness then falls with the share of blocking episodes: 10 blocking of 50 is 80.
+- **Glitches** make the episodes they hit blocking, through the spike and noise checks.
+- **A problem in every episode is a dataset trait, not blocking.** A clock 30% slow in all 50 episodes can't be fixed by excluding episodes, so it blocks nothing; the timing check still lowers every episode's quality (93, not 100), and the report lists the trait. A dataset-wide defect like this should lower readiness further, and a future release will make it do so; until then, read the report's dataset traits alongside the number.
+- **Jitter and repeated timestamps** appear in every report with their numbers but don't change readiness yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
 
 All of these thresholds are candidates, tested on synthetic and real datasets and open to revision against labelled failures.
 
@@ -169,7 +178,7 @@ Run `kalanos metrics` to see every check installed, or `kalanos metrics --family
 
 Kalanos does not tell you whether the task **succeeded**. A torque spike is either "the arm hit the table" or "a firm, correct grasp", and no signal-derived metric can tell them apart. Use Kalanos as the hardware-and-logging gate, then spend human review time only on the recordings that pass.
 
-A grade reflects the metrics that applied to your data and the policy you graded against. It is a strong signal about data health, not a promise about downstream policy success.
+Readiness reflects the checks that applied to your data and the policy you graded against. It is an index of technical readiness, not a prediction of training success or a measure of a dataset's research value.
 
 ---
 

@@ -37,7 +37,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.3.0"
+CURRENT_SCHEMA_VERSION = "6.4.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -302,6 +302,36 @@ class Gate(BaseModel):
     summary: str
 
 
+class Readiness(BaseModel):
+    """The dataset's headline number: how much of it you can train on, and how clean.
+
+    An episode with a blocking finding (a critical finding that is not a task
+    or dataset trait) contributes 0; every other evaluated episode contributes
+    its quality score. Readiness is the mean of those contributions over the
+    evaluated episodes, equivalently passing share x passing-episode quality.
+
+    Attributes
+    ----------
+    score : float or None
+        Readiness from 0 to 100, full precision; `None` when no episode could
+        be evaluated (not graded).
+    evaluated_episodes : int
+        Episodes with a quality score.
+    passing_episodes : int
+        Evaluated episodes without a blocking finding.
+    blocking_episodes : int
+        Evaluated episodes with one.
+    passing_quality : float or None
+        The mean quality of the passing episodes; `None` when none pass.
+    """
+
+    score: float | None
+    evaluated_episodes: int
+    passing_episodes: int
+    blocking_episodes: int
+    passing_quality: float | None
+
+
 class Report(BaseModel):
     """The graded result of one analysis run.
 
@@ -339,6 +369,10 @@ class Report(BaseModel):
     datasets : list[DatasetInfo]
         What the adapter declared about each path it read,
         one entry per path, in walk order.
+
+    Letter grades are deprecated since 0.6.5: `score.grade`, `gate.cap`,
+    `gate.uncapped_grade` and `gate.pruned_grade` are still written for
+    compatibility and will be removed in 0.7.0. `readiness` is the headline.
     """
 
     schema_version: str = CURRENT_SCHEMA_VERSION
@@ -353,3 +387,4 @@ class Report(BaseModel):
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
     gate: Gate | None = None
+    readiness: Readiness | None = None

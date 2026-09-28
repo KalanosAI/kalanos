@@ -34,6 +34,7 @@ from kalanos.analysis.models.report import (
     Gate,
     GradedEpisode,
     NotObservable,
+    Readiness,
     TaskTrait,
 )
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
@@ -157,6 +158,40 @@ def dataset_traits(
     return {key for key, count in counts.items() if count >= needed}
 
 
+def readiness_of(
+    episodes: Sequence[GradedEpisode], gate: Gate | None
+) -> Readiness | None:
+    """Readiness: blocking episodes contribute 0, the rest their quality score.
+
+    Parameters
+    ----------
+    episodes : Sequence[GradedEpisode]
+        Every graded episode.
+    gate : Gate or None
+        The gate's verdict, which names the blocking episodes; without a gate
+        there is no blocking rule, and so no readiness.
+
+    Returns
+    -------
+    Readiness or None
+        The readiness summary, or `None` without a gate.
+    """
+
+    if gate is None:
+        return None
+    blocking = {item.episode_id for item in gate.failing_episodes}
+    scores = [(e.id, e.score.score) for e in episodes if e.score.score is not None]
+    passing = [score for episode, score in scores if episode not in blocking]
+    evaluated = len(scores)
+    return Readiness(
+        score=sum(passing) / evaluated if evaluated else None,
+        evaluated_episodes=evaluated,
+        passing_episodes=len(passing),
+        blocking_episodes=evaluated - len(passing),
+        passing_quality=statistics.fmean(passing) if passing else None,
+    )
+
+
 def cap_for(share: float, gate: GatePolicy) -> Grade | None:
     """The best letter a dataset with this share of failing episodes may get."""
 
@@ -228,33 +263,29 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
 
 
 def _summary(
-    grade: Grade | None,
-    mean: float | None,
-    uncapped: Grade | None,
+    readiness: float | None,
+    passing_quality: float | None,
     failing: int,
     total: int,
-    pruned: Grade | None,
     cover: Coverage,
     n_dataset_traits: int = 0,
 ) -> str:
-    """One plain-language line: the grade, why, and what it rests on."""
+    """One plain-language line: readiness, why, and what it rests on."""
 
-    if grade is None or mean is None:
-        head = "Not graded"
-    elif grade != uncapped:
-        head = (
-            f"{grade.value} (mean {mean:.1f}, {uncapped.value if uncapped else '?'} "
-            f"uncapped): {failing} of {total} episodes ({failing / total:.0%}) fail "
-            f"on critical findings"
-            + (f"; {pruned.value} after removing them" if pruned else "")
-        )
+    if readiness is None:
+        head = "Not graded: no episode could be evaluated"
     elif failing:
         head = (
-            f"{grade.value} {mean:.1f}: {failing} of {total} episodes fail on "
-            "critical findings, within the share the grade allows"
+            f"Readiness {readiness:.0f}/100: {failing} of {total} episodes "
+            f"({failing / total:.0%}) have blocking findings"
+            + (
+                f"; {passing_quality:.0f}/100 after excluding them"
+                if passing_quality is not None
+                else ""
+            )
         )
     else:
-        head = f"{grade.value} {mean:.1f}: no episode fails"
+        head = f"Readiness {readiness:.0f}/100: no blocking episodes"
     families = " and ".join(cover.families_graded) or "nothing"
     checks = cover.graded_checks_per_episode
     rests = f"graded on {families}" + (
@@ -363,16 +394,20 @@ def apply_gate(
         pruned_grade=pruned_grade,
         train_ready_after_pruning=pruned_ready,
         coverage=cover,
-        summary=_summary(
-            grade,
-            score.score,
-            score.grade,
-            len(failing),
-            total,
-            pruned_grade,
-            cover,
-            len(everywhere),
-        ),
+        summary="",
+    )
+    ready = readiness_of(graded, gate)
+    gate = gate.model_copy(
+        update={
+            "summary": _summary(
+                ready.score if ready else None,
+                ready.passing_quality if ready else None,
+                len(failing),
+                total,
+                cover,
+                len(everywhere),
+            )
+        }
     )
     gated = score.model_copy(
         update={
@@ -389,6 +424,7 @@ def apply_gate(
 
 __all__ = [
     "apply_gate",
+    "readiness_of",
     "cap_for",
     "coverage",
     "dataset_traits",

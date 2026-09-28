@@ -1619,8 +1619,8 @@ def test_an_episode_that_is_its_own_container_renders_as_a_single_row():
     rows = [line for line in text.splitlines() if "file-000.parquet" in line]
 
     assert len(rows) == 1
-    assert episode.score.grade is not None
-    assert episode.score.grade.value in rows[0]
+    assert episode.score.score is not None
+    assert f"{episode.score.score:.1f}" in rows[0]
 
 
 def test_a_container_sorts_at_its_worst_episode_not_after_the_ungrouped_rows():
@@ -1764,7 +1764,10 @@ def test_the_grade_column_survives_long_content_at_a_narrow_width():
         for line in text.splitlines():
             assert len(line) <= width
         overall_row = next(line for line in text.splitlines() if "OVERALL" in line)
-        assert overall_row.split()[0] == report.score.grade.value
+        # Since 0.6.5 the first column marks blocking episodes (no letter);
+        # the OVERALL row has none, so its label leads and its score survives.
+        assert overall_row.split()[0] == "OVERALL"
+        assert "82.0" in overall_row
 
 
 def test_the_rail_reads_without_colour_and_tracks_the_score():
