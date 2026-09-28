@@ -19,6 +19,7 @@ so an A on thin evidence reads differently from an A on thick.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -28,6 +29,7 @@ from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import GatePolicy, Policy
 from kalanos.analysis.models.report import (
     Coverage,
+    DatasetTrait,
     FailingEpisode,
     Gate,
     GradedEpisode,
@@ -116,6 +118,45 @@ def task_traits(
     return traits
 
 
+def dataset_traits(
+    critical: Mapping[str, set[str]],
+    episodes: Iterable[str],
+    min_episodes: int,
+    min_share: float = 1.0,
+) -> set[str]:
+    """Critical findings on (nearly) every graded episode of the dataset.
+
+    Such a finding describes the recording setup, not some episodes being worse
+    than others: dropping episodes cannot remove it, so the gate, which exists to
+    catch the episodes worth dropping, does not count it.
+
+    Parameters
+    ----------
+    critical : Mapping[str, set[str]]
+        Each episode's critical finding keys.
+    episodes : Iterable[str]
+        Every graded episode, whether or not it has a finding.
+    min_episodes : int
+        The fewest episodes a dataset needs for "every episode" to mean something.
+    min_share : float
+        The share of episodes, from 0 to 1, a finding must be on. The gate passes
+        one minus its own no-cap allowance: a finding missing from no more
+        episodes than the gate would let fail is on every episode that matters.
+
+    Returns
+    -------
+    set[str]
+        The finding keys present in at least `min_share` of the graded episodes.
+    """
+
+    ids = list(episodes)
+    if len(ids) < min_episodes:
+        return set()
+    needed = math.ceil(min_share * len(ids) - 1e-9)
+    counts = Counter(key for episode in ids for key in critical.get(episode, set()))
+    return {key for key, count in counts.items() if count >= needed}
+
+
 def cap_for(share: float, gate: GatePolicy) -> Grade | None:
     """The best letter a dataset with this share of failing episodes may get."""
 
@@ -194,6 +235,7 @@ def _summary(
     total: int,
     pruned: Grade | None,
     cover: Coverage,
+    n_dataset_traits: int = 0,
 ) -> str:
     """One plain-language line: the grade, why, and what it rests on."""
 
@@ -219,7 +261,13 @@ def _summary(
         f", {checks:.0f} checks per episode" if checks is not None else ""
     )
     gaps = "; ".join(f"{item.metric}: {item.reason}" for item in cover.not_observable)
-    return f"{head}. {rests[0].upper()}{rests[1:]}." + (
+    traits = (
+        f" {n_dataset_traits} finding{'s' if n_dataset_traits != 1 else ''} present in"
+        " (nearly) every episode reported as dataset traits, not failures."
+        if n_dataset_traits
+        else ""
+    )
+    return f"{head}.{traits} {rests[0].upper()}{rests[1:]}." + (
         f" Not observable — {gaps}." if gaps else ""
     )
 
@@ -263,11 +311,20 @@ def apply_gate(
         for episode, keys in critical_keys_by_episode(findings).items()
         if episode in task_of
     }
-    traits = task_traits(critical, task_of, policy.gate.task_trait_min_episodes)
+    min_episodes = policy.gate.task_trait_min_episodes
+    # The share of episodes a letter may lose for free; a finding missing from no
+    # more than that share of episodes is on every episode that matters.
+    allowance = next(
+        (row.max_failing_share for row in policy.gate.caps if row.letter is None), 0.0
+    )
+    everywhere = dataset_traits(critical, task_of, min_episodes, 1.0 - allowance)
+    remaining = {episode: keys - everywhere for episode, keys in critical.items()}
+    traits = task_traits(remaining, task_of, min_episodes)
+    set_aside = everywhere | traits.keys()
     failing = [
-        FailingEpisode(episode_id=episode, reasons=sorted(keys - traits.keys()))
+        FailingEpisode(episode_id=episode, reasons=sorted(keys - set_aside))
         for episode, keys in sorted(critical.items())
-        if keys - traits.keys()
+        if keys - set_aside
     ]
     total = len(graded)
     share = len(failing) / total if total else 0.0
@@ -292,6 +349,14 @@ def apply_gate(
             TaskTrait(task=task, finding=key, n_episodes=size)
             for key, (task, size) in sorted(traits.items())
         ],
+        dataset_traits=[
+            DatasetTrait(
+                finding=key,
+                n_episodes=total,
+                n_with_finding=sum(key in critical.get(e, set()) for e in task_of),
+            )
+            for key in sorted(everywhere)
+        ],
         uncapped_grade=score.grade,
         cap=cap,
         pruned_score=pruned_score,
@@ -299,7 +364,14 @@ def apply_gate(
         train_ready_after_pruning=pruned_ready,
         coverage=cover,
         summary=_summary(
-            grade, score.score, score.grade, len(failing), total, pruned_grade, cover
+            grade,
+            score.score,
+            score.grade,
+            len(failing),
+            total,
+            pruned_grade,
+            cover,
+            len(everywhere),
         ),
     )
     gated = score.model_copy(
@@ -315,4 +387,11 @@ def apply_gate(
     return gated, gate
 
 
-__all__ = ["apply_gate", "cap_for", "coverage", "task_traits", "worse"]
+__all__ = [
+    "apply_gate",
+    "cap_for",
+    "coverage",
+    "dataset_traits",
+    "task_traits",
+    "worse",
+]

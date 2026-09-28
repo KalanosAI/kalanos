@@ -37,7 +37,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.2.0"
+CURRENT_SCHEMA_VERSION = "6.3.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -194,6 +194,28 @@ class TaskTrait(BaseModel):
     n_episodes: int
 
 
+class DatasetTrait(BaseModel):
+    """A critical finding on (nearly) every graded episode of the dataset.
+
+    It describes how the dataset was recorded (a state dimension no episode ever
+    moves, say), not a fault in some episodes, so dropping episodes cannot fix it
+    and it fails none of them. It is reported so a reader still sees it.
+
+    Attributes
+    ----------
+    finding : str
+        The finding, as `stream[/channel].metric`.
+    n_episodes : int
+        How many episodes the dataset has.
+    n_with_finding : int
+        How many of them carry the finding: at least the gate's share.
+    """
+
+    finding: str
+    n_episodes: int
+    n_with_finding: int
+
+
 class NotObservable(BaseModel):
     """A metric that could not grade this dataset, and why.
 
@@ -246,6 +268,9 @@ class Gate(BaseModel):
         `len(failing_episodes) / n_episodes`.
     task_traits : list[TaskTrait]
         Critical findings set aside as describing a task rather than a fault.
+    dataset_traits : list[DatasetTrait]
+        Critical findings on every episode, set aside as describing how the
+        dataset was recorded rather than a fault in some of its episodes.
     uncapped_grade : Grade or None
         The letter the mean alone would get.
     cap : Grade or None
@@ -267,6 +292,7 @@ class Gate(BaseModel):
     failing_episodes: list[FailingEpisode] = Field(default_factory=list)
     failing_share: float
     task_traits: list[TaskTrait] = Field(default_factory=list)
+    dataset_traits: list[DatasetTrait] = Field(default_factory=list)
     uncapped_grade: Grade | None
     cap: Grade | None
     pruned_score: float | None = None

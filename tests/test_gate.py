@@ -17,7 +17,7 @@ import pytest
 # Internal
 from kalanos.analysis.models.policy import GatePolicy
 from kalanos.analysis.models.scoring import Grade
-from kalanos.analysis.scoring.gate import cap_for, task_traits, worse
+from kalanos.analysis.scoring.gate import cap_for, dataset_traits, task_traits, worse
 from kalanos.api import grade
 from kalanos.assets.policy import load_default_policy, load_policy
 
@@ -198,3 +198,79 @@ def test_an_unknown_base_policy_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="packaged policies are"):
         load_policy(path)
+
+
+def test_a_finding_on_every_episode_is_a_dataset_trait_not_a_failure():
+    """A state dimension no episode ever moves describes the recording, not a fault.
+
+    From lerobot/cmu_stretch: two state dimensions never change in any of its
+    135 episodes, across all five tasks. Dropping episodes cannot fix that.
+    """
+
+    episodes = [f"e{i}" for i in range(135)]
+    critical = {
+        e: {"state/state_1.flatline_pct", "state/state_3.flatline_pct"}
+        for e in episodes
+    }
+    critical["e7"] |= {"state/state_0.flatline_pct"}
+
+    everywhere = dataset_traits(critical, episodes, min_episodes=20, min_share=0.95)
+
+    assert everywhere == {"state/state_1.flatline_pct", "state/state_3.flatline_pct"}
+
+
+def test_nearly_every_episode_counts_within_the_gates_own_allowance():
+    """Missing from no more episodes than the gate lets fail for free still counts."""
+
+    episodes = [f"e{i}" for i in range(480)]
+    critical = {e: {"state/state_14.flatline_pct"} for e in episodes[:479]}
+
+    assert dataset_traits(critical, episodes, 20, min_share=0.95) == {
+        "state/state_14.flatline_pct"
+    }
+    assert dataset_traits(critical, episodes, 20, min_share=1.0) == set()
+
+
+def test_a_finding_on_most_but_not_nearly_all_episodes_still_fails_them():
+    """Below the share, the finding varies between episodes: the gate's business."""
+
+    episodes = [f"e{i}" for i in range(100)]
+    critical = {e: {"x.spike_pct"} for e in episodes[:90]}
+
+    assert dataset_traits(critical, episodes, 20, min_share=0.95) == set()
+
+
+def test_a_small_dataset_has_no_dataset_traits():
+    """Below the minimum size, every-episode may be coincidence."""
+
+    episodes = ["a", "b", "c"]
+    critical = {e: {"x.flatline_pct"} for e in episodes}
+
+    assert dataset_traits(critical, episodes, 20, min_share=0.95) == set()
+
+
+def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
+    """End to end: a never-moving channel is reported, not counted; glitches cap."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched={2, 7, 11, 16})
+    with h5py.File(str(path), "a") as store:
+        for index in range(20):
+            store[f"data/demo_{index}"].create_dataset("unused_dim", data=np.zeros(200))
+
+    report = grade(path)
+    gate = report.gate
+
+    assert gate is not None
+    assert [t.finding.split("/")[-1] for t in gate.dataset_traits] == [
+        "unused_dim.integrity.flatline_pct"
+    ]
+    assert gate.dataset_traits[0].n_with_finding == 20
+    assert {f.episode_id.rsplit("_", 1)[-1] for f in gate.failing_episodes} == {
+        "2",
+        "7",
+        "11",
+        "16",
+    }
+    assert report.score.grade == Grade.C
+    assert "dataset traits" in gate.summary
