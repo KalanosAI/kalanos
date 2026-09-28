@@ -56,11 +56,16 @@ metrics:
   # recording, so the lower bound wants checking against longer ones.
   # Reward channels flatline legitimately until success, so they are
   # neutralised rather than graded against the default band.
+  # Candidate, revised against real 50 Hz teleoperation (ALOHA static and mobile,
+  # Unitree H1): joints and sensors there routinely hold still for 20-45% of an
+  # episode while the operator pauses or an arm waits, which the earlier 1%/20%
+  # band called "stuck" in nearly every episode. A stuck sensor is unchanged for
+  # nearly the whole episode, so the band now sits there.
   integrity.flatline_pct:
     thresholds:
       default:
-        good: 1.0
-        bad: 20.0
+        good: 50.0
+        bad: 90.0
       reward.frame_reward: {good: null, bad: null}
       reward.success_label: {good: null, bad: null}
       reward.value_score: {good: null, bad: null}
@@ -106,6 +111,11 @@ metrics:
       default:
         good: 30.0
         bad: 15.0
+      # Motor-current (effort) channels are noisy by nature: real ALOHA arms read
+      # 8-15 dB in every episode. Nothing yet separates a bad torque sensor from a
+      # normal one, so the ratio is reported, not graded, like the other torque
+      # metrics.
+      proprio.joint_torque: {good: null, bad: null}
       proprio.joint_velocity:
         good: 20.0
         bad: 10.0

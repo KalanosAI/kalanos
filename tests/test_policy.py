@@ -151,8 +151,8 @@ def test_the_default_policy_bands_match_the_documented_numbers():
     assert band.bad == pytest.approx(5.0)
 
     band = _entry(policy, "flatline_pct").thresholds["default"]
-    assert band.good == pytest.approx(1.0)
-    assert band.bad == pytest.approx(20.0)
+    assert band.good == pytest.approx(50.0)
+    assert band.bad == pytest.approx(90.0)
 
     band = _entry(policy, "spike_pct").thresholds["default"]
     assert band.good == pytest.approx(0.1)
@@ -509,4 +509,17 @@ def test_sensors_still_grade_flatline():
     thresholds = _entry(load_default_policy(), "flatline_pct").thresholds
 
     assert "proprio.joint_position" not in thresholds
-    assert thresholds["default"].bad == pytest.approx(20.0)
+    assert thresholds["default"].bad == pytest.approx(90.0)
+
+
+def test_torque_noise_is_reported_not_graded():
+    """Motor-current channels are noisy by nature; real ALOHA arms read 8-15 dB.
+
+    Joint position noise still grades: the exemption is for torque alone.
+    """
+
+    thresholds = _entry(load_default_policy(), "snr_db").thresholds
+
+    assert thresholds["proprio.joint_torque"].good is None
+    assert thresholds["proprio.joint_torque"].bad is None
+    assert thresholds["default"].bad == pytest.approx(15.0)
