@@ -171,7 +171,7 @@ def resolve_taxonomy(feature: str, spec: dict[str, Any], dictionary: Dictionary)
     [key_role] = roles([feature], dictionary)
     taxonomy_type = key_role.taxonomy_type
 
-    names: list[str] = spec.get("names") or []
+    names: list[str] = declared_names(spec)
     if taxonomy_type is None and names:
         name_roles = roles(names, dictionary)
         resolved = {role.taxonomy_type for role in name_roles if role.taxonomy_type}
@@ -181,6 +181,37 @@ def resolve_taxonomy(feature: str, spec: dict[str, Any], dictionary: Dictionary)
     if taxonomy_type is None:
         taxonomy_type = f"{UNMAPPED_TAXONOMY_PREFIX}.{feature}"
     return taxonomy_type
+
+
+def declared_names(spec: dict[str, Any]) -> list[str]:
+    """A feature's declared channel names, as one flat list.
+
+    LeRobot spells them either as a list (`"names": ["x", "y"]`) or nested
+    under a label, as ALOHA's `"names": {"motors": ["left_waist", ...]}`; the
+    nested lists are joined in order. Anything else declares no names.
+
+    Parameters
+    ----------
+    spec : dict
+        One feature's entry under `info.json`'s `"features"`.
+
+    Returns
+    -------
+    list[str]
+        The names, or an empty list when none are declared.
+    """
+
+    names = spec.get("names")
+    if isinstance(names, list):
+        return [str(name) for name in names if isinstance(name, str)]
+    if isinstance(names, dict):
+        flat: list[str] = []
+        for value in names.values():
+            if not isinstance(value, list):
+                return []
+            flat.extend(str(name) for name in value if isinstance(name, str))
+        return flat
+    return []
 
 
 def channels_for(
@@ -208,7 +239,7 @@ def channels_for(
         exactly one channel, named after the feature itself.
     """
 
-    names: list[str] = spec.get("names") or []
+    names: list[str] = declared_names(spec)
     shape = spec.get("shape") or [1]
     width = shape[0] if shape else 1
 

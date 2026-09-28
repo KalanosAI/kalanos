@@ -81,6 +81,10 @@ metrics:
       action.cartesian_pose_command: {good: null, bad: null}
       action.cartesian_twist_command: {good: null, bad: null}
       action.gripper_command: {good: null, bad: null}
+      # A gripper holds open or closed for most of an episode: that is the task,
+      # not a stuck sensor (ALOHA's grippers, holding a battery or a towel, read
+      # 90-99% unchanged).
+      proprio.gripper_width: {good: null, bad: null}
       action.base_velocity_command: {good: null, bad: null}
 
   # Candidate: default and joint-velocity bad bounds unconfirmed against real
@@ -116,6 +120,11 @@ metrics:
       # normal one, so the ratio is reported, not graded, like the other torque
       # metrics.
       proprio.joint_torque: {good: null, bad: null}
+      # A gripper snaps between open and closed: the snap is exactly what this
+      # ratio counts as noise (ALOHA grippers read -2 to 15 dB), so it is
+      # reported, not graded. The spike check still grades a glitching gripper.
+      proprio.gripper_width: {good: null, bad: null}
+      action.gripper_command: {good: null, bad: null}
       proprio.joint_velocity:
         good: 20.0
         bad: 10.0
