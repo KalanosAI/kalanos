@@ -250,13 +250,19 @@ def test_a_small_dataset_has_no_dataset_traits():
 
 
 def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
-    """End to end: a never-moving channel is reported, not counted; glitches cap."""
+    """End to end: a channel stuck in every episode is reported, not counted.
+
+    The channel moves for its first samples, then freezes for the rest of every
+    episode: a stuck sensor (critical), on every episode, so a dataset trait.
+    The glitched episodes still cap the grade.
+    """
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
+    stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
     with h5py.File(str(path), "a") as store:
         for index in range(20):
-            store[f"data/demo_{index}"].create_dataset("unused_dim", data=np.zeros(200))
+            store[f"data/demo_{index}"].create_dataset("unused_dim", data=stuck)
 
     report = grade(path)
     gate = report.gate
@@ -274,3 +280,40 @@ def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
     }
     assert report.score.grade == Grade.C
     assert "dataset traits" in gate.summary
+
+
+def test_a_channel_that_never_changes_is_a_warning_not_a_failure(tmp_path):
+    """Constant for the whole episode: unused or disconnected, and the data can't say.
+
+    From lerobot/berkeley_fanuc_manipulation, whose state_7 never changes in 158
+    of 415 episodes: it cannot show those episodes are worse than the others.
+    """
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched=set())
+    with h5py.File(str(path), "a") as store:
+        for index in range(0, 20, 3):
+            store[f"data/demo_{index}"].create_dataset("unused_dim", data=np.zeros(200))
+
+    report = grade(path)
+
+    assert report.gate is not None and report.gate.failing_episodes == []
+    flags = [f for f in report.findings if f.channel == "unused_dim"]
+    assert flags and all(f.severity.value == "warning" for f in flags)
+
+
+def test_a_channel_that_freezes_partway_is_still_a_stuck_sensor(tmp_path):
+    """Moving, then frozen for the rest of the episode: critical, the episode fails."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched=set())
+    stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
+    with h5py.File(str(path), "a") as store:
+        store["data/demo_3"].create_dataset("unused_dim", data=stuck)
+
+    report = grade(path)
+
+    assert report.gate is not None
+    assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [
+        "3"
+    ]

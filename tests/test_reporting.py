@@ -598,7 +598,9 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     their perfect clocks no longer dilute armC's dropout in the rollup (84.037
     before 0.5.0, 82.474 since). Since 0.6.2 a channel still for part of the
     episode is not "stuck" (flatline bad above 90%), which lifts armC (59.826
-    to 61.381) and the rollup (84.101); armB's outright flatline stays critical.
+    to 61.381) and the rollup (84.101). Since 0.6.3 a channel that never changes
+    in an episode is a warning, not critical, which lifts armB (83.333 to
+    91.667) and the rollup (86.185).
     """
 
     raw_episode, adapter = _analysed_fixture()
@@ -644,23 +646,26 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     assert armc.channels, "armC's arm stream lost its channels somewhere in the walk"
     assert armc.metrics["drop_rate"].status == MetricStatus.CRITICAL
 
-    assert episode.score.score == pytest.approx(84.101, abs=1e-3)
-    assert report.score.score == pytest.approx(84.101, abs=1e-3)
+    assert episode.score.score == pytest.approx(86.185, abs=1e-3)
+    assert report.score.score == pytest.approx(86.185, abs=1e-3)
 
-    # Two nodes carry the dataset's only critical findings: the
-    # stream-level drop_rate on armC, and the channel-level flatline_pct
-    # on armB's flatlined channel — proves both levels of grade_stream
-    # thread episode_id/instance/channel correctly, not just that a
-    # finding of the right severity exists somewhere in the list.
-    critical = {
-        (finding.metric_id, finding.instance, finding.channel)
+    # The stream-level drop_rate on armC is the dataset's only critical
+    # finding. armB's flatlined channel never changes in the episode, which
+    # since 0.6.3 reads as unused or disconnected: a channel-level warning,
+    # not critical. Between them they prove both levels of grade_stream thread
+    # episode_id/instance/channel correctly, not just that a finding of the
+    # right severity exists somewhere in the list.
+    by_severity = {
+        (finding.metric_id, finding.instance, finding.channel): finding.severity
         for finding in report.findings
-        if finding.severity == Severity.CRITICAL
     }
-    assert critical == {
-        ("timing.drop_rate", "armC", None),
-        ("integrity.flatline_pct", "armB", "tcp_pose_z_mm"),
+    assert {key for key, sev in by_severity.items() if sev == Severity.CRITICAL} == {
+        ("timing.drop_rate", "armC", None)
     }
+    assert (
+        by_severity[("integrity.flatline_pct", "armB", "tcp_pose_z_mm")]
+        == Severity.WARNING
+    )
     assert {finding.episode_id for finding in report.findings} == {episode.id}
 
 

@@ -222,6 +222,9 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
             "longest_run": longest_run,
             "longest_run_s": timestamps[longest_run_end]
             - timestamps[longest_run_start],
+            # Never changed at all in this episode: an unused joint or a
+            # disconnected sensor, which the data alone cannot tell apart.
+            "never_changed": n_unchanged == n_pairs,
         },
     )
 
