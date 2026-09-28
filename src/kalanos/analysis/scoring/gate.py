@@ -201,12 +201,6 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
                 not_applicable[name] += 1
                 reason.setdefault(name, str(result.evidence.get("reason", "")))
         graded_per_episode.append(graded)
-    graded_names = {
-        name
-        for episode in episodes
-        for name, result in _results(episode)
-        if result.status in _GRADED
-    }
     unobservable = [
         NotObservable(
             metric=name,
@@ -214,9 +208,7 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
             share=not_applicable[name] / total[name],
         )
         for name in sorted(not_applicable)
-        if name not in graded_names
-        and not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE
-        and reason[name]
+        if not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE and reason[name]
     ]
     return Coverage(
         families_graded=sorted(score.families),

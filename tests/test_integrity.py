@@ -22,7 +22,14 @@ from kalanos.analysis.metrics.integrity import (
     snr_db,
     spike_pct,
 )
-from kalanos.analysis.models.domain import Channel, Clock, FramePayload, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    FramePayload,
+    Kind,
+    Stream,
+    TimestampDtype,
+)
 from kalanos.analysis.models.metrics import ChannelContext, MetricStatus, StreamContext
 from kalanos.testing import clean_taxels, skew_unloading, stream_context
 
@@ -53,6 +60,7 @@ def _channel_ctx(
         timestamps=timestamps,
         payload=payload,
         source_path=_SOURCE_PATH,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         clock=Clock.CAPTURE,
         channels=[Channel(name="value")],
     )
@@ -73,6 +81,7 @@ def _taxel_stream_ctx(columns: dict[str, list[float]]) -> StreamContext:
         timestamps=timestamps,
         payload=FramePayload(frame=pl.DataFrame(columns)),
         source_path=_SOURCE_PATH,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         clock=Clock.CAPTURE,
         channels=[Channel(name=name) for name in columns],
     )

@@ -27,16 +27,24 @@ from kalanos.analysis.adapters.lerobot.common import (
     TIME_COLUMN,
     LeRobotAdapter,
     describe_from_info,
+    episode_clock,
     feature_plan,
     read_info,
     sampling_is_regular,
     series_streams,
+    timestamp_dtype_of,
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
-from kalanos.analysis.models.domain import Clock, Episode, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Clock,
+    Episode,
+    Kind,
+    Stream,
+    TimestampDtype,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -64,6 +72,8 @@ def _video_stream(
     episode_index: int,
     episode_chunk: int,
     fps: float,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool,
 ) -> Stream:
     """Build one video Stream for `video_key`, its payload lazy and undecoded.
@@ -116,7 +126,8 @@ def _video_stream(
         ),
         source_path=video_path,
         source_field=video_key,
-        clock=Clock.UNKNOWN,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
         is_regular=is_regular,
         channels=[],
     )
@@ -264,6 +275,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
                     frame = pl.read_parquet(handle)
 
                 episode_frame = frame.sort(TIME_COLUMN)
+                timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
+                clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
                 is_regular = sampling_is_regular(timestamps)
 
@@ -274,6 +287,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
                     data_path,
                     path=path,
                     episode_label=episode_index,
+                    clock=clock,
+                    timestamp_dtype=timestamp_dtype,
                     is_regular=is_regular,
                 )
                 streams.extend(
@@ -286,6 +301,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
                         episode_index=episode_index,
                         episode_chunk=episode_chunk,
                         fps=fps,
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
                         is_regular=is_regular,
                     )
                     for video_key, taxonomy_type in plan.video.items()

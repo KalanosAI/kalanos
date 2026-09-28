@@ -24,6 +24,7 @@ import statistics
 # Internal
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
+from kalanos.analysis.models.domain import Clock
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -81,60 +82,87 @@ def _ordered_timestamps(ctx: StreamContext) -> list[float]:
     return ctx.timestamps.drop_nulls().to_list()
 
 
-# Gaps all within this fraction of the median gap are exactly even: what frame
-# number ÷ fps, or a simulator's fixed step, produces — not a clock that measured
-# anything. Floating-point rounding of such stamps stays far below it; a physical
-# clock's jitter sits well above (a realistic 50 µs on a 20 ms period is 0.25%).
+# Gaps all within this fraction of the median gap are exactly even,
+# as frame number ÷ fps or a simulator's fixed step produces;
+# a clock that measured anything jitters more.
+# A physical clock's jitter sits well above it:
+# a realistic 50 µs on a 20 ms period is 0.25%.
+# The floor covers float64 stamps built by accumulation.
+#
+# Stamps stored in a narrower float need a wider bound.
+# Each is off by at most half a ULP, and a ULP is at most epsilon × |t|,
+# so a gap and the median gap are each off by at most epsilon × max|t|,
+# and no gap strays further than twice that from the median.
 _RECONSTRUCTED_TOLERANCE = 1e-4
 
-_RECONSTRUCTED_REASON = (
-    "timestamps are exactly evenly spaced (every gap within 0.01% of the period), "
+_RECONSTRUCTED_CLOCK_REASON = (
+    "the source's timestamps are frame numbers divided by the declared rate, "
+    "so capture timing is not observable"
+)
+
+_EVEN_GAPS_REASON = (
+    "timestamps are evenly spaced to within their own floating-point precision, "
     "as when they are reconstructed from frame numbers or a simulator's fixed step, "
     "so capture timing is not observable"
 )
 
 
-def _reconstructed_clock(gaps: list[float]) -> bool:
-    """Check whether every gap is within `_RECONSTRUCTED_TOLERANCE` of the median.
+def _not_observable_reason(
+    ctx: StreamContext, ordered: list[float], gaps: list[float]
+) -> str | None:
+    """Say why the stream's clock is reconstructed, or `None` if it measured something.
 
-    Parameters
-    ----------
-    gaps : list[float]
-        Consecutive timestamp gaps, in row order.
-
-    Returns
-    -------
-    bool
-        `True` for two or more gaps, a positive median, and none further than
-        `_RECONSTRUCTED_TOLERANCE` times the median from it.
-    """
-
-    if len(gaps) < 2:
-        return False
-    median_gap = statistics.median(gaps)
-    if median_gap <= 0:
-        return False
-    return max(abs(gap - median_gap) for gap in gaps) <= (
-        _RECONSTRUCTED_TOLERANCE * median_gap
-    )
-
-
-def _consecutive_gaps(ctx: StreamContext) -> list[float]:
-    """List the gaps between consecutive non-null timestamps.
+    The clock is reconstructed when the adapter labelled it `Clock.RECONSTRUCTED`,
+    or when two or more gaps with a positive median all sit within tolerance of
+    that median, the tolerance scaled by the stamps' source format.
 
     Parameters
     ----------
     ctx : StreamContext
-        The stream context; only its `timestamps` are read.
+        The stream context; its stream's `clock` and `timestamp_dtype` are read.
+    ordered : list[float]
+        The non-null timestamps, in row order.
+    gaps : list[float]
+        Consecutive gaps of `ordered`.
+
+    Returns
+    -------
+    str or None
+        The reason capture timing is not observable, or `None`.
+    """
+
+    if ctx.stream.clock is Clock.RECONSTRUCTED:
+        return _RECONSTRUCTED_CLOCK_REASON
+
+    if len(gaps) < 2:
+        return None
+    median_gap = statistics.median(gaps)
+    if median_gap <= 0:
+        return None
+    tolerance = max(
+        _RECONSTRUCTED_TOLERANCE * median_gap,
+        2 * ctx.stream.timestamp_dtype.epsilon * max(abs(t) for t in ordered),
+    )
+    if max(abs(gap - median_gap) for gap in gaps) <= tolerance:
+        return _EVEN_GAPS_REASON
+    return None
+
+
+def _consecutive_gaps(ordered: list[float]) -> list[float]:
+    """List the gaps between consecutive timestamps.
+
+    Parameters
+    ----------
+    ordered : list[float]
+        Non-null timestamps, in row order.
 
     Returns
     -------
     list[float]
         Every `ordered[i + 1] - ordered[i]`,
-        one shorter than the number of non-null timestamps — possibly empty.
+        one shorter than `ordered`, possibly empty.
     """
 
-    ordered = _ordered_timestamps(ctx)
     return [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
 
 
@@ -155,14 +183,16 @@ def effective_hz(ctx: StreamContext) -> MetricResult:
         `not_applicable`, with a reason in `evidence`, when:
         - fewer than two valid timestamps survive to take a gap over
         - the median gap is zero or negative
+        - the clock is reconstructed
         `report_only` otherwise.
     """
 
-    gaps = _consecutive_gaps(ctx)
+    ordered = _ordered_timestamps(ctx)
+    gaps = _consecutive_gaps(ordered)
     if not gaps:
         return not_applicable("fewer than two valid timestamps to take a gap over")
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
+    if (reason := _not_observable_reason(ctx, ordered, gaps)) is not None:
+        return not_applicable(reason)
 
     median_gap = statistics.median(gaps)
     if median_gap <= 0:
@@ -199,16 +229,18 @@ def dt_jitter_ms(ctx: StreamContext) -> MetricResult:
         `not_applicable`, with a reason in `evidence`, when:
         - fewer than two gaps survive to take a spread over
         - the median gap is zero or negative
+        - the clock is reconstructed
         `report_only` otherwise.
     """
 
-    gaps = _consecutive_gaps(ctx)
+    ordered = _ordered_timestamps(ctx)
+    gaps = _consecutive_gaps(ordered)
     if len(gaps) < 2:
         return not_applicable("fewer than two gaps to take a spread over")
     if statistics.median(gaps) <= 0:
         return not_applicable("median gap is zero or negative")
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
+    if (reason := _not_observable_reason(ctx, ordered, gaps)) is not None:
+        return not_applicable(reason)
 
     jitter_s = statistics.stdev(gaps)
     return MetricResult(
@@ -238,6 +270,7 @@ def drop_rate(ctx: StreamContext) -> MetricResult:
         `not_applicable`, with a reason in `evidence`, when:
         - fewer than two valid timestamps survive to measure a duration over
         - the duration or the median gap is zero or negative
+        - the clock is reconstructed
         `report_only` otherwise.
     """
 
@@ -248,15 +281,15 @@ def drop_rate(ctx: StreamContext) -> MetricResult:
         )
 
     duration = ordered[-1] - ordered[0]
-    gaps = [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
+    gaps = _consecutive_gaps(ordered)
     median_gap = statistics.median(gaps)
 
     if duration <= 0 or median_gap <= 0:
         return not_applicable("duration or median gap is zero or negative")
 
     expected_samples = duration / median_gap + 1
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
+    if (reason := _not_observable_reason(ctx, ordered, gaps)) is not None:
+        return not_applicable(reason)
     observed_samples = len(ordered)
     fraction = max(0.0, (expected_samples - observed_samples) / expected_samples)
 
@@ -297,7 +330,7 @@ def monotonic_violations(ctx: StreamContext) -> MetricResult:
         in `evidence`.
     """
 
-    gaps = _consecutive_gaps(ctx)
+    gaps = _consecutive_gaps(_ordered_timestamps(ctx))
     if not gaps:
         return not_applicable("fewer than two valid timestamps to take a gap over")
 

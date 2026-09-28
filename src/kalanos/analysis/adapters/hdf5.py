@@ -43,6 +43,7 @@ from kalanos.analysis.models.domain import (
     FramePayload,
     Kind,
     Stream,
+    TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -269,6 +270,8 @@ def _series_stream(
     dictionary: Dictionary,
     source_path: UPath,
     *,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool = False,
 ) -> Stream:
     """Build one series Stream for `key`, one column per channel of `dataset`.
@@ -313,7 +316,8 @@ def _series_stream(
         payload=FramePayload(frame=payload_frame),
         source_path=source_path,
         source_field=key,
-        clock=Clock.UNKNOWN,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
         # Only an episode's own recorded timestamps can say whether capture was
         # regular; a timebase synthesised from a rate would just restate the rate.
         is_regular=is_regular,
@@ -321,9 +325,19 @@ def _series_stream(
     )
 
 
+def _timestamp_dtype(dataset: h5py.Dataset) -> TimestampDtype:
+    """Name the float format a time dataset is stored in."""
+
+    if dataset.dtype.kind == "f" and dataset.dtype.itemsize == 2:
+        return TimestampDtype.FLOAT16
+    if dataset.dtype.kind == "f" and dataset.dtype.itemsize == 4:
+        return TimestampDtype.FLOAT32
+    return TimestampDtype.FLOAT64
+
+
 def _recorded_timebase(
     entries: list[tuple[str, h5py.Dataset]], length: int, source_path: UPath
-) -> tuple[str, pl.Series, bool] | None:
+) -> tuple[str, pl.Series, bool, TimestampDtype] | None:
     """Find the episode's own time dataset and read it as a timebase in seconds.
 
     Parameters
@@ -337,10 +351,11 @@ def _recorded_timebase(
 
     Returns
     -------
-    tuple of (str, pl.Series, bool) or None
-        The time dataset's key, its values in seconds, and whether its gaps
-        are regular — or `None` when no dataset qualifies, so the caller falls
-        back to a timebase synthesised from the declared rate.
+    tuple of (str, pl.Series, bool, TimestampDtype) or None
+        The time dataset's key, its values in seconds, whether its gaps
+        are regular, and the float format it is stored in — or `None` when no
+        dataset qualifies, so the caller falls back to a timebase synthesised
+        from the declared rate.
     """
 
     for key, dataset in entries:
@@ -374,7 +389,7 @@ def _recorded_timebase(
             [value * _SECONDS_PER_UNIT[unit] for value in values], dtype=pl.Float64
         )
         is_regular = regularity(entity_split_gaps([seconds.to_list()])).is_regular
-        return key, seconds, is_regular
+        return key, seconds, is_regular, _timestamp_dtype(dataset)
     return None
 
 
@@ -413,9 +428,11 @@ def _episode_streams(
     [(length, _)] = Counter(dataset.shape[0] for _, dataset in entries).most_common(1)
     recorded = _recorded_timebase(entries, length, source_path)
     if recorded is not None:
-        time_key, timestamps, is_regular = recorded
+        time_key, timestamps, is_regular, timestamp_dtype = recorded
+        clock = Clock.UNKNOWN
     else:
         time_key, is_regular = None, False
+        clock, timestamp_dtype = Clock.RECONSTRUCTED, TimestampDtype.FLOAT64
         timestamps = pl.Series(
             [index / rate_hz for index in range(length)], dtype=pl.Float64
         )
@@ -440,6 +457,8 @@ def _episode_streams(
                 timestamps,
                 dictionary,
                 source_path,
+                clock=clock,
+                timestamp_dtype=timestamp_dtype,
                 is_regular=is_regular,
             )
         )
