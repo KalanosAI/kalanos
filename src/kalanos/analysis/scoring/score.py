@@ -15,6 +15,7 @@ and the result becomes a letter grade at every level from Channel up to Dataset.
 
 # Built-in
 import math
+import statistics
 from collections.abc import Sequence
 
 # Internal
@@ -375,6 +376,22 @@ def _resolve(
     # Step 4: graded, and there is a full band to grade against.
     evidence.pop("ungraded_reason", None)
     status = _status_for_points(points)
+    # A channel that never changed in an episode is an unused joint or a
+    # disconnected sensor, and the data cannot tell which; either way it does
+    # not show the episode is worse than the others, so it grades as a warning
+    # at the middle of the band, never critical. A channel that froze partway
+    # through an episode is the stuck sensor, and stays critical.
+    if status == MetricStatus.CRITICAL and evidence.get("never_changed") is True:
+        # The points of the value halfway between the band's bounds: the middle
+        # of the warning range, derived from the band rather than written here.
+        midway = statistics.fmean((band.good, band.bad))
+        status = MetricStatus.WARNING
+        points = _points_for(
+            midway, band, higher_is_better=metric_policy.higher_is_better
+        )
+        evidence["capped_reason"] = (
+            "never changed in this episode: unused or disconnected"
+        )
     return result.model_copy(update={"status": status, "evidence": evidence}), points
 
 
