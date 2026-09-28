@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.6.0"
+version = "0.6.1"
 description = "Grade robot training data before you train on it: 0-100 scores, A-F grades and train-ready verdicts for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"

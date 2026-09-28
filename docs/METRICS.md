@@ -240,6 +240,8 @@ A mean lets a minority of bad episodes hide: eight glitched episodes in fifty st
 
 **An episode fails** when any of its metrics grades `critical` — the train-ready rule above — unless that finding is a **task trait**: the same critical finding on every episode of one task and on no episode of any other, on a task of at least 20 episodes. A trait describes the task, not a fault (grading `berkeley_autolab_ur5`, a gripper-state "flatline" hit exactly the 250 episodes of its one sweeping task, which never closes the gripper), so it is reported in `gate.task_traits` and fails nothing.
 
+A critical finding on **nearly every episode of the whole dataset** is a **dataset trait**, reported in `gate.dataset_traits` and failing nothing: it describes how the dataset was recorded, and dropping episodes cannot remove it. "Nearly every" is at least one minus the gate's own no-cap allowance (95% with the default table), on a dataset of at least 20 episodes: a finding missing from no more episodes than the gate lets fail for free is on every episode that matters. Grading `lerobot/cmu_stretch` (135 episodes, five tasks), two state dimensions never changed in any episode and failed all 135, capping the dataset at D with "drop every episode" as the remedy; as dataset traits they fail nothing, and the dataset grades by its mean. A finding confined to some tasks but short of every episode of one, such as a joint two of six tasks never move, is not yet covered and still fails its episodes.
+
 | Share of failing episodes | Dataset letter capped at |
 |---|---|
 | up to 5% | no cap — the mean decides |
