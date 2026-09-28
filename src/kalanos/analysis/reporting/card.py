@@ -111,6 +111,34 @@ def _grade_cell(score: ScoreResult) -> Text:
     return Text(text=score.grade.value, style=_GRADE_STYLE.get(score.grade, ""))
 
 
+def _readiness_cell(report: Report) -> Text:
+    """The plate's headline: readiness out of 100 and the blocking episodes.
+
+    Falls back to the mean score for a report without a gate (legacy_0_5),
+    labelled as such. No letter grade: the number is the headline.
+    """
+
+    r = report.readiness
+    if r is None:
+        if report.score.score is None:
+            return Text("NOT GRADED", style=_ACCENT)
+        return Text.assemble(
+            ("SCORE ", f"{_PAPER} dim"), (f"{report.score.score:.0f}/100", "bold")
+        )
+    if r.score is None:
+        return Text("NOT GRADED", style=_ACCENT)
+    blocking = (
+        f"  {r.blocking_episodes} blocking"
+        if r.blocking_episodes
+        else "  no blocking episodes"
+    )
+    return Text.assemble(
+        ("READINESS ", f"{_PAPER} dim"),
+        (f"{r.score:.0f}/100", "bold"),
+        (blocking, _ACCENT if r.blocking_episodes else _GOOD),
+    )
+
+
 def _score_cell(score: ScoreResult) -> str:
     """Render one ScoreResult's number, one decimal place.
 
@@ -552,17 +580,11 @@ def render_terminal(
     plate.add_row(Text("KALANOS · DATASET REPORT", style=f"{_PAPER} dim"), "")
     plate.add_row(
         Text(str(report.root), style="bold"),
-        Text.assemble(
-            _grade_cell(report.score),
-            "  ",
-            _score_cell(report.score),
-            "  ",
-            _verdict_cell(report.score),
-        ),
+        _readiness_cell(report),
     )
     plate.add_row(Text(_counts_line(report), style=f"{_PAPER} dim"), "")
     if report.gate is not None:
-        # The gate's verdict and what the grade rests on, beside every grade.
+        # The gate's verdict and what readiness rests on, beside every score.
         plate.add_row(Text(report.gate.summary, style=f"{_PAPER} dim"), "")
     console.print(
         Panel(
@@ -606,11 +628,11 @@ def render_terminal(
     )
     # rich puts a one-line header on the lower row of a multi-line header block;
     # the trailing newline lifts these three to the upper row, beside METRICS.
-    table.add_column(header="GRADE\n", justify="center", no_wrap=True, width=5)
+    table.add_column(header="\n", justify="center", no_wrap=True, width=5)
     # The one column that grows: RECORDING is the only cell whose content is
     # dataset-dependent, so it is the only place surplus width can usefully go.
     # A ratio column is also the only way expand=True stays safe — Rich sizes
-    # it to exactly fill what GRADE/SCORE/METRICS leave over, so the table
+    # it to exactly fill what the marker/SCORE/METRICS leave over, so the table
     # width never overflows and never forces Rich's last-resort column
     # collapse, which does not respect any column's fixed width or no_wrap.
     table.add_column(header="RECORDING\n", no_wrap=True, overflow="ellipsis", ratio=3)
@@ -628,11 +650,17 @@ def render_terminal(
         width=len(_BUCKET_LABELS) * field + len(_BUCKET_LABELS) - 1,
     )
 
+    blocking_ids = (
+        {item.episode_id for item in report.gate.failing_episodes}
+        if report.gate is not None
+        else set()
+    )
+
     def _score_row(
-        label: RenderableType, score: ScoreResult, detail: str
+        label: RenderableType, score: ScoreResult, detail: str, episode_id: str = ""
     ) -> list[RenderableType]:
         return [
-            _grade_cell(score),
+            Text("BLOCK", style=_ACCENT) if episode_id in blocking_ids else Text(""),
             label,
             _score_rail_cell(score, rail=show_rail),
             detail,
@@ -657,7 +685,10 @@ def render_terminal(
             )
             table.add_row(
                 *_score_row(
-                    label, episode.score, _bucket_cell(_metric_counts(episode), field)
+                    label,
+                    episode.score,
+                    _bucket_cell(_metric_counts(episode), field),
+                    episode.id,
                 )
             )
 
