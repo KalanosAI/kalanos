@@ -72,7 +72,7 @@ Universal. Computed for every numeric channel whether or not its type was identi
 | Metric | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|
 | `missing_pct` | CHANNEL | % | Share of null or NaN values. | *candidate: good < 0.5%, bad > 5%* |
-| `flatline_pct` | CHANNEL | % | Percentage of time the value does not change, which is a stuck sensor. Evidence carries the longest run. | *candidate: good < 1%, bad > 20%*; reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
+| `flatline_pct` | CHANNEL | % | Percentage of time the value does not change, which is a stuck sensor. Evidence carries the longest run. | *candidate: good < 50%, bad > 90%* (revised against real 50 Hz teleoperation, where joints hold still for 20–45% of an episode; a stuck sensor is unchanged for nearly all of it); reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
 | `spike_pct` | CHANNEL | % | Percentage of samples beyond 6σ of a local window. | *candidate: good < 0.1%, bad > 2%* (default and joint velocity) |
 | `drift` | CHANNEL | unit/min | Slow trend where the signal should be stationary. Evidence carries the fitted slope and r². | motor and joint temperature: Δ < 15 °C over an episode; other types graded only where the policy marks the signal stationary |
 | `snr_db` | CHANNEL | dB | Signal against the high-frequency noise floor: the variance of a 5-sample moving average against what it removes. **Not applicable below about 45 Hz**, where 5 samples span more than 0.1 s and smooth away real motion, which would then read as noise (on real 5-15 Hz LeRobot datasets the ratio tracked the sampling rate rather than the robot). At 50 Hz and above the window is unchanged. | *candidate:* joint velocity good > 20 / bad < 10 dB; joint acceleration good > 12 / bad < 6 dB; other types good > 30 / bad < 15 dB |
@@ -207,11 +207,12 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `effective_hz` | default (deviation from nominal) | 10% | 25% | candidate |
 | `dt_jitter_ms` | default | 5 ms | — | candidate · one-sided, so report-only |
 | `missing_pct` | default | 0.5% | 5% | candidate |
-| `flatline_pct` | default | 1% | 20% | candidate · reward signals and action commands exempt |
+| `flatline_pct` | default | 50% | 90% | candidate, revised against real 50 Hz teleoperation · reward signals and action commands exempt |
 | `spike_pct` | default & joint_velocity | 0.1% | 2% | candidate |
 | `snr_db` | default | 30 dB | 15 dB | candidate |
 | `snr_db` | joint_velocity | 20 dB | 10 dB | candidate |
 | `snr_db` | joint_acceleration | 12 dB | 6 dB | candidate |
+| `snr_db` | joint_torque | — | — | report-only: motor-current channels read 8–15 dB on real ALOHA arms in every episode |
 | `dead_taxel_pct` | default | 2% | 10% | candidate |
 | `hysteresis` | default | 0.05 | 0.20 | candidate |
 | `mean_jerk_norm` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |

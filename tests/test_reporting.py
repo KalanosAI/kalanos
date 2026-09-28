@@ -596,7 +596,9 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     `armA` and `armB` are stamped on an exactly even clock, so their rate
     metrics are not applicable — capture timing is not observable there — and
     their perfect clocks no longer dilute armC's dropout in the rollup (84.037
-    before 0.5.0, 82.474 since).
+    before 0.5.0, 82.474 since). Since 0.6.2 a channel still for part of the
+    episode is not "stuck" (flatline bad above 90%), which lifts armC (59.826
+    to 61.381) and the rollup (84.101); armB's outright flatline stays critical.
     """
 
     raw_episode, adapter = _analysed_fixture()
@@ -631,7 +633,7 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     assert arm_c is not None
     assert arm_d is not None
 
-    assert arm_c == pytest.approx(59.826, abs=1e-3)
+    assert arm_c == pytest.approx(61.381, abs=1e-3)
     assert arm_a > 90.0
     assert arm_d > 90.0
     assert arm_b > 80.0
@@ -642,8 +644,8 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     assert armc.channels, "armC's arm stream lost its channels somewhere in the walk"
     assert armc.metrics["drop_rate"].status == MetricStatus.CRITICAL
 
-    assert episode.score.score == pytest.approx(82.474, abs=1e-3)
-    assert report.score.score == pytest.approx(82.474, abs=1e-3)
+    assert episode.score.score == pytest.approx(84.101, abs=1e-3)
+    assert report.score.score == pytest.approx(84.101, abs=1e-3)
 
     # Two nodes carry the dataset's only critical findings: the
     # stream-level drop_rate on armC, and the channel-level flatline_pct
