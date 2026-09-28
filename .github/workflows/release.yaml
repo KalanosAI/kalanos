@@ -1,10 +1,12 @@
 name: Release
 
 # Publishing is a tag, never a merge: push `vX.Y.Z` from main and this builds,
-# checks and uploads that exact commit. The `pypi` environment holds the job
-# until a maintainer approves it, and PyPI accepts the upload only from this
-# workflow, in this repo, in that environment (Trusted Publishing — no token
-# is stored anywhere). Once PyPI has the release, a second job creates the
+# checks and uploads that exact commit. The `pypi` environment accepts only
+# `v*` tags (its deployment rule), so no branch or other ref can publish, and
+# PyPI accepts the upload only from this workflow, in this repo, in that
+# environment (Trusted Publishing — no token is stored anywhere). There is no
+# manual approval: the tag is the decision, so restrict who may create `v*`
+# tags (a tag ruleset). Once PyPI has the release, a second job creates the
 # matching GitHub Release with generated notes.
 on:
   push:
