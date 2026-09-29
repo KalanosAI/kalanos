@@ -27,6 +27,7 @@ from kalanos.analysis.models.domain import (
     Kind,
     MappingSource,
     Stream,
+    TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -363,6 +364,56 @@ def sampling_is_regular(timestamps: pl.Series) -> bool:
     return regularity(gaps).is_regular
 
 
+def timestamp_dtype_of(column: pl.Series) -> TimestampDtype:
+    """Name the float format an episode's timestamp column was stored in."""
+
+    return (
+        TimestampDtype.FLOAT32 if column.dtype == pl.Float32 else TimestampDtype.FLOAT64
+    )
+
+
+def episode_clock(
+    episode_frame: pl.DataFrame, fps: float | None, timestamp_dtype: TimestampDtype
+) -> Clock:
+    """Label an episode's clock `RECONSTRUCTED` when its stamps are `frame_index / fps`.
+
+    Every timestamp has to match to within the rounding its source format allows,
+    and `frame_index` has to step by exactly one between consecutive rows.
+
+    Parameters
+    ----------
+    episode_frame : pl.DataFrame
+        The episode's own rows, already time-sorted.
+    fps : float or None
+        The declared frame rate, or `None` when `info.json` declares none.
+    timestamp_dtype : TimestampDtype
+        The format the timestamp column was stored in.
+
+    Returns
+    -------
+    Clock
+        `RECONSTRUCTED` when every condition holds, `UNKNOWN` otherwise.
+    """
+
+    if fps is None or fps <= 0 or "frame_index" not in episode_frame.columns:
+        return Clock.UNKNOWN
+    frame_index = episode_frame["frame_index"]
+    has_nulls = frame_index.null_count() or episode_frame[TIME_COLUMN].null_count()
+    if episode_frame.height == 0 or has_nulls:
+        return Clock.UNKNOWN
+    # A skipped frame index stays UNKNOWN, so the gap test still sees the doubled gap.
+    if not (frame_index.diff().drop_nulls() == 1).all():
+        return Clock.UNKNOWN
+
+    timestamp = pl.col(TIME_COLUMN).cast(pl.Float64)
+    deviation, largest = episode_frame.select(
+        (timestamp - pl.col("frame_index") / fps).abs().max().alias("deviation"),
+        timestamp.abs().max().alias("largest"),
+    ).row(0)
+    within = deviation <= timestamp_dtype.epsilon * largest
+    return Clock.RECONSTRUCTED if within else Clock.UNKNOWN
+
+
 def series_stream(
     frame: pl.DataFrame,
     feature: str,
@@ -372,6 +423,8 @@ def series_stream(
     source_path: UPath,
     *,
     mapping_source: MappingSource | None,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool,
 ) -> Stream:
     """Build one series Stream for `feature`, one column per channel.
@@ -422,9 +475,8 @@ def series_stream(
         source_path=source_path,
         source_field=feature,
         mapping_source=mapping_source,
-        # LeRobot's timestamp is frame_index / fps:
-        # a timebase synthesised from the declared rate, not a recorded capture clock.
-        clock=Clock.UNKNOWN,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
         is_regular=is_regular,
         channels=channels,
     )
@@ -438,6 +490,8 @@ def series_streams(
     *,
     path: UPath,
     episode_label: object,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool,
 ) -> list[Stream]:
     """Build one series Stream per `plan.series` feature present in `episode_frame`.
@@ -487,6 +541,8 @@ def series_streams(
                 timestamps,
                 source_path,
                 mapping_source=mapping_source,
+                clock=clock,
+                timestamp_dtype=timestamp_dtype,
                 is_regular=is_regular,
             )
         )

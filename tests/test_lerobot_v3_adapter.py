@@ -20,11 +20,19 @@ from upath import UPath
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
+    episode_clock,
     resolve_taxonomy,
     series_stream,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
-from kalanos.analysis.models.domain import Channel, FramePayload, Kind, MappingSource
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    FramePayload,
+    Kind,
+    MappingSource,
+    TimestampDtype,
+)
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.assets.dictionary import load_default_dictionary
@@ -244,9 +252,39 @@ def test_a_fixed_size_array_feature_unnests_into_one_column_per_channel():
         pl.Series([0.0, 0.1]),
         UPath("data/chunk-000/file-000.parquet"),
         mapping_source=None,
+        clock=Clock.UNKNOWN,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         is_regular=True,
     )
 
     assert isinstance(stream.payload, FramePayload)
     assert stream.payload.frame.columns == ["x", "y"]
     assert stream.payload.frame["y"].to_list() == [1.0, 3.0]
+
+
+def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock():
+    """LeRobot stamps frames as float32 `frame_index / fps`; so does the fixture."""
+
+    for episode in _episodes():
+        for stream in episode.streams:
+            assert stream.timestamp_dtype is TimestampDtype.FLOAT32
+            assert stream.clock is Clock.RECONSTRUCTED
+
+
+def test_a_skipped_frame_index_or_a_missing_rate_leaves_the_clock_unknown():
+    """Without every frame and a declared rate, the stamps cannot be shown derived."""
+
+    def frame(indices):
+        return pl.DataFrame(
+            {
+                "frame_index": indices,
+                "timestamp": pl.Series([i / 30 for i in indices], dtype=pl.Float32),
+            }
+        )
+
+    whole, skipped = frame(list(range(10))), frame([0, 1, 2, 4, 5, 6])
+    dtype = TimestampDtype.FLOAT32
+
+    assert episode_clock(whole, 30.0, dtype) is Clock.RECONSTRUCTED
+    assert episode_clock(skipped, 30.0, dtype) is Clock.UNKNOWN
+    assert episode_clock(whole, None, dtype) is Clock.UNKNOWN

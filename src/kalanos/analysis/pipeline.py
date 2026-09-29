@@ -185,7 +185,7 @@ def _unmatched_override_error(
     )
 
 
-def _with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
+def with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
     """Fill in every limit a metric's own policy entry asks `describe()` for.
 
     Each metric's `target_source`, declared in the policy file, names the
@@ -332,7 +332,7 @@ def run(
             )
             info = DatasetInfo(adapter=selection.name, path=candidate.path)
 
-        episode_policy = _with_declared_limits(policy, info)
+        episode_policy = with_declared_limits(policy, info)
 
         # Step 5: read the path's episodes. Only a refusal the adapter raised
         # about the input file is caught here — anything else, a ValidationError

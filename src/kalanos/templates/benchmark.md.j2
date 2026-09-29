@@ -1,0 +1,44 @@
+# Detector benchmark
+
+How often each metric fires on reference datasets, and how often it catches a defect injected into them.
+
+- The datasets are *believed* clean. Nobody has verified that.
+- A metric's benign rate is the share of the episodes it graded that it graded warning or critical.
+- A detection cell reads `detected/eligible`. It counts only injections where the metric graded good at that spot before injection.
+- Value defects are scaled to the channel they are injected into: {% for key, value in benchmark.injection.items() %}{{ key }} {{ "%g"|format(value) }}{{ ", " if not loop.last }}{% endfor %}.
+- A blank detection cell means the metric was not graded there. The LeRobot sets' reconstructed clocks leave every timing cell blank.
+- Regenerate this file with `uv run kalanos benchmark --out docs/BENCHMARK.md`.
+
+kalanos {{ benchmark.kalanos_version }}, policy schema {{ benchmark.policy_version }}.
+{% for dataset, matrix in sections %}
+
+## {{ dataset.repo_id or dataset.uri }}
+
+{% if dataset.revision %}Revision `{{ dataset.revision }}`. {% endif %}Read by the `{{ dataset.adapter }}` adapter. {{ dataset.n_episodes }} episodes graded, defects injected into {{ dataset.n_sampled }}.
+
+### Benign firing
+
+| metric | family | firing / graded | rate |
+|---|---|---|---|
+{% for row in dataset.benign %}
+| {{ row.metric }} | {{ row.family }} | {{ row.firing_episodes }} / {{ row.observed_episodes }} | {% if row.rate is none %}not observable: {{ row.not_observable }}{% else %}{{ "%.1f%%"|format(row.rate * 100) }}{% endif %} |
+{% endfor %}
+
+### Detection
+
+{% if matrix.metrics %}
+| defect | {{ matrix.metrics|join(" | ") }} |
+|---|{{ "---|" * matrix.metrics|length }}
+{% for defect, cells in matrix.rows %}
+| {{ defect }} | {{ cells|join(" | ") }} |
+{% endfor %}
+{% else %}
+No metric was graded good at an injected location.
+{% endif %}
+{% if dataset.not_injected %}
+
+{% for defect, reason in dataset.not_injected.items() %}
+- `{{ defect.value }}` not injected: {{ reason }}.
+{% endfor %}
+{% endif %}
+{% endfor %}

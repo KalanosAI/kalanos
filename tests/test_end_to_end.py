@@ -317,7 +317,7 @@ def test_dt_jitter_is_report_only_for_the_csv_fixture(single_file_report):
     for result in results:
         assert result.status in (MetricStatus.REPORT_ONLY, MetricStatus.NOT_APPLICABLE)
         if result.status == MetricStatus.NOT_APPLICABLE:
-            assert "exactly evenly spaced" in result.evidence["reason"]
+            assert "floating-point precision" in result.evidence["reason"]
 
 
 def test_grading_a_single_file_reports_that_file_alone(single_file_report):

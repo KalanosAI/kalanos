@@ -30,6 +30,12 @@ from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.mapping import parse_map_argument
+from kalanos.benchmark import (
+    DEFAULT_SAMPLE,
+    REFERENCE_DATASETS,
+    render_markdown,
+    run_benchmark,
+)
 from kalanos.core.log import Verbosity, configure_logging
 from kalanos.core.settings import get_settings
 from kalanos.plugins import list_adapters, list_metrics, list_reporters
@@ -236,6 +242,85 @@ def grade(
         is_terminal = sys.stdout.isatty()
         width = shutil.get_terminal_size().columns if is_terminal else None
         print(render_terminal(result, color=is_terminal, width=width))
+
+
+@app.command(
+    help=(
+        "Measure how often each metric fires on reference datasets, "
+        "and how often it catches an injected defect."
+    )
+)
+def benchmark(
+    paths: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="Datasets to benchmark. Defaults to the pinned reference datasets."
+        ),
+    ] = None,
+    sample: Annotated[
+        int,
+        typer.Option(
+            "--sample",
+            min=0,
+            help="How many episodes per dataset to inject defects into.",
+        ),
+    ] = DEFAULT_SAMPLE,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            help=(
+                "Write the result here: `.md` renders the table, "
+                "`.json` dumps the model."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Benchmark each dataset's benign firing and detection rates.
+
+    Parameters
+    ----------
+    paths : list[str] or None
+        Datasets to benchmark, each graded whole by one adapter.
+        `None` benchmarks `REFERENCE_DATASETS`.
+    sample : int
+        How many episodes per dataset to inject defects into.
+    out : Path or None
+        Where to write the result, relative to the working directory.
+        `None` prints the Markdown to stdout instead.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 when benchmarking raised a `KalanosError`,
+        or when writing `out` failed or its suffix is neither `.md` nor `.json`.
+    """
+
+    # Step 1: refuse an unwritable suffix before the slow run, not after it.
+    if out is not None and out.suffix not in {".md", ".json"}:
+        print(f"kalanos: cannot write a benchmark as {out.suffix!r}", file=sys.stderr)
+        raise typer.Exit(code=2)
+
+    # Step 2: benchmark every dataset before writing anything.
+    try:
+        result = run_benchmark(paths or REFERENCE_DATASETS, sample=sample)
+    except KalanosError as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+
+    # Step 3: `out` is taken as given, outside `reports_dir`.
+    if out is None:
+        print(render_markdown(result), end="")
+        return
+    if out.suffix == ".md":
+        text = render_markdown(result)
+    else:
+        text = result.model_dump_json(indent=2)
+    try:
+        out.write_text(text)
+    except OSError as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
 
 
 @app.command(help="Summarise every installed plugin, and report what failed to load.")

@@ -111,9 +111,11 @@ def task_traits(
     traits = {}
     for key, episodes in on.items():
         tasks = {task_of.get(episode) for episode in episodes}
-        if len(tasks) != 1 or None in tasks:
+        if len(tasks) != 1:
             continue
         [task] = tasks
+        if task is None:
+            continue
         if len(episodes) == size[task] >= min_episodes:
             traits[key] = (task, size[task])
     return traits
@@ -236,12 +238,6 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
                 not_applicable[name] += 1
                 reason.setdefault(name, str(result.evidence.get("reason", "")))
         graded_per_episode.append(graded)
-    graded_names = {
-        name
-        for episode in episodes
-        for name, result in _results(episode)
-        if result.status in _GRADED
-    }
     unobservable = [
         NotObservable(
             metric=name,
@@ -249,9 +245,7 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
             share=not_applicable[name] / total[name],
         )
         for name in sorted(not_applicable)
-        if name not in graded_names
-        and not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE
-        and reason[name]
+        if not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE and reason[name]
     ]
     return Coverage(
         families_graded=sorted(score.families),

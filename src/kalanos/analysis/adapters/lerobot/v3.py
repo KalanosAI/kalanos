@@ -25,10 +25,12 @@ from kalanos.analysis.adapters.lerobot.common import (
     TIME_COLUMN,
     LeRobotAdapter,
     describe_from_info,
+    episode_clock,
     feature_plan,
     read_info,
     sampling_is_regular,
     series_streams,
+    timestamp_dtype_of,
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
@@ -40,6 +42,7 @@ from kalanos.analysis.models.domain import (
     Kind,
     MappingSource,
     Stream,
+    TimestampDtype,
 )
 
 
@@ -103,6 +106,8 @@ def _video_stream(
     dataset_root: UPath,
     *,
     mapping_source: MappingSource | None,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool,
 ) -> Stream:
     """Build one video Stream for `video_key`, its payload lazy and undecoded.
@@ -152,7 +157,8 @@ def _video_stream(
         source_path=video_path,
         source_field=video_key,
         mapping_source=mapping_source,
-        clock=Clock.UNKNOWN,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
         is_regular=is_regular,
         channels=[],
     )
@@ -246,6 +252,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
             info = read_info(path)
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
+            fps = float(info["fps"]) if "fps" in info else None
             # Each row of the episode index lists its task instructions, when the
             # dataset records any; read for every episode, not just the sampled ones,
             # since whether the dataset carries instructions at all is a dataset fact.
@@ -293,6 +300,8 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 episode_frame = frame.filter(
                     pl.col("episode_index") == row["episode_index"]
                 ).sort(TIME_COLUMN)
+                timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
+                clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
                 is_regular = sampling_is_regular(timestamps)
 
@@ -303,6 +312,8 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     data_path,
                     path=path,
                     episode_label=row["episode_index"],
+                    clock=clock,
+                    timestamp_dtype=timestamp_dtype,
                     is_regular=is_regular,
                 )
                 streams.extend(
@@ -314,6 +325,8 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         timestamps,
                         path,
                         mapping_source=mapping_source,
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
                         is_regular=is_regular,
                     )
                     for video_key, (taxonomy_type, mapping_source) in plan.video.items()

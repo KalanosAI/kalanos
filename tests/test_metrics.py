@@ -19,7 +19,15 @@ from kalanos.analysis.metrics.registry import (
     run_episode_metrics,
     run_stream_metrics,
 )
-from kalanos.analysis.models.domain import Channel, Episode, FramePayload, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    Episode,
+    FramePayload,
+    Kind,
+    Stream,
+    TimestampDtype,
+)
 from kalanos.analysis.models.metrics import (
     ChannelContext,
     EpisodeContext,
@@ -61,11 +69,13 @@ def _stream_context(
     *,
     is_regular: bool = True,
     taxonomy_type: str = "unmapped.tcp_pose_x_mm",
+    clock: Clock = Clock.UNKNOWN,
+    timestamp_dtype: TimestampDtype = TimestampDtype.FLOAT64,
 ) -> StreamContext:
     """Build a StreamContext from a plain list of timestamps.
 
-    The timing family reads only `timestamps` and `is_regular`, so the
-    underlying stream carries no payload.
+    The timing family reads only `timestamps`, `is_regular`, `clock` and
+    `timestamp_dtype`, so the underlying stream carries no payload.
 
     Parameters
     ----------
@@ -76,6 +86,10 @@ def _stream_context(
         The regularity verdict to hand the context, bypassing inference entirely.
     taxonomy_type : str
         The stream's taxonomy type, for tests that check evidence or naming.
+    clock : Clock
+        The label an adapter would have put on the stream's timebase.
+    timestamp_dtype : TimestampDtype
+        The float format the stamps are taken to have been stored in.
 
     Returns
     -------
@@ -88,6 +102,8 @@ def _stream_context(
         kind=Kind.SERIES,
         timestamps=pl.Series("time_s", timestamps),
         source_path=_SOURCE_PATH,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
     )
     return StreamContext(stream=stream, is_regular=is_regular)
 
@@ -132,6 +148,17 @@ def _episode_stream(taxonomy_type: str) -> Stream:
         kind=Kind.SERIES,
         timestamps=pl.Series("time_s", [0.0, 1.0]),
         source_path=_SOURCE_PATH,
+        timestamp_dtype=TimestampDtype.FLOAT64,
+    )
+
+
+def _float32_frame_number_stamps(frames: int) -> list[float]:
+    """Stamp frame i at i / 30 s, stored as float32 the way LeRobot writes it."""
+
+    return (
+        pl.Series([index / 30 for index in range(frames)], dtype=pl.Float32)
+        .cast(pl.Float64)
+        .to_list()
     )
 
 
@@ -260,6 +287,7 @@ def test_a_stream_rejects_a_payload_and_timestamps_length_mismatch():
             timestamps=pl.Series("time_s", [0.0, 1.0, 2.0]),
             payload=payload,
             source_path=_SOURCE_PATH,
+            timestamp_dtype=TimestampDtype.FLOAT64,
         )
 
 
@@ -588,17 +616,63 @@ def test_rate_metrics_report_timing_not_observable_on_an_exactly_even_clock(name
     result = run_stream_metrics(_stream_context(stamps))[name]
 
     assert result.status == MetricStatus.NOT_APPLICABLE
-    assert "exactly evenly spaced" in result.evidence["reason"]
+    assert "floating-point precision" in result.evidence["reason"]
 
 
-def test_a_real_clocks_jitter_is_still_measured():
-    """A realistic 50 µs wobble on a 20 ms period (0.25%) is a measured clock."""
+@pytest.mark.parametrize("name", ["effective_hz", "dt_jitter_ms", "drop_rate"])
+def test_float32_frame_number_stamps_are_not_observable_past_a_minute(name):
+    """Past about 32 s at 30 Hz, float32 rounding alone moves gaps by over 0.01%."""
+
+    stamps = _float32_frame_number_stamps(1801)
+    context = _stream_context(stamps, timestamp_dtype=TimestampDtype.FLOAT32)
+    result = run_stream_metrics(context)[name]
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert "floating-point precision" in result.evidence["reason"]
+
+
+def test_one_dropped_frame_on_a_float32_reconstructed_clock_is_still_measured():
+    """The float32 tolerance stays far below the doubled gap a dropped frame leaves."""
+
+    stamps = _float32_frame_number_stamps(1801)
+    del stamps[900]
+    context = _stream_context(stamps, timestamp_dtype=TimestampDtype.FLOAT32)
+    result = run_stream_metrics(context)["drop_rate"]
+
+    assert result.status != MetricStatus.NOT_APPLICABLE
+    assert result.value == pytest.approx(1 / 1801, rel=0.1)
+
+
+def test_a_reconstructed_clock_label_makes_timing_not_observable():
+    """An adapter's label wins even over stamps that would pass as measured."""
+
+    stamps = _timestamps_from_gaps(_JITTERY_CLOCK_GAPS)
+    results = run_stream_metrics(_stream_context(stamps, clock=Clock.RECONSTRUCTED))
+
+    for name in ("effective_hz", "dt_jitter_ms", "drop_rate"):
+        assert results[name].status == MetricStatus.NOT_APPLICABLE, name
+        assert "frame numbers divided by" in results[name].evidence["reason"], name
+    assert results["monotonic_violations"].value is not None
+
+
+@pytest.mark.parametrize(
+    "timestamp_dtype", [TimestampDtype.FLOAT64, TimestampDtype.FLOAT32]
+)
+def test_a_real_clocks_jitter_is_still_measured(timestamp_dtype):
+    """A realistic 50 µs wobble on a 20 ms period (0.25%) is a measured clock.
+
+    At 60 s the float32 term is the wider bound, so that case tests it.
+    """
 
     import random
 
     rng = random.Random(3)
-    stamps = sorted(index * 0.02 + rng.gauss(0.0, 5e-5) for index in range(200))
-    results = run_stream_metrics(_stream_context(stamps))
+    stamps = sorted(index * 0.02 + rng.gauss(0.0, 5e-5) for index in range(3000))
+    if timestamp_dtype is TimestampDtype.FLOAT32:
+        stamps = pl.Series(stamps, dtype=pl.Float32).cast(pl.Float64).to_list()
+    results = run_stream_metrics(
+        _stream_context(stamps, timestamp_dtype=timestamp_dtype)
+    )
 
     for name in ("effective_hz", "dt_jitter_ms", "drop_rate"):
         assert results[name].status != MetricStatus.NOT_APPLICABLE, name

@@ -24,6 +24,7 @@ from kalanos.analysis.models.domain import (
     Kind,
     MappingSource,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.report import (
@@ -139,6 +140,7 @@ def _stream(source_path: Path, **overrides: Any) -> Stream:
         "payload": FramePayload(frame=pl.DataFrame({"tcp_pose_x_mm": [1.0, 2.0]})),
         "source_path": source_path,
         "source_field": "tcp_pose",
+        "timestamp_dtype": TimestampDtype.FLOAT64,
         "channels": [Channel(name="tcp_pose_x_mm")],
     }
     return Stream(**{**fields, **overrides})
