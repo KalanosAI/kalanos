@@ -111,9 +111,11 @@ def task_traits(
     traits = {}
     for key, episodes in on.items():
         tasks = {task_of.get(episode) for episode in episodes}
-        if len(tasks) != 1 or None in tasks:
+        if len(tasks) != 1:
             continue
         [task] = tasks
+        if task is None:
+            continue
         if len(episodes) == size[task] >= min_episodes:
             traits[key] = (task, size[task])
     return traits

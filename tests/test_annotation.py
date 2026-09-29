@@ -207,10 +207,8 @@ def test_the_report_carries_each_episodes_instructions(tmp_path):
     report = grade(path)
 
     by_id = {episode.id: episode for episode in report.episodes}
-    tasks = sorted((episode.tasks for episode in by_id.values()), key=len)
-    assert tasks == [[], ["open the drawer"]]
-    flags = sorted(
-        episode.metrics["task_instruction_missing"].value for episode in by_id.values()
-    )
-    assert flags == [0.0, 1.0]
+    tasks = [e.tasks for e in by_id.values() if e.tasks is not None]
+    assert sorted(tasks, key=len) == [[], ["open the drawer"]]
+    flags = [e.metrics["task_instruction_missing"].value for e in by_id.values()]
+    assert sorted(flag for flag in flags if flag is not None) == [0.0, 1.0]
     assert report.score.score is not None

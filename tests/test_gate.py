@@ -347,7 +347,8 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
     report = grade(path)
     r = report.readiness
 
-    assert r is not None
+    assert r is not None and r.passing_quality is not None
+    assert report.gate is not None
     assert (r.evaluated_episodes, r.passing_episodes, r.blocking_episodes) == (
         20,
         16,
@@ -357,7 +358,9 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
         e.score.score
         for e in report.episodes
         if e.id not in {f.episode_id for f in report.gate.failing_episodes}
+        and e.score.score is not None
     ]
+    assert len(passing) == 16
     assert r.passing_quality == pytest.approx(sum(passing) / 16)
     assert r.score == pytest.approx(sum(passing) / 20)
     assert r.score == pytest.approx(r.passing_quality * 16 / 20)
@@ -396,6 +399,7 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
 
     text = render_terminal(report, width=120)
 
+    assert report.readiness is not None
     assert f"READINESS {report.readiness.score:.0f}/100" in text
     assert "4 blocking" in text
     assert text.count("BLOCK ") >= 4
