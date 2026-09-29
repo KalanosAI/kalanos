@@ -223,13 +223,23 @@ Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`
 
 Family scores are weighted means of their metrics; the overall score is a weighted mean of family scores, renormalised over the families that ran, minus a capped penalty per distinct failing metric.
 
-| Score | Grade | Meaning |
-|---|---|---|
-| ≥ 90 | A | Collect more of exactly this |
-| 80–89 | B | Train on it; note the warnings |
-| 70–79 | C | Usable with caveats |
-| 60–69 | D | Fix the failures, then re-record or filter |
-| < 60 | F | Do not train; debug the pipeline |
+### Readiness
+
+The dataset's headline number is **readiness**, from 0 to 100, in the report's `readiness` section:
+
+```text
+An episode with a blocking finding contributes 0.
+Every other evaluated episode contributes its score, from 0 to 100.
+
+readiness = sum of contributions / number of evaluated episodes
+          = passing share × passing-episode quality
+```
+
+An episode is **blocking** when any of its metrics grades `critical`, unless that finding is a task or dataset trait (the dataset gate, below). The denominator includes blocking episodes; `passing_quality` is the mean over passing episodes only, never the overall mean. When every evaluated episode is blocking, readiness is 0 and `passing_quality` is `null`; when no episode could be evaluated, readiness is `null` (not graded). A report scored without a gate (`legacy_0_5`) has no blocking rule, and so no readiness.
+
+Readiness is an index of technical readiness under the evaluated checks, not a prediction of training success.
+
+**Letter grades are deprecated** since 0.6.5. Reports still carry `score.grade` (from the bands A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, F below, in `policy.yaml`'s `letters`), `gate.cap`, `gate.uncapped_grade` and `gate.pruned_grade` for compatibility, but nothing presents them, and 0.7.0 removes them.
 
 Every score also carries a **graded fraction**: of the metrics that could have been graded at a node, how many actually were. A metric that resolved to a grade counts toward it; a metric left `report_only` for want of a band counts against it; `not_applicable` results and metrics that are `report_only` by design (`p99_torque`, `energy_proxy`, `drift`) are excluded from the denominator entirely, since a metric that was never meant to grade here is not a gap. An A over a graded fraction of 0.15 is a different claim from an A over 0.95, and the report carries the number so a reader can tell them apart. (Not to be confused with the `coverage` family; the policy key drafted as `min_coverage` is a candidate for renaming to `min_graded_fraction` to keep the two apart.)
 
@@ -237,26 +247,21 @@ Every score also carries a **graded fraction**: of the metrics that could have b
 
 ### The dataset gate
 
-A mean lets a minority of bad episodes hide: eight glitched episodes in fifty still average to an A. The gate counts the episodes that fail and caps the dataset's letter by their share. The number stays the mean; the letter carries the gate, and the report's `gate` section says which episodes fail, why, and the grade the dataset would get without them.
+A mean lets a minority of bad episodes hide: eight glitched episodes in fifty still average to 98. The gate decides which episodes are **blocking**, and readiness counts each of them as zero. The report's `gate` section lists the blocking episodes (`failing_episodes`), why each blocks, and the readiness once they are excluded (`passing_quality`).
 
-**An episode fails** when any of its metrics grades `critical` — the train-ready rule above — unless that finding is a **task trait**: the same critical finding on every episode of one task and on no episode of any other, on a task of at least 20 episodes. A trait describes the task, not a fault (grading `berkeley_autolab_ur5`, a gripper-state "flatline" hit exactly the 250 episodes of its one sweeping task, which never closes the gripper), so it is reported in `gate.task_traits` and fails nothing.
+**An episode is blocking** when any of its metrics grades `critical` — the train-ready rule above — unless that finding is a **task trait**: the same critical finding on every episode of one task and on no episode of any other, on a task of at least 20 episodes. A trait describes the task, not a fault (grading `berkeley_autolab_ur5`, a gripper-state "flatline" hit exactly the 250 episodes of its one sweeping task, which never closes the gripper), so it is reported in `gate.task_traits` and blocks nothing.
 
-A critical finding on **nearly every episode of the whole dataset** is a **dataset trait**, reported in `gate.dataset_traits` and failing nothing: it describes how the dataset was recorded, and dropping episodes cannot remove it. "Nearly every" is at least one minus the gate's own no-cap allowance (95% with the default table), on a dataset of at least 20 episodes: a finding missing from no more episodes than the gate lets fail for free is on every episode that matters. Grading `lerobot/cmu_stretch` (135 episodes, five tasks), two state dimensions never changed in any episode and failed all 135, capping the dataset at D with "drop every episode" as the remedy; as dataset traits they fail nothing, and the dataset grades by its mean. A finding confined to some tasks but short of every episode of one, such as a joint two of six tasks never move, is not yet covered and still fails its episodes.
+A critical finding on **nearly every episode of the whole dataset** is a **dataset trait**, reported in `gate.dataset_traits` and blocking nothing: it describes how the dataset was recorded, and excluding episodes cannot remove it. "Nearly every" is at least 95% of the episodes (one minus the gate's 5% allowance, below), on a dataset of at least 20 episodes. Grading `lerobot/cmu_stretch` (135 episodes, five tasks), two state dimensions never changed in any episode and blocked all 135, leaving readiness 0 with "exclude every episode" as the remedy; as dataset traits they block nothing. **Known limit:** a dataset trait that is a real defect (a clock 30% slow in every episode, or a sensor that is pure noise throughout) lowers episode quality through its check but blocks nothing, so it lowers readiness less than it should; a future release will let such traits lower readiness directly. A finding confined to some tasks but short of every episode of one, such as a joint two of six tasks never move, is not yet covered and still fails its episodes.
 
 **Gripper channels.** A channel the dataset names as a gripper inside a wider vector (ALOHA's `left_gripper` in `observation.state` or `action`) grades under the gripper type for its stream: `proprio.gripper_width` for state, `action.gripper_command` for actions. A gripper holds open or closed for most of an episode and then snaps, which the stuck-sensor check would call stuck and the noise check would call noise (ALOHA's grippers, carrying a battery or a towel, read 90–99% unchanged and −2 to 15 dB), so for grippers both are reported, not graded; the spike check still grades them, so a glitching gripper still fails its episode. A gripper's motor current keeps its torque type. Names come from the dataset: LeRobot's `info.json` declares them either as a list or nested under a label (`"names": {"motors": [...]}`), and both are read. An unnamed gripper cannot be told from any other channel and grades as one.
 
-| Share of failing episodes | Dataset letter capped at |
-|---|---|
-| up to 5% | no cap — the mean decides |
-| up to 15% | B |
-| up to 30% | C |
-| more | D |
+*Candidate*: the blocking rule was tested on twelve datasets — six synthetic with planted defects, where it caught every planted glitched episode (41 of 41) and blocked no clean one, and six LeRobot hub datasets — then revised against real 50 Hz teleoperation (ALOHA, Unitree H1), but it is unconfirmed against labelled real-world failures.
 
-*Candidate*: tested on twelve datasets — six synthetic with planted defects, where the gate caught every planted glitched episode (41 of 41) and failed no clean one, and six LeRobot hub datasets — but unconfirmed against labelled real-world failures. A capped report also gives `pruned_grade` and `train_ready_after_pruning`, the verdict once the failing episodes are removed, with the list of them. A dataset is `train_ready` only when uncapped.
+*Deprecated*: the gate also still writes a letter cap by the share of blocking episodes (up to 5%: none; 15%: B; 30%: C; more: D), `gate.cap` and the capped `score.grade`, for 0.6 compatibility. The 5% allowance is what sets the dataset-trait share above; the cap itself is removed in 0.7.0.
 
-**Every gated report states what its grade rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. An A graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the letter. There is deliberately no minimum evidence for an A: converted datasets cannot show capture timing, and a format should not cost a letter — the coverage line is what keeps such an A honest.
+**Every gated report states what readiness rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. A readiness of 100 graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the number. There is deliberately no minimum evidence for a high readiness: converted datasets cannot show capture timing, and a format should not cost points — the coverage line is what keeps such a score honest.
 
-A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction fails.
+A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
 
 **Known limitation.** `snr_db` flags a channel that holds still under a little sensor noise — an axis the robot never turns — as `critical`: without a sense of scale, a still axis and an all-noise sensor read the same, and a rule that set both aside also hid episodes destroyed by glitches. It touched 2 of 2,797 graded results in the real datasets so far; a scale-aware check is the fix.
 

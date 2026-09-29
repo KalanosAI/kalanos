@@ -171,7 +171,7 @@ def test_a_clean_dataset_is_not_capped_and_says_what_it_rests_on(tmp_path):
     assert report.score.grade == report.gate.uncapped_grade
     assert report.gate.coverage.families_graded
     assert report.gate.coverage.graded_checks_per_episode
-    assert "no episode fails" in report.gate.summary
+    assert "no blocking episodes" in report.gate.summary
     assert "Graded on" in report.gate.summary
 
 
@@ -336,6 +336,74 @@ def test_a_channel_that_freezes_partway_is_still_a_stuck_sensor(tmp_path):
     assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [
         "3"
     ]
+
+
+def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
+    """Readiness = sum of passing episodes' quality / evaluated episodes."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched={2, 7, 11, 16})
+
+    report = grade(path)
+    r = report.readiness
+
+    assert r is not None
+    assert (r.evaluated_episodes, r.passing_episodes, r.blocking_episodes) == (
+        20,
+        16,
+        4,
+    )
+    passing = [
+        e.score.score
+        for e in report.episodes
+        if e.id not in {f.episode_id for f in report.gate.failing_episodes}
+    ]
+    assert r.passing_quality == pytest.approx(sum(passing) / 16)
+    assert r.score == pytest.approx(sum(passing) / 20)
+    assert r.score == pytest.approx(r.passing_quality * 16 / 20)
+    assert report.gate.summary.startswith(f"Readiness {r.score:.0f}/100: 4 of 20")
+
+
+def test_a_clean_dataset_reads_as_its_mean(tmp_path):
+    """No blocking episodes: readiness is the mean episode quality."""
+
+    path = tmp_path / "clean.hdf5"
+    _write_arm(path, 20, glitched=set())
+
+    r = grade(path).readiness
+
+    assert r is not None and r.blocking_episodes == 0
+    assert r.score == pytest.approx(r.passing_quality)
+
+
+def test_without_a_gate_there_is_no_readiness(tmp_path):
+    """legacy_0_5 has no blocking rule, so no readiness."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched={2})
+
+    assert grade(path, policy=load_policy(Path("legacy_0_5"))).readiness is None
+
+
+def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
+    """The plate shows READINESS n/100 and the blocking count; rows mark BLOCK."""
+
+    from kalanos.analysis.reporting.card import render_terminal
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched={2, 7, 11, 16})
+    report = grade(path)
+
+    text = render_terminal(report, width=120)
+
+    assert f"READINESS {report.readiness.score:.0f}/100" in text
+    assert "4 blocking" in text
+    assert text.count("BLOCK ") >= 4
+    header = text.splitlines()[:8]
+    assert not any(
+        line.split() and line.split()[-1] in {"A", "B", "C", "D", "F"}
+        for line in header
+    )
 
 
 def test_a_metric_graded_in_a_minority_of_episodes_is_still_not_observable(tmp_path):

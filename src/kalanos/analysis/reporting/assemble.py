@@ -43,7 +43,7 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
-from kalanos.analysis.scoring.gate import apply_gate
+from kalanos.analysis.scoring.gate import apply_gate, readiness_of
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
 
 
@@ -344,4 +344,5 @@ def assemble_report(
         source=source,
         datasets=list(datasets),
         gate=gate,
+        readiness=readiness_of(graded_episodes, gate),
     )
