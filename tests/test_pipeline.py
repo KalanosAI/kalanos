@@ -38,6 +38,7 @@ from kalanos.analysis.models.domain import (
     FramePayload,
     Kind,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.policy import MetricPolicy, Policy, ScoreMode
 from kalanos.analysis.pipeline import _with_declared_limits
@@ -95,6 +96,7 @@ class _StubDirectoryAdapter:
                         frame=pl.DataFrame({"v": [1.0, 2.0, 3.0, 4.0]})
                     ),
                     source_path=path,
+                    timestamp_dtype=TimestampDtype.FLOAT64,
                     clock=Clock.UNKNOWN,
                     is_regular=True,
                     channels=[Channel(name="v")],

@@ -63,11 +63,39 @@ class Clock(str, Enum):
     """
 
     # fmt: off
-    CAPTURE = "capture"  # Stamped when the sample was taken
-    RECEIVE = "receive"  # Stamped when it arrived
-    LOG     = "log"      # Stamped when it was written
-    UNKNOWN = "unknown"  # Recorded but unlabelled, absent, or synthesised from a rate
+    CAPTURE       = "capture"        # Stamped when the sample was taken
+    RECEIVE       = "receive"        # Stamped when it arrived
+    LOG           = "log"            # Stamped when it was written
+    RECONSTRUCTED = "reconstructed"  # From frame numbers or a rate; measured nothing
+    UNKNOWN       = "unknown"        # Recorded but unlabelled, or absent
     # fmt: on
+
+
+class TimestampDtype(str, Enum):
+    """The float format a Stream's timestamps were stored in at the source.
+
+    Read before any cast, it bounds how far rounding can have moved each stamp.
+    Integer and text sources are `FLOAT64`,
+    since the conversion to float64 seconds is their only rounding.
+    """
+
+    # fmt: off
+    FLOAT16 = "float16"
+    FLOAT32 = "float32"
+    FLOAT64 = "float64"
+    # fmt: on
+
+    @property
+    def epsilon(self) -> float:
+        """The machine epsilon: the gap between 1.0 and the next float above it."""
+
+        match self:
+            case TimestampDtype.FLOAT16:
+                return 2**-10
+            case TimestampDtype.FLOAT32:
+                return 2**-23
+            case TimestampDtype.FLOAT64:
+                return 2**-52
 
 
 @runtime_checkable
@@ -197,6 +225,9 @@ class Stream(BaseModel):
         or `None` when it had no name of its own.
     clock : Clock
         Which timebase `timestamps` are on.
+    timestamp_dtype : TimestampDtype
+        The float format `timestamps` were stored in at the source,
+        which bounds their rounding once cast to float64.
     is_regular : bool
         Whether the sampling behind this stream classified as regular, which is
         what gates a metric declaring `requires.regular_sampling`. Defaults
@@ -219,6 +250,7 @@ class Stream(BaseModel):
     source_path: AnyPath
     source_field: str | None = None
     clock: Clock = Clock.UNKNOWN
+    timestamp_dtype: TimestampDtype
     is_regular: bool = False
     channels: list[Channel] = Field(default_factory=list)
 

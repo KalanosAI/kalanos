@@ -23,6 +23,7 @@ from kalanos.analysis.models.domain import (
     FramePayload,
     Kind,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.metrics import (
     Family,
@@ -277,6 +278,7 @@ def _series(timestamps: list[float]) -> Stream:
         timestamps=pl.Series(timestamps, dtype=pl.Float64),
         payload=FramePayload(frame=pl.DataFrame({"x": [0.0] * len(timestamps)})),
         source_path=UPath("recording.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name="x")],
     )
 
@@ -511,6 +513,7 @@ def test_grade_episode_folds_its_own_score_in_as_one_more_equal_weight_child(
         kind=Kind.SERIES,
         timestamps=pl.Series("time_s", [0.0, 1.0]),
         source_path=UPath("test_reporting.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
     )
     episode = Episode(id="episode_0", streams=[stream])
 
@@ -559,6 +562,7 @@ def test_an_episode_level_finding_names_no_stream_or_channel(monkeypatch):
         kind=Kind.SERIES,
         timestamps=pl.Series("time_s", [0.0, 1.0]),
         source_path=UPath("test_reporting.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
     )
     episode = Episode(id="episode_0", streams=[stream])
 
@@ -776,6 +780,7 @@ def test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child(
         timestamps=pl.Series("time_s", [0.0, 1.0]),
         payload=FramePayload(frame=pl.DataFrame({"tcp_pose_x_mm": [0.0, 1.0]})),
         source_path=UPath("test_reporting.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name="tcp_pose_x_mm")],
     )
 

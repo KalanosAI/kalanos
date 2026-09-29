@@ -35,6 +35,7 @@ from kalanos.analysis.models.domain import (
     FramePayload,
     Kind,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.schema import ColumnRole, RefusalCode
 from kalanos.assets.dictionary import load_default_dictionary
@@ -613,6 +614,7 @@ class TabularAdapter(ABC):
                         source_path=path,
                         source_field=stem,
                         clock=Clock.UNKNOWN,
+                        timestamp_dtype=TimestampDtype.FLOAT64,
                         is_regular=time_spec.regularity.is_regular,
                         channels=[
                             Channel(name=column, axis=axis_by_column[column])

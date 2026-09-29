@@ -384,6 +384,8 @@ def _resolve(
     if status == MetricStatus.CRITICAL and evidence.get("never_changed") is True:
         # The points of the value halfway between the band's bounds: the middle
         # of the warning range, derived from the band rather than written here.
+        # `_points_for` scored the value, so both bounds are set.
+        assert band.good is not None and band.bad is not None
         midway = statistics.fmean((band.good, band.bad))
         status = MetricStatus.WARNING
         points = _points_for(

@@ -35,6 +35,7 @@ from kalanos.analysis.models.domain import (
     FramePayload,
     Kind,
     Stream,
+    TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -265,6 +266,7 @@ def _topic_stream(
         source_path=source_path,
         source_field=topic,
         clock=clock,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         is_regular=is_regular,
         channels=channels,
     )

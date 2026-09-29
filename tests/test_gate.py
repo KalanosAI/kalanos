@@ -7,7 +7,9 @@ coverage, and the packaged policies that switch it on, off, or extend it.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+from collections.abc import Container
 from pathlib import Path
+from typing import cast
 
 # External
 import h5py
@@ -22,8 +24,18 @@ from kalanos.api import grade
 from kalanos.assets.policy import load_default_policy, load_policy
 
 
-def _write_arm(path: Path, n_episodes: int, glitched: set[int], tasks=None) -> None:
-    """Smooth 50 Hz joint motion; `glitched` episodes get large command jumps."""
+def _write_arm(
+    path: Path,
+    n_episodes: int,
+    glitched: set[int],
+    tasks=None,
+    jittered: Container[int] = frozenset(),
+) -> None:
+    """Smooth 50 Hz joint motion; `glitched` episodes get large command jumps.
+
+    `jittered` episodes get a physical clock's 50 µs jitter on their timestamps,
+    so their timing grades; the rest are exactly even and not observable.
+    """
 
     rng = np.random.default_rng(0)
     t = np.arange(200) * 0.02
@@ -41,7 +53,11 @@ def _write_arm(path: Path, n_episodes: int, glitched: set[int], tasks=None) -> N
                     2, 3, (20, 6)
                 )
             group.create_dataset("actions", data=actions)
-            group.create_dataset("timestamps", data=t)
+            stamps = t
+            if index in jittered:
+                stamps = t + rng.normal(0, 5e-5, t.shape)
+                stamps[0] = 0.0
+            group.create_dataset("timestamps", data=stamps)
             if tasks is not None and tasks[index] is not None:
                 group.attrs["task"] = tasks[index]
 
@@ -262,7 +278,8 @@ def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
     stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
     with h5py.File(str(path), "a") as store:
         for index in range(20):
-            store[f"data/demo_{index}"].create_dataset("unused_dim", data=stuck)
+            group = cast(h5py.Group, store[f"data/demo_{index}"])
+            group.create_dataset("unused_dim", data=stuck)
 
     report = grade(path)
     gate = report.gate
@@ -293,7 +310,8 @@ def test_a_channel_that_never_changes_is_a_warning_not_a_failure(tmp_path):
     _write_arm(path, 20, glitched=set())
     with h5py.File(str(path), "a") as store:
         for index in range(0, 20, 3):
-            store[f"data/demo_{index}"].create_dataset("unused_dim", data=np.zeros(200))
+            group = cast(h5py.Group, store[f"data/demo_{index}"])
+            group.create_dataset("unused_dim", data=np.zeros(200))
 
     report = grade(path)
 
@@ -309,7 +327,8 @@ def test_a_channel_that_freezes_partway_is_still_a_stuck_sensor(tmp_path):
     _write_arm(path, 20, glitched=set())
     stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
     with h5py.File(str(path), "a") as store:
-        store["data/demo_3"].create_dataset("unused_dim", data=stuck)
+        group = cast(h5py.Group, store["data/demo_3"])
+        group.create_dataset("unused_dim", data=stuck)
 
     report = grade(path)
 
@@ -328,7 +347,8 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
     report = grade(path)
     r = report.readiness
 
-    assert r is not None
+    assert r is not None and r.passing_quality is not None
+    assert report.gate is not None
     assert (r.evaluated_episodes, r.passing_episodes, r.blocking_episodes) == (
         20,
         16,
@@ -338,7 +358,9 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
         e.score.score
         for e in report.episodes
         if e.id not in {f.episode_id for f in report.gate.failing_episodes}
+        and e.score.score is not None
     ]
+    assert len(passing) == 16
     assert r.passing_quality == pytest.approx(sum(passing) / 16)
     assert r.score == pytest.approx(sum(passing) / 20)
     assert r.score == pytest.approx(r.passing_quality * 16 / 20)
@@ -377,6 +399,7 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
 
     text = render_terminal(report, width=120)
 
+    assert report.readiness is not None
     assert f"READINESS {report.readiness.score:.0f}/100" in text
     assert "4 blocking" in text
     assert text.count("BLOCK ") >= 4
@@ -385,3 +408,17 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
         line.split() and line.split()[-1] in {"A", "B", "C", "D", "F"}
         for line in header
     )
+
+
+def test_a_metric_graded_in_a_minority_of_episodes_is_still_not_observable(tmp_path):
+    """Two episodes with a measured clock do not stand in for the other eighteen."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched=set(), jittered={0, 1})
+
+    report = grade(path)
+
+    assert report.gate is not None
+    not_observable = {item.metric: item for item in report.gate.coverage.not_observable}
+    assert {"effective_hz", "drop_rate"} <= not_observable.keys()
+    assert not_observable["drop_rate"].share == pytest.approx(0.9)

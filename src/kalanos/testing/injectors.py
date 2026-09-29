@@ -25,7 +25,14 @@ import polars as pl
 from upath import UPath
 
 # Internal
-from kalanos.analysis.models.domain import Channel, Clock, FramePayload, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    FramePayload,
+    Kind,
+    Stream,
+    TimestampDtype,
+)
 from kalanos.analysis.models.metrics import ChannelContext, MetricInput, StreamContext
 from kalanos.analysis.optional import load_numpy
 
@@ -168,6 +175,7 @@ def clean_recording(
         payload=FramePayload(frame=frame),
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name=name) for name in channels],
     )
 
@@ -224,6 +232,7 @@ def clean_taxels(
         payload=FramePayload(frame=frame),
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name=name) for name in names],
     )
 
@@ -253,6 +262,16 @@ def _require_channel(stream: Stream, channel: str) -> None:
 
     if channel not in {c.name for c in stream.channels}:
         raise ValueError(f"{channel!r} is not one of this stream's channels")
+
+
+def _clock_after_retiming(stream: Stream) -> Clock:
+    """Drop a `RECONSTRUCTED` label from a stream an injector is retiming."""
+
+    # Rewritten timestamps no longer equal frame numbers over the rate,
+    # so keeping the label would hide the injected defect.
+    if stream.clock is Clock.RECONSTRUCTED:
+        return Clock.UNKNOWN
+    return stream.clock
 
 
 def _window(frame: pl.DataFrame, start: int, length: int) -> int:
@@ -366,6 +385,7 @@ def drop_samples(stream: Stream, *, start: int = 40, count: int = 10) -> Stream:
         update={
             "payload": FramePayload(frame=new_frame),
             "timestamps": new_timestamps,
+            "clock": _clock_after_retiming(stream),
         }
     )
 
@@ -406,7 +426,10 @@ def repeat_timestamps(stream: Stream, *, start: int = 30, count: int = 5) -> Str
     for row in range(start, last + 1, 2):
         stamps[row] = stamps[row - 1]
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, stamps)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, stamps),
+            "clock": _clock_after_retiming(stream),
+        }
     )
 
 
@@ -452,7 +475,10 @@ def jitter_clock(stream: Stream, *, milliseconds: float = 2.0) -> Stream:
         jittered[index] += offset if index % 2 == 1 else -offset
 
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, jittered)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, jittered),
+            "clock": _clock_after_retiming(stream),
+        }
     )
 
 
@@ -538,7 +564,10 @@ def stretch_clock(stream: Stream, *, factor: float = 1.4) -> Stream:
         stretched.append(running)
 
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, stretched)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, stretched),
+            "clock": _clock_after_retiming(stream),
+        }
     )
 
 
@@ -814,6 +843,7 @@ def clean_frames(
         payload=payload,
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[],
     )
 
