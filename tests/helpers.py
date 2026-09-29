@@ -14,6 +14,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.inference.dialect import sniff_dialect
 from kalanos.analysis.inference.infer import infer_schema
+from kalanos.analysis.models.report import GradedEpisode
 from kalanos.analysis.models.schema import SourceSchema
 from kalanos.analysis.models.scoring import ScoreResult
 
@@ -153,3 +154,68 @@ def score_attr(score: ScoreResult) -> str:
     """
 
     return "" if score.score is None else repr(score.score)
+
+
+def decided(episode: GradedEpisode) -> GradedEpisode:
+    """Give a hand-built GradedEpisode the eligibility its stand-in score implies.
+
+    Test fixtures build graded episodes directly, without running the
+    evaluator. Schema 7 refuses an episode without an eligibility and refuses
+    a `train_ready` that contradicts it, so the stand-in is derived from the
+    score's own `train_ready`: `True` passes, `False` is blocked on a synthetic
+    reason, `None` is unknown for want of a graded result.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        The episode, `eligibility` unset.
+
+    Returns
+    -------
+    GradedEpisode
+        A copy carrying a consistent eligibility.
+    """
+
+    from kalanos.analysis.models.eligibility import (
+        Consequence,
+        EligibilityReason,
+        EligibilityStatus,
+        EpisodeEligibility,
+        ReasonKind,
+    )
+
+    match episode.score.train_ready:
+        case True:
+            reasons = []
+            status = EligibilityStatus.PASS
+        case False:
+            reasons = [
+                EligibilityReason(
+                    id="stand-in.blocking",
+                    kind=ReasonKind.FINDING,
+                    status=EligibilityStatus.BLOCKED,
+                    consequence=Consequence.BLOCK,
+                    detail="test stand-in: the score's train_ready was False",
+                )
+            ]
+            status = EligibilityStatus.BLOCKED
+        case _:
+            reasons = [
+                EligibilityReason(
+                    id="graded_result",
+                    kind=ReasonKind.REQUIREMENT,
+                    status=EligibilityStatus.UNKNOWN,
+                    detail="test stand-in: nothing graded",
+                )
+            ]
+            status = EligibilityStatus.UNKNOWN
+    return episode.model_copy(
+        update={
+            "eligibility": EpisodeEligibility(
+                status=status,
+                scope_id="test-scope",
+                policy_id="test-policy",
+                reasons=reasons,
+            )
+        }
+    )

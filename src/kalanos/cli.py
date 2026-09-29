@@ -20,12 +20,17 @@ import typer
 from rich import box
 from rich.console import Console
 from rich.table import Table
+from upath import UPath
 
 # Internal
 from kalanos import api
 from kalanos.analysis.models.discovery import SourceLimits
+from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import KalanosError
+from kalanos.analysis.models.legacy import LegacyReport, load_any
 from kalanos.analysis.models.metrics import Family
+from kalanos.analysis.models.provenance import ExecutionTier
+from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
@@ -156,11 +161,60 @@ def grade(
         bool,
         typer.Option(
             "--no-sidecar",
-            help="Ignore a kalanos-map.yaml in or beside the graded path.",
+            help=(
+                "Ignore a kalanos-map.yaml in or beside the graded path. "
+                "--map, --map-file and --profile still apply."
+            ),
         ),
     ] = False,
+    profile: Annotated[
+        Path | None,
+        typer.Option(
+            "--profile",
+            help=(
+                "A configuration bundle: binding, requirements, policy and "
+                "execution sections. Defaults to the numeric-core scope."
+            ),
+        ),
+    ] = None,
+    tier: Annotated[
+        ExecutionTier | None,
+        typer.Option(
+            "--tier",
+            case_sensitive=False,
+            help=(
+                "Which capabilities to attempt. Never changes the requirements: "
+                "a skipped required check makes episodes unknown."
+            ),
+        ),
+    ] = None,
+    fail_on: Annotated[
+        str,
+        typer.Option(
+            "--fail-on",
+            help=(
+                "Comma-separated eligibility statuses that make the audit fail "
+                "(exit 1): any of blocked, review, unknown. "
+                "Default blocked,unknown; a training gate adds review; "
+                "blocked alone is exploratory."
+            ),
+        ),
+    ] = "blocked,unknown",
 ) -> None:
     """Grade a recording, or every recording in a folder.
+
+    Exit codes
+    ----------
+    0
+        The audit completed and no episode carries a status in `fail_on`.
+    1
+        The audit completed and at least one episode carries such a status.
+        CI gate failure is not source corruption: `review` and `unknown` say
+        the data needs a decision or more evidence.
+    2
+        Invalid configuration or an operational failure: a missing path, a
+        malformed bundle, an unknown taxonomy type, an unwritable report.
+        Takes precedence over 1 when both apply.
 
     Parameters
     ----------
@@ -207,6 +261,13 @@ def grade(
         else settings.remote_max_files,
     )
 
+    # Step 0: validate the gate before any expensive work.
+    try:
+        gate_on = parse_fail_on(fail_on)
+    except ValueError as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+
     # Step 1: grade. The reason is printed, not logged: it explains a non-zero exit,
     # and must reach the user even at a verbosity that silences ERROR records.
     try:
@@ -217,6 +278,8 @@ def grade(
             mapping=mapping,
             mapping_file=map_file,
             sidecar=not no_sidecar,
+            bundle=profile,
+            tier=tier,
         )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
@@ -242,6 +305,132 @@ def grade(
         is_terminal = sys.stdout.isatty()
         width = shutil.get_terminal_size().columns if is_terminal else None
         print(render_terminal(result, color=is_terminal, width=width))
+
+    # Step 4: the decision gate, from the one place decisions live.
+    if failing_statuses(result, gate_on):
+        raise typer.Exit(code=1)
+
+
+def parse_fail_on(text: str) -> set[EligibilityStatus]:
+    """Parse `--fail-on`: a comma-separated set of non-pass statuses.
+
+    Raises
+    ------
+    ValueError
+        On an unknown status, or on `pass`, which cannot fail an audit.
+    """
+
+    allowed = {s.value: s for s in EligibilityStatus if s != EligibilityStatus.PASS}
+    chosen = set()
+    for item in text.split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        if item not in allowed:
+            raise ValueError(
+                f"--fail-on {item!r} is not one of {', '.join(sorted(allowed))}"
+            )
+        chosen.add(allowed[item])
+    if not chosen:
+        raise ValueError("--fail-on needs at least one status")
+    return chosen
+
+
+def failing_statuses(report: Report, gate_on: set[EligibilityStatus]) -> int:
+    """How many episodes carry a status the gate fails on."""
+
+    counts = report.eligibility_counts
+    if counts is None:
+        return 0
+    return sum(
+        {
+            EligibilityStatus.BLOCKED: counts.blocked,
+            EligibilityStatus.REVIEW: counts.review,
+            EligibilityStatus.UNKNOWN: counts.unknown,
+        }[status]
+        for status in gate_on
+    )
+
+
+@app.command(help="Summarise a saved report: scope, decisions, readiness, reasons.")
+def inspect(
+    report: Annotated[Path, typer.Argument(help="A report JSON of any schema.")],
+    episode: Annotated[
+        str | None,
+        typer.Option("--episode", help="Show one episode's reasons in full."),
+    ] = None,
+) -> None:
+    """Read-only inspection of a saved report, current or legacy.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 when the file is missing or not a report.
+    """
+
+    try:
+        loaded = load_any(UPath(report))
+    except (OSError, ValueError) as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+
+    console = _console()
+    if isinstance(loaded, LegacyReport):
+        console.print(
+            f"schema {loaded.schema_version} (legacy) · sha256 {loaded.sha256}"
+        )
+        summary = loaded.summary
+        console.print(
+            f"{summary.n_episodes} episodes; gate lists {summary.n_gate_failing} "
+            f"failing; {summary.n_score_train_ready} carry score.train_ready=true; "
+            f"legacy readiness {summary.legacy_readiness}"
+        )
+        if loaded.contradictions:
+            console.print(
+                f"{len(loaded.contradictions)} contradiction(s): episodes both "
+                "failing and train_ready=true"
+            )
+            for item in loaded.contradictions:
+                console.print(f"  {item.episode_id}")
+        console.print("not recorded in this schema: " + "; ".join(loaded.unknown))
+        return
+
+    scope = loaded.scope
+    counts = loaded.eligibility_counts
+    console.print(f"schema {loaded.schema_version}")
+    if scope is not None:
+        console.print(
+            f"scope {scope.requirements_id} · policy {scope.policy_id} · "
+            f"tier {scope.tier.value}"
+        )
+    if counts is not None:
+        console.print(
+            f"{counts.pass_count}/{counts.total} pass, {counts.blocked} blocked, "
+            f"{counts.review} review, {counts.unknown} unknown"
+        )
+    if loaded.readiness is not None:
+        r = loaded.readiness
+        console.print(
+            f"readiness {r.score:.2f}"
+            if r.score is not None
+            else "readiness undefined: " + "; ".join(r.reasons)
+        )
+    if loaded.sufficiency is not None:
+        console.print(f"sufficiency {loaded.sufficiency.status.value}")
+    table = _table("EPISODE", "STATUS", "REASONS")
+    for item in loaded.episodes:
+        if episode is not None and item.id != episode:
+            continue
+        e = item.eligibility
+        if e is None:
+            continue
+        reasons = (
+            "; ".join(r.detail or r.id for r in e.reasons)
+            if episode
+            else str(len(e.reasons))
+        )
+        table.add_row(item.id, e.status.value, reasons)
+    console.print(table)
 
 
 @app.command(

@@ -1,0 +1,267 @@
+"""Load a configuration bundle and resolve every mapping input through one path.
+
+`resolve_run_configuration` is the single resolver: `grade` and `benchmark`
+both call it, so a calibration result describes the same semantic
+interpretation a user's grade run used. Legacy mapping inputs are normalised
+into the binding model with their origin recorded; nothing on disk is
+rewritten.
+"""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+
+# External
+import yaml
+from pydantic import ValidationError
+from upath import UPath
+
+# Internal
+from kalanos.analysis.models.binding import (
+    BUNDLE_SCHEMA_VERSION,
+    BindingConflict,
+    BindingOrigin,
+    Bundle,
+    EvaluationScope,
+    FeatureAssertion,
+    RequirementsSection,
+    SamePriorityConflict,
+    assertions_from_overrides,
+    resolve_feature_types,
+)
+from kalanos.analysis.models.dictionary import Dictionary
+from kalanos.analysis.models.errors import MappingOverrideError
+from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
+from kalanos.analysis.models.provenance import (
+    ConfigIdentity,
+    ExecutionTier,
+    content_digest,
+)
+from kalanos.assets.mapping import (
+    check_taxonomy_types,
+    load_mapping_file,
+    sidecar_path,
+)
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+_ORIGIN_OF = {
+    BindingOrigin.ARGUMENT: OverrideOrigin.ARGUMENT,
+    BindingOrigin.FILE: OverrideOrigin.FILE,
+    BindingOrigin.BUNDLE: OverrideOrigin.BUNDLE,
+    BindingOrigin.SIDECAR: OverrideOrigin.SIDECAR,
+}
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+@dataclass(frozen=True)
+class RunConfiguration:
+    """Everything a run resolved about its configuration, in one place.
+
+    Attributes
+    ----------
+    overrides : list[MappingOverride]
+        The winning feature assertions, in the shape the pipeline applies.
+    conflicts : list[BindingConflict]
+        Every feature where a lower-precedence source disagreed.
+    scope : EvaluationScope
+        What decisions are relative to.
+    requirements : RequirementsSection
+    requirements_id, policy_id, binding_id, dictionary_id : ConfigIdentity
+        Identities with content digests, for the report's `run`.
+    """
+
+    overrides: list[MappingOverride]
+    conflicts: list[BindingConflict]
+    scope: EvaluationScope
+    requirements: RequirementsSection
+    requirements_id: ConfigIdentity
+    policy_id: ConfigIdentity
+    binding_id: ConfigIdentity | None
+    dictionary_id: ConfigIdentity
+    bundle: Bundle = field(default_factory=Bundle)
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def load_bundle(path: UPath) -> Bundle:
+    """Read one bundle YAML.
+
+    Raises
+    ------
+    MappingOverrideError
+        If the file is missing, is not YAML, does not match `Bundle`, or
+        declares a `schema_version` other than `BUNDLE_SCHEMA_VERSION`.
+    """
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise MappingOverrideError(f"no bundle at {path}") from exc
+    try:
+        payload = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise MappingOverrideError(f"{path} is not valid YAML: {exc}") from exc
+    try:
+        bundle = Bundle.model_validate(payload)
+    except ValidationError as exc:
+        raise MappingOverrideError(
+            f"{path} does not match the bundle schema: {exc}"
+        ) from exc
+    if bundle.schema_version != BUNDLE_SCHEMA_VERSION:
+        raise MappingOverrideError(
+            f"{path} declares schema_version {bundle.schema_version}; "
+            f"this version of kalanos reads {BUNDLE_SCHEMA_VERSION}"
+        )
+    return bundle
+
+
+def resolve_run_configuration(
+    root: UPath,
+    *,
+    dictionary: Dictionary,
+    policy_digest: str,
+    bundle: Bundle | None = None,
+    bundle_path: UPath | None = None,
+    mapping: Mapping[str, str] | None = None,
+    mapping_file: UPath | None = None,
+    sidecar: bool = True,
+    tier: ExecutionTier | None = None,
+) -> RunConfiguration:
+    """Resolve every configuration input by precedence, recording conflicts.
+
+    Precedence for a feature's taxonomy type is
+    `--map` > `--map-file` > bundle `binding.features` > discovered sidecar.
+    A sidecar or mapping file asserts mappings only; requirements, policy and
+    tier come from the bundle or the defaults. Two assertions at the same
+    precedence that disagree are a configuration error.
+
+    Parameters
+    ----------
+    root : UPath
+        The path being graded, for sidecar discovery.
+    dictionary : Dictionary
+        The dictionary every asserted type must exist in.
+    policy_digest : str
+        The content digest of the loaded policy, for its identity.
+    bundle : Bundle or None
+        An explicit bundle, when the caller loaded one.
+    bundle_path : UPath or None
+        Where it came from, for provenance.
+    mapping, mapping_file, sidecar
+        The legacy inputs, exactly as `api.grade` accepts them.
+    tier : ExecutionTier or None
+        An explicit tier, overriding the bundle's. Never changes requirements.
+
+    Returns
+    -------
+    RunConfiguration
+
+    Raises
+    ------
+    MappingOverrideError
+        On a malformed input, an unknown taxonomy type, or a same-priority conflict.
+    """
+
+    bundle = bundle or Bundle()
+    assertions: list[FeatureAssertion] = []
+
+    if sidecar:
+        candidate = sidecar_path(root)
+        if candidate.exists():
+            assertions += assertions_from_overrides(
+                load_mapping_file(candidate, origin=OverrideOrigin.SIDECAR)
+            )
+    assertions += bundle.feature_assertions(bundle_path)
+    if mapping_file is not None:
+        assertions += assertions_from_overrides(
+            load_mapping_file(mapping_file, origin=OverrideOrigin.FILE)
+        )
+    assertions += [
+        FeatureAssertion(feature=k, taxonomy_type=v, origin=BindingOrigin.ARGUMENT)
+        for k, v in (mapping or {}).items()
+    ]
+
+    try:
+        resolved = resolve_feature_types(assertions)
+    except SamePriorityConflict as exc:
+        raise MappingOverrideError(str(exc)) from exc
+
+    overrides = [
+        MappingOverride(
+            feature=feature,
+            taxonomy_type=winner.taxonomy_type,
+            origin=_ORIGIN_OF[winner.origin],
+            path=winner.path,
+        )
+        for feature, winner in resolved.types.items()
+    ]
+    check_taxonomy_types(overrides, dictionary)
+
+    effective_tier = tier or bundle.execution.tier
+    requirements = bundle.requirements
+    binding_id = (
+        ConfigIdentity(
+            id=bundle.binding.id,
+            digest=content_digest(bundle.binding.model_dump(mode="json")),
+            origin=str(bundle_path) if bundle_path else "bundle",
+        )
+        if bundle.binding is not None
+        else None
+    )
+    return RunConfiguration(
+        overrides=overrides,
+        conflicts=resolved.conflicts,
+        scope=EvaluationScope(
+            requirements_id=requirements.id,
+            policy_id=bundle.policy.id,
+            binding_id=binding_id.id if binding_id else None,
+            tier=effective_tier,
+        ),
+        requirements=requirements,
+        requirements_id=ConfigIdentity(
+            id=requirements.id,
+            digest=content_digest(requirements.model_dump(mode="json")),
+            origin=str(bundle_path) if bundle_path else "builtin",
+        ),
+        policy_id=ConfigIdentity(
+            id=bundle.policy.id,
+            digest=policy_digest,
+            origin=str(bundle.policy.path) if bundle.policy.path else "builtin",
+        ),
+        binding_id=binding_id,
+        dictionary_id=ConfigIdentity(
+            id="dictionary",
+            digest=content_digest(sorted(dictionary.entries)),
+            origin="loaded",
+        ),
+        bundle=bundle,
+    )
+
+
+def overrides_for(config: RunConfiguration) -> Sequence[MappingOverride]:
+    """The pipeline-shaped overrides a resolved configuration carries."""
+
+    return config.overrides
+
+
+__all__ = [
+    "RunConfiguration",
+    "load_bundle",
+    "overrides_for",
+    "resolve_run_configuration",
+]

@@ -98,6 +98,143 @@ class TimestampDtype(str, Enum):
                 return 2**-52
 
 
+class ClockOrigin(str, Enum):
+    """Where a Stream's timestamps come from, at the resolution schema 7 needs.
+
+    `Clock` collapses "the adapter built this grid" and "the file held a
+    perfectly uniform series" into `RECONSTRUCTED`. They differ: the first is
+    known generation, the second is an inference. `ClockInfo.origin_evidence`
+    says which, and `Clock` is derived from this for compatibility.
+    """
+
+    # fmt: off
+    CAPTURE      = "capture"       # Producer evidence: stamped at acquisition
+    RECEIVE      = "receive"       # Stamped on arrival at the recorder
+    PUBLISH      = "publish"       # Stamped when published (MCAP publish_time)
+    LOG          = "log"           # Stamped when written (MCAP log_time)
+    PRESENTATION = "presentation"  # Media PTS; relates to capture only with evidence
+    GENERATED    = "generated"     # Built by an adapter from index and rate
+    SIMULATION   = "simulation"    # A simulator's step clock
+    UNKNOWN      = "unknown"       # Recorded but unlabelled, or absent
+    # fmt: on
+
+    @property
+    def compatibility_clock(self) -> "Clock":
+        """The pre-7 `Clock` value that best describes this origin."""
+
+        match self:
+            case ClockOrigin.CAPTURE:
+                return Clock.CAPTURE
+            case ClockOrigin.RECEIVE:
+                return Clock.RECEIVE
+            case ClockOrigin.PUBLISH | ClockOrigin.LOG:
+                return Clock.LOG
+            case ClockOrigin.GENERATED:
+                return Clock.RECONSTRUCTED
+            case _:
+                return Clock.UNKNOWN
+
+
+class OriginEvidence(str, Enum):
+    """How confidently `ClockInfo.origin` is known."""
+
+    # fmt: off
+    PRODUCER = "producer"  # The source or its schema declares it
+    ADAPTER  = "adapter"   # The adapter did it itself (it built the grid)
+    INFERRED = "inferred"  # Matched a pattern, e.g. frame_index / fps
+    NONE     = "none"      # Nothing says
+    # fmt: on
+
+
+class ClockInfo(BaseModel):
+    """A Stream's timebase, with its origin and history stated.
+
+    Attributes
+    ----------
+    origin : ClockOrigin
+    origin_evidence : OriginEvidence
+        Whether `origin` is declared, the adapter's own doing, or inferred.
+        Inferred generation never certifies acquisition timing; neither does
+        adapter generation.
+    domain : str or None
+        A clock-domain identifier shared by streams on one clock.
+    source_field : str or None
+        The source column the timestamps were read from.
+    native_unit : str or None
+        The unit at the source (`ns`, `s`, `frame`), before conversion.
+    native_dtype : str or None
+        The source dtype (`int64`, `float32`), before any cast.
+    epoch : str or None
+        What zero means at the source, when declared.
+    transforms : list[str]
+        Every conversion applied, in order, e.g. `ns->s`, `sorted`.
+    """
+
+    origin: ClockOrigin = ClockOrigin.UNKNOWN
+    origin_evidence: OriginEvidence = OriginEvidence.NONE
+    domain: str | None = None
+    source_field: str | None = None
+    native_unit: str | None = None
+    native_dtype: str | None = None
+    epoch: str | None = None
+    transforms: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_legacy(cls, clock: "Clock") -> "ClockInfo":
+        """The best `ClockInfo` a pre-7 `Clock` supports, uncertainty preserved."""
+
+        match clock:
+            case Clock.CAPTURE:
+                return cls(
+                    origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.PRODUCER
+                )
+            case Clock.RECEIVE:
+                return cls(
+                    origin=ClockOrigin.RECEIVE, origin_evidence=OriginEvidence.PRODUCER
+                )
+            case Clock.LOG:
+                return cls(
+                    origin=ClockOrigin.LOG, origin_evidence=OriginEvidence.PRODUCER
+                )
+            case Clock.RECONSTRUCTED:
+                # The old value did not say whether the adapter built the grid
+                # or merely recognised one; the honest migration is inferred.
+                return cls(
+                    origin=ClockOrigin.GENERATED,
+                    origin_evidence=OriginEvidence.INFERRED,
+                )
+            case _:
+                return cls()
+
+    @property
+    def certifies_acquisition(self) -> bool:
+        """Whether timing metrics may treat these stamps as measured capture time."""
+
+        return (
+            self.origin == ClockOrigin.CAPTURE
+            and self.origin_evidence == OriginEvidence.PRODUCER
+        )
+
+
+class SourceOrder(BaseModel):
+    """Whether a Stream's rows are still in source order, and how to get back.
+
+    Attributes
+    ----------
+    preserved : bool
+        `True` when row `i` of the payload is row `i` of the source.
+    original_index : list[int] or None
+        When `preserved` is `False`, the source row index of each current row,
+        so a finding can be mapped back to the sample it came from.
+    transform : str or None
+        What reordered the rows, e.g. `sorted_by_timestamp`.
+    """
+
+    preserved: bool = True
+    original_index: list[int] | None = None
+    transform: str | None = None
+
+
 @runtime_checkable
 class Payload(Protocol):
     """A Stream's data, behind a handle that need not have fetched it yet.
@@ -237,7 +374,15 @@ class Stream(BaseModel):
         How `taxonomy_type` was decided. `None` when the stream is unmapped.
         Defaults to `DICTIONARY` for a typed stream when a caller does not name it.
     clock : Clock
-        Which timebase `timestamps` are on.
+        Which timebase `timestamps` are on — the compatibility view.
+    clock_info : ClockInfo or None
+        The timebase's origin, evidence and transform history. `None` when the
+        adapter has not been taught to say; consumers then fall back to
+        `ClockInfo.from_legacy(clock)`, which preserves the uncertainty.
+    source_order : SourceOrder
+        Whether the rows are still in source order, and the index map back
+        when they are not. An ordering check needs the source order; a
+        sorted view is a transformation, not the recording.
     timestamp_dtype : TimestampDtype
         The float format `timestamps` were stored in at the source,
         which bounds their rounding once cast to float64.
@@ -264,6 +409,8 @@ class Stream(BaseModel):
     source_field: str | None = None
     mapping_source: MappingSource | None = None
     clock: Clock = Clock.UNKNOWN
+    clock_info: ClockInfo | None = None
+    source_order: SourceOrder = Field(default_factory=SourceOrder)
     timestamp_dtype: TimestampDtype
     is_regular: bool = False
     channels: list[Channel] = Field(default_factory=list)

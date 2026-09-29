@@ -25,6 +25,11 @@ from kalanos.analysis.metrics.registry import (
     run_stream_metrics,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
+from kalanos.analysis.models.binding import (
+    BindingConflict,
+    EvaluationScope,
+    RequirementsSection,
+)
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
 from kalanos.analysis.models.mapping import MappingOverride
@@ -35,6 +40,7 @@ from kalanos.analysis.models.metrics import (
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import Inventory, Producer, RunInfo
 from kalanos.analysis.models.report import (
     AnalysedEpisode,
     GradedChannel,
@@ -44,7 +50,13 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
-from kalanos.analysis.scoring.gate import apply_gate, readiness_of
+from kalanos.analysis.scoring.eligibility import (
+    counts_of,
+    decide_all,
+    readiness_of,
+    sufficiency_of,
+)
+from kalanos.analysis.scoring.gate import apply_gate
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
 
 
@@ -284,6 +296,12 @@ def assemble_report(
     source: SourceInfo | None = None,
     datasets: Sequence[DatasetInfo] = (),
     mapping_overrides: Sequence[MappingOverride] = (),
+    requirements: RequirementsSection | None = None,
+    scope: EvaluationScope | None = None,
+    producer: Producer | None = None,
+    run: RunInfo | None = None,
+    inventory: Inventory | None = None,
+    binding_conflicts: Sequence[BindingConflict] = (),
 ) -> Report:
     """Grade every analysed Episode and assemble the run's Report.
 
@@ -310,6 +328,17 @@ def assemble_report(
         What the adapter declared about each path it read, in walk order.
     mapping_overrides : Sequence[MappingOverride]
         The per-run overrides the pipeline applied.
+    requirements : RequirementsSection or None
+        What a pass needs. `None` uses the built-in `numeric-core` scope.
+    scope : EvaluationScope or None
+        The scope identities to name on the report.
+    producer, run : Producer, RunInfo or None
+        Provenance, when the caller resolved it.
+    inventory : Inventory or None
+        Expected/loaded/failed episodes. `None` means every loaded episode
+        is the whole inventory.
+    binding_conflicts : Sequence[BindingConflict]
+        Mapping disagreements the resolver recorded.
 
     Returns
     -------
@@ -330,12 +359,46 @@ def assemble_report(
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
 
+    # Step 1: decide eligibility once, now that every metric has run. Every
+    # count, the gate and the compatibility booleans derive from this.
+    requirements = requirements or RequirementsSection()
+    scope = scope or EvaluationScope(
+        requirements_id=requirements.id, policy_id="default-decisions-v1"
+    )
+    inventory = inventory or Inventory(loaded=len(graded_episodes))
+    decisions = decide_all(
+        graded_episodes, findings, requirements=requirements, policy_id=scope.policy_id
+    )
+    graded_episodes = [
+        episode.model_copy(
+            update={
+                "eligibility": decisions[episode.id],
+                "score": episode.score.model_copy(
+                    update={
+                        "train_ready": decisions[episode.id].compatibility_train_ready
+                    }
+                ),
+            }
+        )
+        for episode in graded_episodes
+    ]
+    counts = counts_of(decisions.values(), inventory)
+    readiness = readiness_of(graded_episodes, decisions, counts)
+    sufficiency = sufficiency_of(requirements, counts)
+
+    # Step 2: the dataset rollup and the gate, which now only derives.
     dataset_score = rollup(
         Level.DATASET, [ge.score for ge in graded_episodes], policy=policy
     )
-    # The gate caps the letter by the share of failing episodes; the number
-    # stays the mean. Without a gate in the policy, this changes nothing.
-    dataset_score, gate = apply_gate(graded_episodes, findings, dataset_score, policy)
+    dataset_score, gate = apply_gate(
+        graded_episodes,
+        findings,
+        dataset_score,
+        policy,
+        decisions=decisions,
+        readiness_score=readiness.score,
+        passing_quality=readiness.passing_quality,
+    )
 
     return Report(
         root=root,
@@ -350,5 +413,12 @@ def assemble_report(
         datasets=list(datasets),
         mapping_overrides=list(mapping_overrides),
         gate=gate,
-        readiness=readiness_of(graded_episodes, gate),
+        readiness=readiness,
+        producer=producer,
+        run=run,
+        scope=scope,
+        inventory=inventory,
+        eligibility_counts=counts,
+        sufficiency=sufficiency,
+        binding_conflicts=list(binding_conflicts),
     )

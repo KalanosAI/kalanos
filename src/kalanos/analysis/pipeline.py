@@ -16,6 +16,7 @@ It never writes a file; its caller, such as the CLI, does that with
 # Built-in
 import logging
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from time import perf_counter
 
 # External
@@ -36,9 +37,17 @@ from kalanos.analysis.models.domain import Episode, MappingSource
 from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import (
+    FailedEpisode,
+    Inventory,
+    Producer,
+    RunCompletion,
+    RunInfo,
+)
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.assets.bundle import RunConfiguration
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -234,6 +243,9 @@ def run(
     policy: Policy,
     source: SourceInfo | None = None,
     overrides: Sequence[MappingOverride] = (),
+    config: RunConfiguration | None = None,
+    producer: Producer | None = None,
+    run_info: RunInfo | None = None,
 ) -> Report:
     """Grade `root` end to end: walk, select an adapter, read, then assemble.
 
@@ -249,6 +261,11 @@ def run(
     overrides : Sequence[MappingOverride]
         Per-run mapping overrides, already merged and checked against the dictionary.
         Each retypes every stream whose `source_field` equals its `feature`.
+    config : RunConfiguration or None
+        The resolved scope, requirements and binding conflicts. `None` grades
+        under the built-in `numeric-core` scope.
+    producer, run_info : Producer, RunInfo or None
+        Provenance to record on the report, when the caller built it.
 
     Returns
     -------
@@ -370,6 +387,29 @@ def run(
 
     # Step 7: grade everything that made it through, and assemble the report.
     logger.info("graded %d episode(s); %d unresolved", len(analysed), len(unresolved))
+    expected = (
+        sum(d.episode_count for d in datasets if d.episode_count is not None)
+        if any(d.episode_count is not None for d in datasets)
+        else None
+    )
+    inventory = Inventory(
+        expected=expected,
+        loaded=len(analysed),
+        failed=[
+            FailedEpisode(id=str(item.path), reason=item.reason)
+            for item in unresolved
+            if hasattr(item, "reason")
+        ],
+        # Enumeration completed: everything discovery found was attempted.
+        complete=True,
+    )
+    if run_info is not None:
+        run_info = run_info.model_copy(
+            update={
+                "finished_at": datetime.now(timezone.utc),
+                "completion": RunCompletion.COMPLETE,
+            }
+        )
     return assemble_report(
         root=root,
         analysed=analysed,
@@ -380,4 +420,10 @@ def run(
         source=source,
         datasets=datasets,
         mapping_overrides=list(overrides),
+        requirements=config.requirements if config else None,
+        scope=config.scope if config else None,
+        producer=producer,
+        run=run_info,
+        inventory=inventory,
+        binding_conflicts=config.conflicts if config else (),
     )

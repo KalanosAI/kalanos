@@ -1,0 +1,3641 @@
+{
+  "schema_version": "6.5.0",
+  "root": {
+    "path": "tests/fixtures/lerobot_v3_tiny",
+    "protocol": "",
+    "storage_options": {}
+  },
+  "score": {
+    "level": "dataset",
+    "score": 100.0,
+    "grade": "A",
+    "train_ready": true,
+    "n_contributing": 2,
+    "families": {
+      "integrity": 100.0
+    }
+  },
+  "episodes": [
+    {
+      "id": "lerobot_v3_tiny::episode_000000",
+      "adapter": "lerobot_v3",
+      "adapter_confidence": 0.95,
+      "source_paths": [
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/data/chunk-000/file-000.parquet",
+          "protocol": "",
+          "storage_options": {}
+        },
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/videos/observation.images.up/chunk-000/file-000.mp4",
+          "protocol": "",
+          "storage_options": {}
+        }
+      ],
+      "duration_s": 0.23333333432674408,
+      "sample_count": 8,
+      "score": {
+        "level": "episode",
+        "score": 100.0,
+        "grade": "A",
+        "train_ready": true,
+        "n_contributing": 2,
+        "families": {
+          "integrity": 100.0
+        }
+      },
+      "metrics": {
+        "task_instruction_missing": {
+          "value": 0.0,
+          "unit": "flag",
+          "status": "report_only",
+          "evidence": {
+            "n_tasks": 1,
+            "n_blank": 0,
+            "ungraded_reason": "no threshold band for 'episode' or 'default'"
+          }
+        },
+        "energy_proxy": {
+          "value": null,
+          "unit": null,
+          "status": "not_applicable",
+          "evidence": {
+            "reason": "episode carries no proprio.joint_torque stream"
+          }
+        }
+      },
+      "streams": [
+        {
+          "taxonomy_type": "unmapped.observation.state",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": null,
+          "score": {
+            "level": "stream",
+            "score": 100.0,
+            "grade": "A",
+            "train_ready": true,
+            "n_contributing": 6,
+            "families": {
+              "integrity": 100.0
+            }
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "action_chatter": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 7,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'unmapped.observation.state' or 'default'"
+              }
+            }
+          },
+          "channels": [
+            {
+              "channel": {
+                "name": "shoulder_pan.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "shoulder_lift.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "elbow_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_roll.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "gripper.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 1,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false,
+                    "ungraded_reason": "band for 'proprio.gripper_width' has no good, bad bound to interpolate against"
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": 6.999999972060319,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "taxonomy_type": "proprio.joint_velocity",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": "dictionary",
+          "score": {
+            "level": "stream",
+            "score": 100.0,
+            "grade": "A",
+            "train_ready": true,
+            "n_contributing": 6,
+            "families": {
+              "integrity": 100.0
+            }
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'proprio.joint_velocity'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'proprio.joint_velocity'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "action_chatter": {
+              "value": 0.4364357804719848,
+              "unit": "normalised",
+              "status": "report_only",
+              "evidence": {
+                "n_channels": 6,
+                "n_samples": 8,
+                "ungraded_reason": "no threshold band for 'proprio.joint_velocity' or 'default'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 7,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'proprio.joint_velocity' or 'default'"
+              }
+            }
+          },
+          "channels": [
+            {
+              "channel": {
+                "name": "shoulder_pan.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 12.5,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 7.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "shoulder_lift.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 12.5,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 8.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "elbow_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 12.5,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 9.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 25.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 10.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_roll.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060317,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 25.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 11.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "gripper.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 1,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 8
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false,
+                    "ungraded_reason": "band for 'proprio.gripper_width' has no good, bad bound to interpolate against"
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.999985152056,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.999985152056,
+                    "r_squared": 0.9999999999999993,
+                    "total_change": -6.999999972060319,
+                    "n_samples": 8,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 25.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 12.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "taxonomy_type": "unmapped.observation.images.up",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": null,
+          "score": {
+            "level": "stream",
+            "score": null,
+            "grade": null,
+            "train_ready": null,
+            "n_contributing": 0,
+            "families": {}
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "action_chatter": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 7,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'unmapped.observation.images.up' or 'default'"
+              }
+            }
+          },
+          "channels": []
+        }
+      ],
+      "tasks": [
+        "pick up the cube"
+      ]
+    },
+    {
+      "id": "lerobot_v3_tiny::episode_000001",
+      "adapter": "lerobot_v3",
+      "adapter_confidence": 0.95,
+      "source_paths": [
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/data/chunk-000/file-000.parquet",
+          "protocol": "",
+          "storage_options": {}
+        },
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/videos/observation.images.up/chunk-000/file-000.mp4",
+          "protocol": "",
+          "storage_options": {}
+        }
+      ],
+      "duration_s": 0.1666666716337204,
+      "sample_count": 6,
+      "score": {
+        "level": "episode",
+        "score": 100.0,
+        "grade": "A",
+        "train_ready": true,
+        "n_contributing": 2,
+        "families": {
+          "integrity": 100.0
+        }
+      },
+      "metrics": {
+        "task_instruction_missing": {
+          "value": 0.0,
+          "unit": "flag",
+          "status": "report_only",
+          "evidence": {
+            "n_tasks": 1,
+            "n_blank": 0,
+            "ungraded_reason": "no threshold band for 'episode' or 'default'"
+          }
+        },
+        "energy_proxy": {
+          "value": null,
+          "unit": null,
+          "status": "not_applicable",
+          "evidence": {
+            "reason": "episode carries no proprio.joint_torque stream"
+          }
+        }
+      },
+      "streams": [
+        {
+          "taxonomy_type": "unmapped.observation.state",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": null,
+          "score": {
+            "level": "stream",
+            "score": 100.0,
+            "grade": "A",
+            "train_ready": true,
+            "n_contributing": 6,
+            "families": {
+              "integrity": 100.0
+            }
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "action_chatter": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 5,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'unmapped.observation.state' or 'default'"
+              }
+            }
+          },
+          "channels": [
+            {
+              "channel": {
+                "name": "shoulder_pan.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "shoulder_lift.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "elbow_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_roll.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034467,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "gripper.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 1,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false,
+                    "ungraded_reason": "band for 'proprio.gripper_width' has no good, bad bound to interpolate against"
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": 1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": 1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": 4.999999984034467,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "taxonomy_type": "proprio.joint_velocity",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": "dictionary",
+          "score": {
+            "level": "stream",
+            "score": 100.0,
+            "grade": "A",
+            "train_ready": true,
+            "n_contributing": 6,
+            "families": {
+              "integrity": 100.0
+            }
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'proprio.joint_velocity'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'proprio.joint_velocity'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "action_chatter": {
+              "value": 0.5855400437691199,
+              "unit": "normalised",
+              "status": "report_only",
+              "evidence": {
+                "n_channels": 6,
+                "n_samples": 6,
+                "ungraded_reason": "no threshold band for 'proprio.joint_velocity' or 'default'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 5,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'proprio.joint_velocity' or 'default'"
+              }
+            }
+          },
+          "channels": [
+            {
+              "channel": {
+                "name": "shoulder_pan.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 16.666666666666668,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 5.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "shoulder_lift.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 16.666666666666668,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 6.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "elbow_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 16.666666666666668,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 7.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_flex.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034468,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 16.666666666666668,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 8.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "wrist_roll.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 2,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034467,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 16.666666666666668,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 9.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            },
+            {
+              "channel": {
+                "name": "gripper.pos",
+                "axis": null
+              },
+              "score": {
+                "level": "channel",
+                "score": 100.0,
+                "grade": "A",
+                "train_ready": true,
+                "n_contributing": 1,
+                "families": {
+                  "integrity": 100.0
+                }
+              },
+              "metrics": {
+                "missing_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "good",
+                  "evidence": {
+                    "n_missing": 0,
+                    "n_samples": 6
+                  }
+                },
+                "flatline_pct": {
+                  "value": 0.0,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "longest_run": 1,
+                    "longest_run_s": 0.0,
+                    "never_changed": false,
+                    "ungraded_reason": "band for 'proprio.gripper_width' has no good, bad bound to interpolate against"
+                  }
+                },
+                "spike_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 51 samples"
+                  }
+                },
+                "drift": {
+                  "value": -1799.99994060823,
+                  "unit": "unit/min",
+                  "status": "report_only",
+                  "evidence": {
+                    "slope_per_min": -1799.99994060823,
+                    "r_squared": 0.9999999999999994,
+                    "total_change": -4.999999984034467,
+                    "n_samples": 6,
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "snr_db": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "fewer than 8 samples"
+                  }
+                },
+                "vel_saturation_pct": {
+                  "value": 33.333333333333336,
+                  "unit": "%",
+                  "status": "report_only",
+                  "evidence": {
+                    "max_abs_velocity": 10.0,
+                    "limit_source": "observed",
+                    "ungraded_reason": "report_only by policy design"
+                  }
+                },
+                "limit_proximity_pct": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_position'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "hf_vibration_ratio": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "p99_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "max_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                },
+                "mean_torque": {
+                  "value": null,
+                  "unit": null,
+                  "status": "not_applicable",
+                  "evidence": {
+                    "reason": "needs one of ['proprio.joint_torque'], got 'proprio.joint_velocity'"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "taxonomy_type": "unmapped.observation.images.up",
+          "instance": null,
+          "attribution": "single",
+          "mapping_source": null,
+          "score": {
+            "level": "stream",
+            "score": null,
+            "grade": null,
+            "train_ready": null,
+            "n_contributing": 0,
+            "families": {}
+          },
+          "metrics": {
+            "dead_taxel_pct": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "hysteresis": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "mean_jerk_norm": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "max_abs_jerk": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "action_chatter": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "still_drift": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.images.up'"
+              }
+            },
+            "effective_hz": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "dt_jitter_ms": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "drop_rate": {
+              "value": null,
+              "unit": null,
+              "status": "not_applicable",
+              "evidence": {
+                "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable"
+              }
+            },
+            "monotonic_violations": {
+              "value": 0.0,
+              "unit": "count",
+              "status": "report_only",
+              "evidence": {
+                "n_gaps": 5,
+                "fraction": 0.0,
+                "n_repeated": 0,
+                "n_backwards": 0,
+                "first_sample": null,
+                "ungraded_reason": "no threshold band for 'unmapped.observation.images.up' or 'default'"
+              }
+            }
+          },
+          "channels": []
+        }
+      ],
+      "tasks": [
+        "pick up the cube"
+      ]
+    }
+  ],
+  "findings": [],
+  "skipped": [],
+  "unresolved": [],
+  "policy_version": 1,
+  "duration_s": 0.12268826900000818,
+  "source": {
+    "uri": "tests/fixtures/lerobot_v3_tiny",
+    "protocol": "file",
+    "repo_id": null,
+    "revision": null,
+    "size_bytes": 12454,
+    "file_count": 4
+  },
+  "datasets": [
+    {
+      "adapter": "lerobot_v3",
+      "path": {
+        "path": "tests/fixtures/lerobot_v3_tiny",
+        "protocol": "",
+        "storage_options": {}
+      },
+      "episode_count": 2,
+      "nominal_rate_hz": 30.0,
+      "robot_type": "so100_follower"
+    }
+  ],
+  "mapping_overrides": [],
+  "gate": {
+    "n_episodes": 2,
+    "failing_episodes": [],
+    "failing_share": 0.0,
+    "task_traits": [],
+    "dataset_traits": [],
+    "uncapped_grade": "A",
+    "cap": null,
+    "pruned_score": null,
+    "pruned_grade": null,
+    "train_ready_after_pruning": null,
+    "coverage": {
+      "families_graded": [
+        "integrity"
+      ],
+      "graded_checks_per_episode": 22.0,
+      "not_observable": [
+        {
+          "metric": "action_chatter",
+          "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'",
+          "share": 0.6666666666666666
+        },
+        {
+          "metric": "dead_taxel_pct",
+          "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "drop_rate",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "dt_jitter_ms",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "effective_hz",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "energy_proxy",
+          "reason": "episode carries no proprio.joint_torque stream",
+          "share": 1.0
+        },
+        {
+          "metric": "hf_vibration_ratio",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "hysteresis",
+          "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "limit_proximity_pct",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "max_abs_jerk",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "max_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "mean_jerk_norm",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "mean_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "p99_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "snr_db",
+          "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s",
+          "share": 1.0
+        },
+        {
+          "metric": "spike_pct",
+          "reason": "fewer than 51 samples",
+          "share": 1.0
+        },
+        {
+          "metric": "still_drift",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "vel_saturation_pct",
+          "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'",
+          "share": 0.5
+        }
+      ]
+    },
+    "summary": "Readiness 100/100: no blocking episodes. Graded on integrity, 22 checks per episode. Not observable — action_chatter: needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'; dead_taxel_pct: needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'; drop_rate: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; dt_jitter_ms: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; effective_hz: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; energy_proxy: episode carries no proprio.joint_torque stream; hf_vibration_ratio: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; hysteresis: needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'; limit_proximity_pct: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; max_abs_jerk: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; max_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; mean_jerk_norm: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; mean_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; p99_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; snr_db: sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s; spike_pct: fewer than 51 samples; still_drift: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; vel_saturation_pct: needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'."
+  },
+  "readiness": {
+    "score": 100.0,
+    "evaluated_episodes": 2,
+    "passing_episodes": 2,
+    "blocking_episodes": 0,
+    "passing_quality": 100.0
+  }
+}

@@ -8,6 +8,9 @@
 import logging
 import os
 from collections.abc import Mapping
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
+from uuid import uuid4
 
 # External
 from upath import UPath
@@ -15,19 +18,22 @@ from upath import UPath
 # Internal
 from kalanos.analysis import pipeline
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
+from kalanos.analysis.models.binding import Bundle
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.errors import NothingToGrade
-from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.policy import Policy
-from kalanos.analysis.models.report import Report
-from kalanos.assets.dictionary import load_dictionary, use_dictionary
-from kalanos.assets.mapping import (
-    check_taxonomy_types,
-    load_mapping_file,
-    merge_overrides,
-    sidecar_path,
+from kalanos.analysis.models.provenance import (
+    ExecutionTier,
+    HashScope,
+    Producer,
+    RunInfo,
+    SourceEvidence,
+    content_digest,
 )
+from kalanos.analysis.models.report import Report
+from kalanos.assets.bundle import load_bundle, resolve_run_configuration
+from kalanos.assets.dictionary import load_dictionary, use_dictionary
 from kalanos.assets.policy import load_policy
 from kalanos.core.settings import get_settings
 
@@ -44,6 +50,21 @@ logger = logging.getLogger(__name__)
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
+def _package_version() -> str:
+    """The installed kalanos version, or `unknown` when run from a bare checkout."""
+
+    try:
+        return version("kalanos")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _build_revision() -> str | None:
+    """A build revision, when the environment supplies one; never guessed."""
+
+    return os.environ.get("KALANOS_BUILD_REVISION") or None
+
+
 def grade(
     path: str | os.PathLike[str] | UPath,
     *,
@@ -53,6 +74,8 @@ def grade(
     mapping: Mapping[str, str] | None = None,
     mapping_file: str | os.PathLike[str] | UPath | None = None,
     sidecar: bool = True,
+    bundle: str | os.PathLike[str] | UPath | Bundle | None = None,
+    tier: ExecutionTier | None = None,
 ) -> Report:
     """Grade a recording, or every recording under a folder.
 
@@ -76,6 +99,13 @@ def grade(
         mapped to a dictionary key. The same as `--map`.
     mapping_file : str, PathLike, UPath or None
         A YAML mapping file, the same as `--map-file`.
+    bundle : str, PathLike, UPath, Bundle or None
+        A configuration bundle (`--profile`): binding, requirements, policy
+        and execution sections with separate identities. `None` grades under
+        the built-in `numeric-core` scope at the standard tier.
+    tier : ExecutionTier or None
+        Overrides the bundle's execution tier. A tier never changes the
+        requirements: skipping a required capability makes episodes unknown.
     sidecar : bool
         Whether to read a `kalanos-map.yaml` in the graded root,
         or beside it when the root is a file.
@@ -125,31 +155,71 @@ def grade(
         dictionary = load_dictionary(settings.dictionary_path)
     use_dictionary(dictionary)
 
-    # Step 3: merge the mapping overrides, and refuse an unknown type before any read.
-    sidecar_overrides: list[MappingOverride] = []
-    if sidecar:
-        candidate = sidecar_path(root)
-        if candidate.exists():
-            sidecar_overrides = load_mapping_file(
-                candidate, origin=OverrideOrigin.SIDECAR
-            )
-            logger.info("applying mapping sidecar %s", candidate)
-    file_overrides = (
-        load_mapping_file(UPath(mapping_file), origin=OverrideOrigin.FILE)
-        if mapping_file is not None
-        else []
+    # Step 3: resolve every configuration input through the one resolver
+    # `benchmark` also uses, so both describe the same interpretation.
+    loaded_bundle: Bundle | None
+    bundle_path: UPath | None = None
+    if isinstance(bundle, Bundle):
+        loaded_bundle = bundle
+    elif bundle is not None:
+        bundle_path = UPath(bundle)
+        loaded_bundle = load_bundle(bundle_path)
+    else:
+        loaded_bundle = None
+    if loaded_bundle is not None and loaded_bundle.policy.path is not None:
+        policy = load_policy(UPath(loaded_bundle.policy.path))
+    config = resolve_run_configuration(
+        root,
+        dictionary=dictionary,
+        policy_digest=content_digest(policy.model_dump(mode="json")),
+        bundle=loaded_bundle,
+        bundle_path=bundle_path,
+        mapping=mapping,
+        mapping_file=UPath(mapping_file) if mapping_file is not None else None,
+        sidecar=sidecar,
+        tier=tier,
     )
-    argument_overrides = [
-        MappingOverride(feature=k, taxonomy_type=v, origin=OverrideOrigin.ARGUMENT)
-        for k, v in (mapping or {}).items()
-    ]
-    overrides = merge_overrides(sidecar_overrides, file_overrides, argument_overrides)
-    check_taxonomy_types(overrides, dictionary)
-    logger.info("grading %s", root)
+    for conflict in config.conflicts:
+        logger.info(
+            "mapping %s: %s from %s displaced %s",
+            conflict.feature,
+            conflict.winner.taxonomy_type,
+            conflict.winner.origin.value,
+            ", ".join(
+                f"{d.taxonomy_type} ({d.origin.value})" for d in conflict.displaced
+            ),
+        )
+    logger.info("grading %s under scope %s", root, config.scope.requirements_id)
+
+    producer = Producer(version=_package_version(), revision=_build_revision())
+    run_info = RunInfo(
+        id=uuid4().hex,
+        started_at=datetime.now(timezone.utc),
+        tier=config.scope.tier,
+        source=SourceEvidence(
+            scope=HashScope.METADATA,
+            digest=None,
+            covered_inputs=0,
+            complete=False,
+            revision=source.revision,
+        ),
+        requirements=config.requirements_id,
+        policy=config.policy_id,
+        binding=config.binding_id,
+        dictionary=config.dictionary_id,
+    )
 
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,
     # so an empty report means the path itself held nothing.
-    report = pipeline.run(root, policy=policy, source=source, overrides=overrides)
+    report = pipeline.run(
+        root,
+        policy=policy,
+        source=source,
+        overrides=config.overrides,
+        config=config,
+        producer=producer,
+        run_info=run_info,
+    )
     if not (report.episodes or report.skipped or report.unresolved):
         raise NothingToGrade(f"{root} contains nothing to grade")
     return report

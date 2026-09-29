@@ -38,6 +38,7 @@ ASSET_LOADERS = {
     LOADER_SOURCE,
     PACKAGE_ROOT / "assets" / "dictionary.py",
     PACKAGE_ROOT / "assets" / "mapping.py",
+    PACKAGE_ROOT / "assets" / "bundle.py",
 }
 
 # render.py writes a Report as YAML; it never reads a configuration file, so it

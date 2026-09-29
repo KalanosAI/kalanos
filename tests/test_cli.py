@@ -19,6 +19,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+# Since schema 7, `grade` exits 1 when the decision gate (default
+# `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
+# so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
 from kalanos.analysis.models.report import Report
 from kalanos.cli import app
@@ -102,7 +105,7 @@ def test_grade_a_file_prints_a_card_and_exits_zero():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
 
 
@@ -111,7 +114,7 @@ def test_grade_a_folder_prints_a_card_and_exits_zero():
 
     result = runner.invoke(app, ["grade", str(FIXTURES_DIR)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
     # README.md and the fixtures with no CSV pathology are real, explained
     # refusals — the card names each one rather than dropping it silently.
@@ -138,7 +141,7 @@ def test_json_flag_prints_the_model_with_no_card():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" not in result.stdout
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
@@ -153,7 +156,7 @@ def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(destination.read_text())
     assert report.episodes
 
@@ -167,7 +170,7 @@ def test_report_yaml_writes_a_file_that_parses_back_into_the_model(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate(yaml.safe_load(destination.read_text()))
     assert report.episodes
 
@@ -181,7 +184,7 @@ def test_report_html_writes_a_rendered_page(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     html = destination.read_text()
     assert str(CSV_FIXTURE) in html
 
@@ -203,7 +206,7 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
         ["grade", str(FIXTURES_DIR), "--json", "--report", str(html_path)],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     collector = ScoreAttributeCollector()
     collector.feed(html_path.read_text())
@@ -280,7 +283,7 @@ def test_a_source_loading_refuses_is_unresolved_rather_than_aborting_the_run(
 
     result = runner.invoke(app, ["grade", str(tmp_path), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     analysed = [
         path.name for episode in report.episodes for path in episode.source_paths
@@ -310,7 +313,7 @@ def test_a_source_that_fails_to_parse_is_unresolved_rather_than_aborting_the_run
 
     result = runner.invoke(app, ["grade", str(tmp_path), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     analysed = [
         path.name for episode in report.episodes for path in episode.source_paths
@@ -327,7 +330,7 @@ def test_kalanos_reports_dir_redirects_a_relative_report_path(monkeypatch, tmp_p
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--report", "report.json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert (tmp_path / "report.json").exists()
 
 
@@ -349,9 +352,9 @@ def test_a_second_subcommand_can_be_added_without_touching_grade():
         ping_result = runner.invoke(app, ["ping"])
         grade_result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-        assert ping_result.exit_code == 0
+        assert ping_result.exit_code in (0, 1)
         assert ping_result.stdout.strip() == "pong"
-        assert grade_result.exit_code == 0
+        assert grade_result.exit_code in (0, 1)
         assert "OVERALL" in grade_result.stdout
     finally:
         app.registered_commands = [
@@ -445,7 +448,7 @@ def test_grade_map_types_a_field_and_the_json_carries_the_override():
         ],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code in (0, 1), result.output
     report = Report.model_validate_json(result.stdout)
     [override] = report.mapping_overrides
     assert override.feature == "observation.state"

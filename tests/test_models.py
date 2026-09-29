@@ -13,7 +13,6 @@ import polars as pl
 import pytest
 from upath import UPath
 
-# Internal
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -35,6 +34,9 @@ from kalanos.analysis.models.report import (
     Report,
 )
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+
+# Internal
+from helpers import decided
 
 
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
@@ -99,20 +101,22 @@ def _sample_report() -> Report:
         score=channel_score,
         metrics={"drop_rate": metric},
     )
-    episode = GradedEpisode(
-        id="arm_multi_device",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("/data/example/arm_multi_device.csv")],
-        score=channel_score,
-        streams=[
-            GradedStream(
-                taxonomy_type="unmapped.tcp_pose",
-                instance="armA",
-                score=channel_score,
-                channels=[channel],
-            )
-        ],
+    episode = decided(
+        GradedEpisode(
+            id="arm_multi_device",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("/data/example/arm_multi_device.csv")],
+            score=channel_score,
+            streams=[
+                GradedStream(
+                    taxonomy_type="unmapped.tcp_pose",
+                    instance="armA",
+                    score=channel_score,
+                    channels=[channel],
+                )
+            ],
+        )
     )
     return Report(root=UPath("/data/example"), score=channel_score, episodes=[episode])
 
