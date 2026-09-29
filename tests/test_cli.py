@@ -15,6 +15,7 @@ import csv
 from pathlib import Path
 
 # External
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -430,3 +431,33 @@ def test_new_adapter_twice_exits_two_without_overwriting(tmp_path):
 
     assert result.exit_code == 2
     assert written.read_text() == "# mine\n"
+
+
+def test_grade_map_types_a_field_and_the_json_carries_the_override():
+    result = runner.invoke(
+        app,
+        [
+            "grade",
+            str(FIXTURES_DIR / "lerobot_v3_tiny"),
+            "--map",
+            "observation.state=proprio.joint_position",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = Report.model_validate_json(result.stdout)
+    [override] = report.mapping_overrides
+    assert override.feature == "observation.state"
+    assert override.taxonomy_type == "proprio.joint_position"
+
+
+@pytest.mark.parametrize("value", ["nonsense", "missing.field=proprio.joint_position"])
+def test_grade_map_that_cannot_apply_exits_two(value):
+    result = runner.invoke(
+        app, ["grade", str(FIXTURES_DIR / "lerobot_v3_tiny"), "--map", value]
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith("kalanos: ")
+    assert result.stdout == ""

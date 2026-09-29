@@ -33,8 +33,12 @@ PACKAGE_ROOT = REPO_ROOT / "src" / "kalanos"
 LOADER_SOURCE = PACKAGE_ROOT / "assets" / "policy.py"
 
 # Reading a YAML file is a privilege the asset loaders hold and nothing else does:
-# one loader per packaged asset, each owning its own schema.
-ASSET_LOADERS = {LOADER_SOURCE, PACKAGE_ROOT / "assets" / "dictionary.py"}
+# one loader per YAML shape, each owning its own schema.
+ASSET_LOADERS = {
+    LOADER_SOURCE,
+    PACKAGE_ROOT / "assets" / "dictionary.py",
+    PACKAGE_ROOT / "assets" / "mapping.py",
+}
 
 # render.py writes a Report as YAML; it never reads a configuration file, so it
 # is exempt from the import ban without being an asset loader itself.

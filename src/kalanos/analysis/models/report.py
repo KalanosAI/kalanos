@@ -23,7 +23,13 @@ from pydantic import BaseModel, ConfigDict, Field
 # Internal
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
-from kalanos.analysis.models.domain import Attribution, Channel, Episode
+from kalanos.analysis.models.domain import (
+    Attribution,
+    Channel,
+    Episode,
+    MappingSource,
+)
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.policy import Policy
@@ -37,7 +43,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.4.0"
+CURRENT_SCHEMA_VERSION = "6.5.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -100,6 +106,8 @@ class GradedStream(BaseModel):
         Which subject it belongs to, or `None` for a single-subject recording.
     attribution : Attribution
         Where `instance` came from — mirrors `domain.Stream.attribution`.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided — mirrors `domain.Stream.mapping_source`.
     score : ScoreResult
         The Stream-level rollup over the stream's own metrics and `channels`.
     metrics : dict[str, MetricResult]
@@ -112,6 +120,7 @@ class GradedStream(BaseModel):
     taxonomy_type: str
     instance: str | None = None
     attribution: Attribution = Attribution.SINGLE
+    mapping_source: MappingSource | None = None
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     channels: list[GradedChannel] = Field(default_factory=list)
@@ -369,6 +378,9 @@ class Report(BaseModel):
     datasets : list[DatasetInfo]
         What the adapter declared about each path it read,
         one entry per path, in walk order.
+    mapping_overrides : list[MappingOverride]
+        Every per-run override applied, with where it came from.
+        Kalanos records each type as given and does not verify it.
 
     Letter grades are deprecated since 0.6.5: `score.grade`, `gate.cap`,
     `gate.uncapped_grade` and `gate.pruned_grade` are still written for
@@ -386,5 +398,6 @@ class Report(BaseModel):
     duration_s: float | None = None
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
+    mapping_overrides: list[MappingOverride] = Field(default_factory=list)
     gate: Gate | None = None
     readiness: Readiness | None = None

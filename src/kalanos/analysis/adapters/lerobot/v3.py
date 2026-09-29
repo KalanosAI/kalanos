@@ -34,7 +34,13 @@ from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
-from kalanos.analysis.models.domain import Clock, Episode, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Clock,
+    Episode,
+    Kind,
+    MappingSource,
+    Stream,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -96,6 +102,7 @@ def _video_stream(
     timestamps: pl.Series,
     dataset_root: UPath,
     *,
+    mapping_source: MappingSource | None,
     is_regular: bool,
 ) -> Stream:
     """Build one video Stream for `video_key`, its payload lazy and undecoded.
@@ -115,6 +122,8 @@ def _video_stream(
         The episode's own timestamps, shared across every one of its streams.
     dataset_root : UPath
         The dataset root, `video_path` is resolved relative to it.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided.
     is_regular : bool
         Whether the episode's own sampling classified as regular.
 
@@ -142,6 +151,7 @@ def _video_stream(
         ),
         source_path=video_path,
         source_field=video_key,
+        mapping_source=mapping_source,
         clock=Clock.UNKNOWN,
         is_regular=is_regular,
         channels=[],
@@ -303,9 +313,10 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         taxonomy_type,
                         timestamps,
                         path,
+                        mapping_source=mapping_source,
                         is_regular=is_regular,
                     )
-                    for video_key, taxonomy_type in plan.video.items()
+                    for video_key, (taxonomy_type, mapping_source) in plan.video.items()
                 )
             except AdapterRefusal:
                 raise

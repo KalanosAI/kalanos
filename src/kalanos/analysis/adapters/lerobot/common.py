@@ -25,6 +25,7 @@ from kalanos.analysis.models.domain import (
     Clock,
     FramePayload,
     Kind,
+    MappingSource,
     Stream,
 )
 from kalanos.assets.dictionary import load_default_dictionary
@@ -83,14 +84,15 @@ class FeaturePlan:
 
     Attributes
     ----------
-    series : dict[str, tuple[str, list[Channel]]]
-        Each series feature key, mapped to its taxonomy type and channels.
-    video : dict[str, str]
-        Each video feature key, mapped to its taxonomy type.
+    series : dict[str, tuple[str, MappingSource | None, list[Channel]]]
+        Each series feature key, mapped to its taxonomy type, how that was decided,
+        and its channels.
+    video : dict[str, tuple[str, MappingSource | None]]
+        Each video feature key, mapped to its taxonomy type and how that was decided.
     """
 
-    series: dict[str, tuple[str, list[Channel]]]
-    video: dict[str, str]
+    series: dict[str, tuple[str, MappingSource | None, list[Channel]]]
+    video: dict[str, tuple[str, MappingSource | None]]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -146,7 +148,9 @@ def video_keys(info: dict[str, Any]) -> list[str]:
     ]
 
 
-def resolve_taxonomy(feature: str, spec: dict[str, Any], dictionary: Dictionary) -> str:
+def resolve_taxonomy(
+    feature: str, spec: dict[str, Any], dictionary: Dictionary
+) -> tuple[str, MappingSource | None]:
     """Resolve one feature's taxonomy type: its key first, then its declared `names`.
 
     Tries the feature key itself first.
@@ -164,23 +168,24 @@ def resolve_taxonomy(feature: str, spec: dict[str, Any], dictionary: Dictionary)
 
     Returns
     -------
-    str
-        The stream's taxonomy type.
+    tuple[str, MappingSource or None]
+        The stream's taxonomy type, and `DICTIONARY` when the key matched,
+        `DECLARED_NAMES` when the names did, or `None` when it stayed unmapped.
     """
 
     [key_role] = roles([feature], dictionary)
-    taxonomy_type = key_role.taxonomy_type
+    if key_role.taxonomy_type is not None:
+        return key_role.taxonomy_type, MappingSource.DICTIONARY
 
     names: list[str] = declared_names(spec)
-    if taxonomy_type is None and names:
+    if names:
         name_roles = roles(names, dictionary)
         resolved = {role.taxonomy_type for role in name_roles if role.taxonomy_type}
         if len(resolved) == 1:
             [taxonomy_type] = resolved
+            return taxonomy_type, MappingSource.DECLARED_NAMES
 
-    if taxonomy_type is None:
-        taxonomy_type = f"{UNMAPPED_TAXONOMY_PREFIX}.{feature}"
-    return taxonomy_type
+    return f"{UNMAPPED_TAXONOMY_PREFIX}.{feature}", None
 
 
 def declared_names(spec: dict[str, Any]) -> list[str]:
@@ -256,7 +261,7 @@ def channels_for(
 
 def taxonomy_and_channels(
     feature: str, spec: dict[str, Any], dictionary: Dictionary
-) -> tuple[str, list[Channel]]:
+) -> tuple[str, MappingSource | None, list[Channel]]:
     """Resolve one series feature's taxonomy type and its channels together.
 
     Parameters
@@ -270,13 +275,12 @@ def taxonomy_and_channels(
 
     Returns
     -------
-    tuple[str, list[Channel]]
-        `resolve_taxonomy`'s and `channels_for`'s results, paired.
+    tuple[str, MappingSource or None, list[Channel]]
+        `resolve_taxonomy`'s and `channels_for`'s results, together.
     """
 
-    return resolve_taxonomy(feature, spec, dictionary), channels_for(
-        feature, spec, dictionary
-    )
+    taxonomy_type, mapping_source = resolve_taxonomy(feature, spec, dictionary)
+    return taxonomy_type, mapping_source, channels_for(feature, spec, dictionary)
 
 
 def feature_plan(info: dict[str, Any], dictionary: Dictionary) -> FeaturePlan:
@@ -367,6 +371,7 @@ def series_stream(
     timestamps: pl.Series,
     source_path: UPath,
     *,
+    mapping_source: MappingSource | None,
     is_regular: bool,
 ) -> Stream:
     """Build one series Stream for `feature`, one column per channel.
@@ -385,6 +390,8 @@ def series_stream(
         The episode's own timestamps, shared across every one of its streams.
     source_path : UPath
         The data parquet this stream's rows were read from.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided.
     is_regular : bool
         Whether the episode's own sampling classified as regular.
 
@@ -414,6 +421,7 @@ def series_stream(
         payload=FramePayload(frame=payload_frame),
         source_path=source_path,
         source_field=feature,
+        mapping_source=mapping_source,
         # LeRobot's timestamp is frame_index / fps:
         # a timebase synthesised from the declared rate, not a recorded capture clock.
         clock=Clock.UNKNOWN,
@@ -461,7 +469,7 @@ def series_streams(
     """
 
     streams = []
-    for feature, (taxonomy_type, channels) in plan.series.items():
+    for feature, (taxonomy_type, mapping_source, channels) in plan.series.items():
         if feature not in episode_frame.columns:
             logger.debug(
                 "%s: episode %s: declared feature %r has no column",
@@ -478,6 +486,7 @@ def series_streams(
                 taxonomy_type,
                 timestamps,
                 source_path,
+                mapping_source=mapping_source,
                 is_regular=is_regular,
             )
         )

@@ -24,7 +24,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     series_stream,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
-from kalanos.analysis.models.domain import Channel, FramePayload, Kind
+from kalanos.analysis.models.domain import Channel, FramePayload, Kind, MappingSource
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.assets.dictionary import load_default_dictionary
@@ -178,6 +178,7 @@ def test_a_feature_key_resolves_through_the_dictionary():
     )
 
     assert velocity.taxonomy_type == "proprio.joint_velocity"
+    assert velocity.mapping_source is MappingSource.DICTIONARY
 
 
 def test_an_unresolvable_feature_reaches_the_report_unmapped():
@@ -187,6 +188,7 @@ def test_an_unresolvable_feature_reaches_the_report_unmapped():
     state = next(s for s in first.streams if s.source_field == "observation.state")
 
     assert state.taxonomy_type == "unmapped.observation.state"
+    assert state.mapping_source is None
     assert [c.name for c in state.channels] == _MOTOR_NAMES
 
 
@@ -198,11 +200,21 @@ def test_a_video_key_resolves_through_the_dictionary_by_its_own_key():
     test exercises the success path directly rather than through the fixture.
     """
 
-    taxonomy_type = resolve_taxonomy(
+    resolved = resolve_taxonomy(
         "observation.images.wrist", {"dtype": "video"}, load_default_dictionary()
     )
 
-    assert taxonomy_type == "extero.wrist_rgb"
+    assert resolved == ("extero.wrist_rgb", MappingSource.DICTIONARY)
+
+
+def test_a_feature_resolves_through_its_declared_names_when_its_key_does_not():
+    """Verify an unlisted key whose channel names agree on one type takes it."""
+
+    spec = {"dtype": "float32", "shape": [2], "names": ["joint_vel_0", "joint_vel_1"]}
+
+    resolved = resolve_taxonomy("observation.foo", spec, load_default_dictionary())
+
+    assert resolved == ("proprio.joint_velocity", MappingSource.DECLARED_NAMES)
 
 
 def test_a_v2_dataset_is_declined(tmp_path):
@@ -231,6 +243,7 @@ def test_a_fixed_size_array_feature_unnests_into_one_column_per_channel():
         "unmapped.observation.state",
         pl.Series([0.0, 0.1]),
         UPath("data/chunk-000/file-000.parquet"),
+        mapping_source=None,
         is_regular=True,
     )
 

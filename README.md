@@ -311,6 +311,32 @@ Environment variables:
 | `KALANOS_REMOTE_MAX_FILES` | `10000` | Most files in a remote dataset; `--max-remote-files` overrides per run |
 | `HF_TOKEN` | unset | Opens private or gated Hugging Face datasets |
 
+### Typing a field for one run
+
+Some field names mean different things on different robots, so the dictionary leaves them unmapped on purpose. When you know what a field holds, type it for one run without touching the dictionary:
+
+```bash
+kalanos grade hf://datasets/lerobot/toto --map observation.state=proprio.joint_position
+```
+
+The same override can come from three places, merged per field:
+
+1. `--map FEATURE=TYPE`, repeatable. From Python, `grade(path, mapping={...})`.
+2. `--map-file PATH`. From Python, `grade(path, mapping_file=...)`.
+3. A `kalanos-map.yaml` sidecar in the graded folder, or beside the graded file. `--no-sidecar` (or `sidecar=False`) ignores it.
+
+`--map` beats `--map-file`, which beats the sidecar. Both files use the same shape:
+
+```yaml
+schema_version: 1
+features:
+  observation.state: proprio.joint_position
+```
+
+`FEATURE` is the stream's source field: the LeRobot feature key, the HDF5 dataset key, the MCAP topic. For CSV and other tables it is the grouped column stem: `q` covers `q_0..q_5`. `TYPE` must be a key in the dictionary. An override naming a field no stream has, or a type the dictionary lacks, stops the run with exit code 2.
+
+Kalanos records the type as given and does not verify it. The report records every override applied, with where it came from, in `report.mapping_overrides`, and each stream's `mapping_source` says whether the dictionary, the format's declared channel names, or an override typed it.
+
 ---
 
 ## Contributing
