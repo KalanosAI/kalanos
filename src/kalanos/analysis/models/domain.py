@@ -175,6 +175,16 @@ class Attribution(str, Enum):
     # fmt: on
 
 
+class MappingSource(str, Enum):
+    """How a Stream's `taxonomy_type` was decided."""
+
+    # fmt: off
+    DICTIONARY     = "dictionary"      # The dictionary matched the field's own name
+    DECLARED_NAMES = "declared_names"  # The declared channel names agreed on one type
+    OVERRIDE       = "override"        # The user mapped the field for this run
+    # fmt: on
+
+
 class Channel(BaseModel):
     """One scalar series within a Stream.
 
@@ -223,6 +233,9 @@ class Stream(BaseModel):
     source_field : str or None
         What the stream was called in that file,
         or `None` when it had no name of its own.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided. `None` when the stream is unmapped.
+        Defaults to `DICTIONARY` for a typed stream when a caller does not name it.
     clock : Clock
         Which timebase `timestamps` are on.
     timestamp_dtype : TimestampDtype
@@ -249,6 +262,7 @@ class Stream(BaseModel):
     payload: Payload | None = None
     source_path: AnyPath
     source_field: str | None = None
+    mapping_source: MappingSource | None = None
     clock: Clock = Clock.UNKNOWN
     timestamp_dtype: TimestampDtype
     is_regular: bool = False
@@ -281,6 +295,34 @@ class Stream(BaseModel):
                     if data.get("instance") is not None
                     else Attribution.SINGLE
                 ),
+            }
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_mapping_source_from_taxonomy(cls, data: Any) -> Any:
+        """Fill in `mapping_source` from `taxonomy_type` when a caller does not name it.
+
+        An `unmapped.*` stream gets `None`; a typed one gets `DICTIONARY`.
+
+        Parameters
+        ----------
+        data : Any
+            The raw input to the model.
+
+        Returns
+        -------
+        Any
+            `data`, with `mapping_source` filled in when it was a dict missing one.
+        """
+
+        if isinstance(data, dict) and "mapping_source" not in data:
+            unmapped = str(data.get("taxonomy_type", "")).startswith(
+                f"{UNMAPPED_TAXONOMY_PREFIX}."
+            )
+            data = {
+                **data,
+                "mapping_source": None if unmapped else MappingSource.DICTIONARY,
             }
         return data
 
@@ -339,6 +381,35 @@ class Stream(BaseModel):
             raise ValueError(
                 f"attribution is {self.attribution.value} but instance is "
                 f"{self.instance!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _mapping_source_and_taxonomy_agree(self) -> "Stream":
+        """Refuse a `mapping_source` that contradicts whether the stream is typed.
+
+        Returns
+        -------
+        Stream
+            `self`, unchanged, once `mapping_source` and `taxonomy_type` agree.
+
+        Raises
+        ------
+        ValueError
+            If an `unmapped.*` stream names a `mapping_source`,
+            or a typed stream has none.
+        """
+
+        unmapped = self.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
+        if unmapped and self.mapping_source is not None:
+            raise ValueError(
+                f"taxonomy_type {self.taxonomy_type!r} is unmapped but "
+                f"mapping_source is {self.mapping_source.value}"
+            )
+        if not unmapped and self.mapping_source is None:
+            raise ValueError(
+                f"taxonomy_type {self.taxonomy_type!r} is typed but "
+                "mapping_source is None"
             )
         return self
 

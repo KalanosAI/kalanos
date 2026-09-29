@@ -15,6 +15,7 @@ It never writes a file; its caller, such as the CLI, does that with
 
 # Built-in
 import logging
+from collections.abc import Mapping, Sequence
 from time import perf_counter
 
 # External
@@ -31,7 +32,9 @@ from kalanos.analysis.models.discovery import (
     SourceCandidate,
     SourceInfo,
 )
-from kalanos.analysis.models.domain import Episode
+from kalanos.analysis.models.domain import Episode, MappingSource
+from kalanos.analysis.models.errors import MappingOverrideError
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
@@ -43,6 +46,14 @@ from kalanos.analysis.reporting.assemble import assemble_report
 # ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 logger = logging.getLogger(__name__)
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# How many seen source fields an unmatched-override error lists before it stops.
+_SEEN_FIELDS_SHOWN = 20
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -92,6 +103,88 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
     ]
 
 
+def _apply_overrides(
+    episodes: list[Episode],
+    by_feature: Mapping[str, MappingOverride],
+    matched: set[str],
+    seen: set[str],
+) -> list[Episode]:
+    """Retype every stream whose `source_field` a mapping override names.
+
+    An override replaces a dictionary match as well as an unmapped fallback.
+
+    Parameters
+    ----------
+    episodes : list[Episode]
+        Everything one adapter read from a candidate.
+    by_feature : Mapping[str, MappingOverride]
+        The run's overrides, keyed by the source field each matches.
+    matched : set[str]
+        Grown in place with every override feature that matched a stream.
+    seen : set[str]
+        Grown in place with every source field read.
+        An unmatched override's error lists them.
+
+    Returns
+    -------
+    list[Episode]
+        The same episodes, in the same order, with matching streams retyped.
+    """
+
+    retyped: list[Episode] = []
+    for episode in episodes:
+        streams = []
+        for stream in episode.streams:
+            if stream.source_field is None:
+                streams.append(stream)
+                continue
+            seen.add(stream.source_field)
+            override = by_feature.get(stream.source_field)
+            if override is None:
+                streams.append(stream)
+                continue
+            matched.add(override.feature)
+            streams.append(
+                stream.model_copy(
+                    update={
+                        "taxonomy_type": override.taxonomy_type,
+                        "mapping_source": MappingSource.OVERRIDE,
+                    }
+                )
+            )
+        retyped.append(episode.model_copy(update={"streams": streams}))
+    return retyped
+
+
+def _unmatched_override_error(
+    unmatched: Sequence[MappingOverride], seen: set[str]
+) -> MappingOverrideError:
+    """Build the error for overrides that matched no stream.
+
+    Parameters
+    ----------
+    unmatched : Sequence[MappingOverride]
+        The overrides no stream's `source_field` equalled.
+    seen : set[str]
+        Every source field the run read.
+
+    Returns
+    -------
+    MappingOverrideError
+        Naming each unmatched feature with its origin, and the fields that were seen.
+    """
+
+    missing = ", ".join(f"{o.feature!r} (from {o.origin.value})" for o in unmatched)
+    fields = sorted(seen)
+    listed = ", ".join(fields[:_SEEN_FIELDS_SHOWN])
+    if len(fields) > _SEEN_FIELDS_SHOWN:
+        listed += f", and {len(fields) - _SEEN_FIELDS_SHOWN} more"
+    return MappingOverrideError(
+        f"mapping override matched no stream: {missing}; "
+        f"source fields seen: {listed or 'none'}"
+    )
+
+
 def with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
     """Fill in every limit a metric's own policy entry asks `describe()` for.
 
@@ -135,7 +228,13 @@ def _lies_under(path: UPath, claimed_root: UPath) -> bool:
     return True
 
 
-def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Report:
+def run(
+    root: UPath,
+    *,
+    policy: Policy,
+    source: SourceInfo | None = None,
+    overrides: Sequence[MappingOverride] = (),
+) -> Report:
     """Grade `root` end to end: walk, select an adapter, read, then assemble.
 
     Parameters
@@ -147,6 +246,9 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         The loaded grading policy to score every metric against.
     source : SourceInfo or None
         What `root` was resolved from, recorded on the Report as given.
+    overrides : Sequence[MappingOverride]
+        Per-run mapping overrides, already merged and checked against the dictionary.
+        Each retypes every stream whose `source_field` equals its `feature`.
 
     Returns
     -------
@@ -159,6 +261,8 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
     AdapterTie
         If more than one discovered adapter bid the same maximum confidence
         on a candidate.
+    MappingOverrideError
+        If an override matched no stream anywhere in the run.
     """
 
     start = perf_counter()
@@ -189,6 +293,9 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
     datasets: list[DatasetInfo] = []
     unresolved: list[UnresolvedSource] = []
     claimed: list[UPath] = []
+    by_feature = {override.feature: override for override in overrides}
+    matched: set[str] = set()
+    seen: set[str] = set()
 
     for candidate in candidates:
         # Step 2: a candidate a directory adapter already claimed was
@@ -241,6 +348,8 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         # Step 6: an adapter's name for a recording is local to the file it read,
         # so re-mint it against the walked root to keep it unique across the run.
         episodes = _qualify_ids(episodes, path=candidate.path, base=base)
+        if by_feature:
+            episodes = _apply_overrides(episodes, by_feature, matched, seen)
         analysed.extend(
             AnalysedEpisode(
                 episode=episode,
@@ -255,6 +364,10 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         if candidate.path.is_dir():
             claimed.append(candidate.path)
 
+    unmatched = [o for o in overrides if o.feature not in matched]
+    if unmatched:
+        raise _unmatched_override_error(unmatched, seen)
+
     # Step 7: grade everything that made it through, and assemble the report.
     logger.info("graded %d episode(s); %d unresolved", len(analysed), len(unresolved))
     return assemble_report(
@@ -266,4 +379,5 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         duration_s=perf_counter() - start,
         source=source,
         datasets=datasets,
+        mapping_overrides=list(overrides),
     )

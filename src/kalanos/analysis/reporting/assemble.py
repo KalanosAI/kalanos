@@ -27,6 +27,7 @@ from kalanos.analysis.metrics.registry import (
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
     ChannelContext,
     EpisodeContext,
@@ -184,6 +185,7 @@ def grade_stream(
             taxonomy_type=stream.taxonomy_type,
             instance=stream.instance,
             attribution=stream.attribution,
+            mapping_source=stream.mapping_source,
             score=stream_score,
             metrics=stream_metrics,
             channels=graded_channels,
@@ -281,6 +283,7 @@ def assemble_report(
     duration_s: float | None = None,
     source: SourceInfo | None = None,
     datasets: Sequence[DatasetInfo] = (),
+    mapping_overrides: Sequence[MappingOverride] = (),
 ) -> Report:
     """Grade every analysed Episode and assemble the run's Report.
 
@@ -305,6 +308,8 @@ def assemble_report(
         What `root` was resolved from, if the caller resolved it.
     datasets : Sequence[DatasetInfo]
         What the adapter declared about each path it read, in walk order.
+    mapping_overrides : Sequence[MappingOverride]
+        The per-run overrides the pipeline applied.
 
     Returns
     -------
@@ -343,6 +348,7 @@ def assemble_report(
         duration_s=duration_s,
         source=source,
         datasets=list(datasets),
+        mapping_overrides=list(mapping_overrides),
         gate=gate,
         readiness=readiness_of(graded_episodes, gate),
     )

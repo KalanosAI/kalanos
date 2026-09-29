@@ -22,6 +22,7 @@ from kalanos.analysis.models.domain import (
     Episode,
     FramePayload,
     Kind,
+    MappingSource,
     Stream,
     TimestampDtype,
 )
@@ -275,6 +276,26 @@ def test_stream_rejects_an_attribution_that_contradicts_instance():
             Path("/data/example/bad.csv"),
             instance="armA",
             attribution=Attribution.UNATTRIBUTED,
+        )
+
+
+def test_stream_defaults_mapping_source_from_whether_it_is_typed():
+    """Verify a typed Stream defaults to DICTIONARY, and an unmapped one to None."""
+
+    typed = _stream(Path("/data/example/typed.csv"), taxonomy_type="proprio.ee_pose")
+    unmapped = _stream(Path("/data/example/unmapped.csv"), taxonomy_type="unmapped.q")
+    assert typed.mapping_source is MappingSource.DICTIONARY
+    assert unmapped.mapping_source is None
+
+
+def test_stream_rejects_a_mapping_source_on_an_unmapped_type():
+    """Verify an unmapped stream cannot claim an override typed it."""
+
+    with pytest.raises(ValueError):
+        _stream(
+            Path("/data/example/bad.csv"),
+            taxonomy_type="unmapped.q",
+            mapping_source=MappingSource.OVERRIDE,
         )
 
 

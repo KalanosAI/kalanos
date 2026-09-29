@@ -29,6 +29,7 @@ from kalanos.analysis.models.metrics import Family
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
+from kalanos.assets.mapping import parse_map_argument
 from kalanos.benchmark import (
     DEFAULT_SAMPLE,
     REFERENCE_DATASETS,
@@ -130,6 +131,34 @@ def grade(
             ),
         ),
     ] = None,
+    map_: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--map",
+            help=(
+                "Type one source field for this run, as FEATURE=TYPE, "
+                "e.g. observation.state=proprio.joint_position. "
+                "Repeatable; beats --map-file and the sidecar."
+            ),
+        ),
+    ] = None,
+    map_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--map-file",
+            help=(
+                "A YAML mapping file: `schema_version: 1` and a `features:` table "
+                "of FEATURE: TYPE. Beats the sidecar."
+            ),
+        ),
+    ] = None,
+    no_sidecar: Annotated[
+        bool,
+        typer.Option(
+            "--no-sidecar",
+            help="Ignore a kalanos-map.yaml in or beside the graded path.",
+        ),
+    ] = False,
 ) -> None:
     """Grade a recording, or every recording in a folder.
 
@@ -149,13 +178,20 @@ def grade(
     max_remote_files : int or None
         Refuse a remote dataset listing more files than this.
         `None` falls back to `Settings.remote_max_files`.
+    map_ : list[str] or None
+        `FEATURE=TYPE` overrides, each typing one source field for this run.
+    map_file : Path or None
+        A YAML mapping file of overrides, beaten by `map_`.
+    no_sidecar : bool
+        Ignore a `kalanos-map.yaml` in the graded root.
 
     Raises
     ------
     typer.Exit
         Code 2 when grading raised a `KalanosError` — `path` does not exist,
         is a remote dataset over a limit, held nothing to report on at all,
-        or two adapters tied on the same file —
+        two adapters tied on the same file,
+        or a mapping override was malformed or matched nothing —
         or when writing `report` failed: an unsupported suffix, a missing directory,
         an unwritable path.
         The reason goes to stderr and nothing is written to stdout.
@@ -174,7 +210,14 @@ def grade(
     # Step 1: grade. The reason is printed, not logged: it explains a non-zero exit,
     # and must reach the user even at a verbosity that silences ERROR records.
     try:
-        result = api.grade(path, limits=limits)
+        mapping = dict(parse_map_argument(text) for text in map_ or [])
+        result = api.grade(
+            path,
+            limits=limits,
+            mapping=mapping,
+            mapping_file=map_file,
+            sidecar=not no_sidecar,
+        )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc

@@ -17,12 +17,15 @@ from kalanos.analysis.models.discovery import (
     SourceInfo,
     SourceLimits,
 )
+from kalanos.analysis.models.domain import MappingSource
 from kalanos.analysis.models.errors import (
     KalanosError,
+    MappingOverrideError,
     NothingToGrade,
     SourceTooLarge,
     SourceUnavailable,
 )
+from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.metrics import Level, MetricResult
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.report import (
@@ -49,8 +52,12 @@ __all__ = [
     "GradedStream",
     "KalanosError",
     "Level",
+    "MappingOverride",
+    "MappingOverrideError",
+    "MappingSource",
     "MetricResult",
     "NothingToGrade",
+    "OverrideOrigin",
     "Policy",
     "Report",
     "ScoreResult",

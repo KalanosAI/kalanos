@@ -50,6 +50,10 @@ PUBLIC_SURFACE = {
     "SourceLimits",
     "SourceTooLarge",
     "DatasetInfo",
+    "MappingOverride",
+    "MappingOverrideError",
+    "MappingSource",
+    "OverrideOrigin",
 }
 
 
@@ -116,4 +120,4 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "6.4.0"
+    assert report.schema_version == "6.5.0"
