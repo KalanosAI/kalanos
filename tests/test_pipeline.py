@@ -40,7 +40,7 @@ from kalanos.analysis.models.domain import (
     Stream,
 )
 from kalanos.analysis.models.policy import MetricPolicy, Policy, ScoreMode
-from kalanos.analysis.pipeline import _with_declared_limits
+from kalanos.analysis.pipeline import with_declared_limits
 from kalanos.assets.policy import load_default_policy
 
 # Local
@@ -302,7 +302,7 @@ def test_with_declared_limits_reads_only_what_the_policys_own_target_source_name
         adapter="stub", path=UPath("."), nominal_rate_hz=30.0, episode_count=None
     )
 
-    filled = _with_declared_limits(policy, info)
+    filled = with_declared_limits(policy, info)
 
     assert filled.metrics["timing.rate_check"].limits == {"nominal_hz": 30.0}
     assert filled.metrics["timing.unset_source"].limits == {}
