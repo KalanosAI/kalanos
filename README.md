@@ -104,7 +104,7 @@ WARN ep_052/timing.jitter_cv
 NOT ANALYSED ───────────────────────────────────────────────────────────────
 FILE                       REASON
 meta/session.json          no_time_index
-schema 6.4.0 · policy v1 · 4.12s
+schema 7.0.0 · policy v1 · 4.12s
 ```
 
 How to read it, top to bottom:
@@ -137,7 +137,7 @@ Readiness = sum of passing episodes' quality scores / number of evaluated episod
 
 So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of the dataset you can train on, times how clean it is. The report names every blocking episode with its reasons, and the readiness once they are excluded ("84 as it is, 100 after excluding 8 episodes"). Findings that describe how the data was recorded rather than a fault in some episodes (the same finding on every episode of a task, or on nearly every episode of the dataset) are reported as traits and block nothing. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` scores without blocking episodes, reproducing 0.5, and so reports no readiness.
 
-Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them, and 0.7.0 removes them.
+Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them and they drive no decision. Since 0.7.0 every episode carries one `eligibility` (`pass`, `blocked`, `review`, `unknown`) under a named scope; see `docs/DECISIONS.md`.
 
 ### What will my data score? Worked examples
 
@@ -211,11 +211,13 @@ The dataset is pinned to one commit and streamed. Anything listing more than 20 
 `--json` prints the full report model to stdout, so you can gate on it:
 
 ```bash
-kalanos grade data/ --json | jq -e '.score.train_ready == true'    # non-zero exit if not train-ready
-kalanos grade data/ --json | jq '.score.score'                      # just the number
+kalanos grade data/                                   # exit 1 if any episode is blocked or unknown
+kalanos grade data/ --fail-on blocked,review,unknown  # a training gate: review must be resolved too
+kalanos grade data/ --fail-on blocked                 # exploratory: only objective blockers fail
+kalanos grade data/ --json | jq '.eligibility_counts, .readiness'
 ```
 
-`kalanos grade` exits with code `2` when it cannot grade at all (missing path, over the remote limit, nothing to grade, unwritable report path), with the reason on stderr.
+Exit codes: `0` the audit completed and no episode carries a status in `--fail-on`; `1` the audit completed and at least one does; `2` invalid configuration or an operational failure (missing path, over the remote limit, nothing to grade, malformed `--profile`, unwritable report path), with the reason on stderr. Exit 1 is a decision gate, not a crash: `review` and `unknown` mean the data needs a decision or more evidence.
 
 **Grade against your own thresholds**
 
@@ -284,7 +286,7 @@ from pathlib import Path
 from kalanos import grade, load_policy
 
 report = grade("recordings/", policy=load_policy(Path("strict.yaml")))
-print(report.score.score, report.score.train_ready)
+print(report.eligibility_counts, report.readiness)
 for finding in report.findings[:5]:
     print(finding.metric_id, finding.severity.value, finding.stream)
 ```

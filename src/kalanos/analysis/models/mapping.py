@@ -27,11 +27,12 @@ MAPPING_SCHEMA_VERSION = 1
 
 
 class OverrideOrigin(str, Enum):
-    """Which of the three override sources an override came from."""
+    """Which override source an override came from, in precedence order."""
 
     # fmt: off
     ARGUMENT = "argument"  # `--map`, or `mapping=` from the library
     FILE     = "file"      # `--map-file`, or `mapping_file=` from the library
+    BUNDLE   = "bundle"    # `--profile`'s `binding.features`, or `bundle=`
     SIDECAR  = "sidecar"   # A `kalanos-map.yaml` in the graded root
     # fmt: on
 

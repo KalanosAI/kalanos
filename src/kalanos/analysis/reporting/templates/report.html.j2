@@ -309,12 +309,21 @@
       <div class="plate-score">
         {{ grade_chip(report.score) }}
         <span class="dataset-score">{% if report.score.score is none %}&ndash;{% else %}{{ "%.1f"|format(report.score.score) }}{% endif %}</span>
-        {% if report.score.train_ready is none %}
+        {% if report.eligibility_counts is not none %}
+        {% set c = report.eligibility_counts %}
+        <span class="verdict {% if c.blocked %}verdict-bad{% elif c.review or c.unknown %}verdict-unknown{% else %}verdict-good{% endif %}">{{ c.pass_count }}/{{ c.total }} eligible{% if c.blocked %}, {{ c.blocked }} blocked{% endif %}{% if c.review %}, {{ c.review }} review{% endif %}{% if c.unknown %}, {{ c.unknown }} unknown{% endif %}</span>
+        {% elif report.score.train_ready is none %}
         <span class="verdict verdict-unknown">train-readiness unknown</span>
         {% elif report.score.train_ready %}
         <span class="verdict verdict-good">train ready</span>
         {% else %}
         <span class="verdict verdict-bad">not train ready</span>
+        {% endif %}
+        {% if report.scope is not none %}
+        <span class="verdict verdict-unknown">scope {{ report.scope.requirements_id }} &middot; {{ report.scope.policy_id }}</span>
+        {% endif %}
+        {% if report.readiness is not none and report.readiness.score is none %}
+        <span class="verdict verdict-unknown">readiness undefined: {{ report.readiness.reasons | join('; ') }}</span>
         {% endif %}
       </div>
     </div>

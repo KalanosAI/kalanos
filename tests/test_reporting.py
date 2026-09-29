@@ -69,7 +69,12 @@ from kalanos.analysis.scoring.score import grade_for, rollup, score_metrics
 from kalanos.assets.policy import load_default_policy
 
 # Local
-from helpers import DisclosureStateCollector, ScoreAttributeCollector, score_attr
+from helpers import (
+    DisclosureStateCollector,
+    ScoreAttributeCollector,
+    decided,
+    score_attr,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -197,13 +202,15 @@ def _sample_report() -> Report:
         metrics={"dt_jitter_ms": _metric(3.5, MetricStatus.WARNING, unit="ms")},
         channels=[channel],
     )
-    episode = GradedEpisode(
-        id="arm_multi_device",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("arm_multi_device.csv")],
-        score=_score(Level.EPISODE, 50.0),
-        streams=[stream],
+    episode = decided(
+        GradedEpisode(
+            id="arm_multi_device",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("arm_multi_device.csv")],
+            score=_score(Level.EPISODE, 50.0),
+            streams=[stream],
+        )
     )
     return Report(
         root=UPath("fixtures"),
@@ -714,10 +721,20 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
     assert report.gate is not None
     assert report.gate.uncapped_grade == independent.grade
     assert report.score.grade == worse(independent.grade, report.gate.cap)
+    # The episode's `train_ready` is the compatibility mirror of its
+    # eligibility, filled in by assembly; an independent rollup leaves it
+    # `None`, so compare everything else.
+    independent_episode = rollup(
+        Level.EPISODE, [gs.score for gs in episode.streams], policy=policy
+    )
     assert (
-        rollup(Level.EPISODE, [gs.score for gs in episode.streams], policy=policy)
+        independent_episode.model_copy(
+            update={"train_ready": episode.score.train_ready}
+        )
         == episode.score
     )
+    assert episode.eligibility is not None
+    assert episode.score.train_ready == episode.eligibility.compatibility_train_ready
     for stream in episode.streams:
         assert stream.channels, f"{stream.instance} lost its channels"
         _, own_score, _ = score_metrics(
@@ -976,13 +993,15 @@ def test_the_cards_overall_line_carries_the_dataset_score_and_grade():
 def test_an_episode_with_no_score_renders_n_a_on_the_card_not_a_zero_or_an_f():
     """Verify score=None sinks to n/a on the card, the same rule the HTML follows."""
 
-    ungraded = GradedEpisode(
-        id="capture_index",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("capture_index.json")],
-        score=_score(Level.EPISODE, None),
-        streams=[],
+    ungraded = decided(
+        GradedEpisode(
+            id="capture_index",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("capture_index.json")],
+            score=_score(Level.EPISODE, None),
+            streams=[],
+        )
     )
     base = _sample_report()
     report = base.model_copy(update={"episodes": [*base.episodes, ungraded]})
@@ -1105,12 +1124,14 @@ def test_the_card_strips_the_dataset_root_from_every_path_cell():
     """
 
     root = UPath("/srv/robot-logs/2026/09/run-14")
-    episode = GradedEpisode(
-        id="arm",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[root / "arm.csv"],
-        score=_score(Level.EPISODE, 50.0),
+    episode = decided(
+        GradedEpisode(
+            id="arm",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[root / "arm.csv"],
+            score=_score(Level.EPISODE, 50.0),
+        )
     )
     report = Report(
         root=root,
@@ -1180,12 +1201,14 @@ def test_a_single_file_run_names_the_file_by_its_bare_name():
     """
 
     path = UPath("/srv/robot-logs/run-14/arm.csv")
-    episode = GradedEpisode(
-        id="arm",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[path],
-        score=_score(Level.EPISODE, 50.0),
+    episode = decided(
+        GradedEpisode(
+            id="arm",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[path],
+            score=_score(Level.EPISODE, 50.0),
+        )
     )
     report = Report(root=path, score=_score(Level.DATASET, 50.0), episodes=[episode])
 
@@ -1343,12 +1366,14 @@ def test_every_metric_status_lands_in_exactly_one_bucket():
 def test_a_report_only_metric_counts_as_a_skip():
     """Verify a report_only metric lands in the SKIP bucket, next to not_applicable."""
 
-    episode = GradedEpisode(
-        id="episode",
-        adapter="csv",
-        adapter_confidence=0.9,
-        score=_score(Level.EPISODE, None),
-        metrics={"drop_rate": _metric(0.1, MetricStatus.REPORT_ONLY)},
+    episode = decided(
+        GradedEpisode(
+            id="episode",
+            adapter="csv",
+            adapter_confidence=0.9,
+            score=_score(Level.EPISODE, None),
+            metrics={"drop_rate": _metric(0.1, MetricStatus.REPORT_ONLY)},
+        )
     )
 
     counts = _metric_counts(episode)
@@ -1403,11 +1428,13 @@ def test_a_run_with_warnings_reads_differently_from_one_without():
 def test_an_episode_where_nothing_ran_does_not_read_as_four_zeroes():
     """Verify an episode with no metrics at all reads as prose, not zero counts."""
 
-    episode = GradedEpisode(
-        id="untouched",
-        adapter="csv",
-        adapter_confidence=0.9,
-        score=_score(Level.EPISODE, None),
+    episode = decided(
+        GradedEpisode(
+            id="untouched",
+            adapter="csv",
+            adapter_confidence=0.9,
+            score=_score(Level.EPISODE, None),
+        )
     )
     report = Report(
         root=UPath("fixtures"), score=_score(Level.DATASET, None), episodes=[episode]
@@ -1444,12 +1471,14 @@ def test_a_five_digit_bucket_count_keeps_every_column_aligned():
     """Verify a bucket count past 9999 widens every column's field, header included."""
 
     metrics = {f"metric_{i}": _metric(1.0, MetricStatus.GOOD) for i in range(10_000)}
-    episode = GradedEpisode(
-        id="huge",
-        adapter="csv",
-        adapter_confidence=0.9,
-        score=_score(Level.EPISODE, 100.0),
-        metrics=metrics,
+    episode = decided(
+        GradedEpisode(
+            id="huge",
+            adapter="csv",
+            adapter_confidence=0.9,
+            score=_score(Level.EPISODE, 100.0),
+            metrics=metrics,
+        )
     )
     report = Report(
         root=UPath("fixtures"), score=_score(Level.DATASET, 100.0), episodes=[episode]
@@ -1522,12 +1551,14 @@ def _container_report(
 
     root = root if root is not None else UPath("fixtures")
     episodes = [
-        GradedEpisode(
-            id=episode_id,
-            adapter="csv",
-            adapter_confidence=0.9,
-            source_paths=[root / "data" / "file-000.parquet"],
-            score=_score(Level.EPISODE, score),
+        decided(
+            GradedEpisode(
+                id=episode_id,
+                adapter="csv",
+                adapter_confidence=0.9,
+                source_paths=[root / "data" / "file-000.parquet"],
+                score=_score(Level.EPISODE, score),
+            )
         )
         for episode_id, score in members
     ]
@@ -1597,12 +1628,14 @@ def test_a_grouped_episode_renders_without_an_ellipsis_at_120_columns():
         / "file-000.mp4",
     ]
     episodes = [
-        GradedEpisode(
-            id=f"lerobot_v3_tiny::episode_00000{i}",
-            adapter="lerobot_v3",
-            adapter_confidence=0.9,
-            source_paths=long_paths,
-            score=_score(Level.EPISODE, score),
+        decided(
+            GradedEpisode(
+                id=f"lerobot_v3_tiny::episode_00000{i}",
+                adapter="lerobot_v3",
+                adapter_confidence=0.9,
+                source_paths=long_paths,
+                score=_score(Level.EPISODE, score),
+            )
         )
         for i, score in enumerate((40.0, 95.0))
     ]
@@ -1707,22 +1740,26 @@ def test_a_grouped_episode_with_more_than_one_file_names_its_count():
 
     root = UPath("fixtures")
     episodes = [
-        GradedEpisode(
-            id="lerobot_v3_tiny::episode_000000",
-            adapter="lerobot_v3",
-            adapter_confidence=0.9,
-            source_paths=[
-                root / "data" / "file-000.parquet",
-                root / "videos" / "up.mp4",
-            ],
-            score=_score(Level.EPISODE, 40.0),
+        decided(
+            GradedEpisode(
+                id="lerobot_v3_tiny::episode_000000",
+                adapter="lerobot_v3",
+                adapter_confidence=0.9,
+                source_paths=[
+                    root / "data" / "file-000.parquet",
+                    root / "videos" / "up.mp4",
+                ],
+                score=_score(Level.EPISODE, 40.0),
+            )
         ),
-        GradedEpisode(
-            id="lerobot_v3_tiny::episode_000001",
-            adapter="lerobot_v3",
-            adapter_confidence=0.9,
-            source_paths=[root / "data" / "file-000.parquet"],
-            score=_score(Level.EPISODE, 95.0),
+        decided(
+            GradedEpisode(
+                id="lerobot_v3_tiny::episode_000001",
+                adapter="lerobot_v3",
+                adapter_confidence=0.9,
+                source_paths=[root / "data" / "file-000.parquet"],
+                score=_score(Level.EPISODE, 95.0),
+            )
         ),
     ]
     report = Report(root=root, score=_score(Level.DATASET, 100.0), episodes=episodes)
@@ -1754,12 +1791,14 @@ def test_the_grade_column_survives_long_content_at_a_narrow_width():
         / "observation.images.up"
         / "episode_000000.mp4",
     ]
-    episode = GradedEpisode(
-        id="solo",
-        adapter="lerobot_v2",
-        adapter_confidence=0.9,
-        source_paths=long_paths,
-        score=_score(Level.EPISODE, 82.0),
+    episode = decided(
+        GradedEpisode(
+            id="solo",
+            adapter="lerobot_v2",
+            adapter_confidence=0.9,
+            source_paths=long_paths,
+            score=_score(Level.EPISODE, 82.0),
+        )
     )
     report = Report(root=root, score=_score(Level.DATASET, 82.0), episodes=[episode])
     assert report.score.grade is not None
@@ -1873,13 +1912,15 @@ def test_an_unattributed_stream_renders_its_attribution_everywhere():
         score=_score(Level.STREAM, 50.0),
         channels=[channel],
     )
-    episode = GradedEpisode(
-        id="arm_multi_device",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("arm_multi_device.csv")],
-        score=_score(Level.EPISODE, 50.0),
-        streams=[stream],
+    episode = decided(
+        GradedEpisode(
+            id="arm_multi_device",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("arm_multi_device.csv")],
+            score=_score(Level.EPISODE, 50.0),
+            streams=[stream],
+        )
     )
     report = Report(
         root=UPath("fixtures"), score=_score(Level.DATASET, 50.0), episodes=[episode]
@@ -1909,13 +1950,15 @@ def test_a_stream_carrying_a_finding_starts_expanded_and_a_clean_one_stays_shut(
         score=_score(Level.STREAM, 100.0),
         channels=[clean],
     )
-    episode = GradedEpisode(
-        id="arm_multi_device",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("arm_multi_device.csv")],
-        score=_score(Level.EPISODE, 75.0),
-        streams=[flagged_stream, clean_stream],
+    episode = decided(
+        GradedEpisode(
+            id="arm_multi_device",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("arm_multi_device.csv")],
+            score=_score(Level.EPISODE, 75.0),
+            streams=[flagged_stream, clean_stream],
+        )
     )
     report = Report(
         root=UPath("fixtures"),
@@ -2029,13 +2072,15 @@ def test_findings_beyond_the_preview_go_behind_a_disclosure():
 def test_a_level_with_no_score_renders_no_rail():
     """Verify a level with no score renders 'not graded' rather than an empty rail."""
 
-    episode = GradedEpisode(
-        id="capture_index",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("capture_index.json")],
-        score=_score(Level.EPISODE, None),
-        streams=[],
+    episode = decided(
+        GradedEpisode(
+            id="capture_index",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("capture_index.json")],
+            score=_score(Level.EPISODE, None),
+            streams=[],
+        )
     )
     report = Report(
         root=UPath("fixtures"),

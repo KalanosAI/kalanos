@@ -151,8 +151,14 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     assert report.score.grade == Grade.C
     assert gate.uncapped_grade is not None and gate.uncapped_grade != Grade.C
     assert report.score.train_ready is False
-    assert gate.pruned_grade == Grade.A
-    assert gate.train_ready_after_pruning is True
+    # `pruned_score` describes the non-blocked candidate set; since schema 7
+    # nothing claims that set is train-ready or sufficient.
+    assert gate.pruned_score is not None and gate.pruned_score > report.score.score
+    assert not hasattr(gate, "train_ready_after_pruning")
+    assert not hasattr(gate, "pruned_grade")
+    assert (
+        report.sufficiency is not None and report.sufficiency.status.value == "unknown"
+    )
     assert "4 of 20 episodes" in gate.summary
     assert all(f.reasons for f in gate.failing_episodes)
 
@@ -265,12 +271,15 @@ def test_a_small_dataset_has_no_dataset_traits():
     assert dataset_traits(critical, episodes, 20, min_share=0.95) == set()
 
 
-def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
-    """End to end: a channel stuck in every episode is reported, not counted.
+def test_a_blocking_finding_on_every_episode_is_reported_as_a_trait_and_still_blocks(
+    tmp_path,
+):
+    """A stuck channel in every episode is a dataset trait *and* blocks every episode.
 
-    The channel moves for its first samples, then freezes for the rest of every
-    episode: a stuck sensor (critical), on every episode, so a dataset trait.
-    The glitched episodes still cap the grade.
+    Since schema 7 prevalence exempts nothing: the report cannot tell a
+    recording convention from corruption in every episode, so it names the
+    pattern as a descriptive trait and leaves every episode blocked. A scoped
+    policy rule may exempt it explicitly; the gate never does on its own.
     """
 
     path = tmp_path / "arm.hdf5"
@@ -289,13 +298,14 @@ def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
         "unused_dim.integrity.flatline_pct"
     ]
     assert gate.dataset_traits[0].n_with_finding == 20
-    assert {f.episode_id.rsplit("_", 1)[-1] for f in gate.failing_episodes} == {
-        "2",
-        "7",
-        "11",
-        "16",
-    }
-    assert report.score.grade == Grade.C
+    assert len(gate.failing_episodes) == 20
+    assert all(
+        any(r.endswith("unused_dim.integrity.flatline_pct") for r in f.reasons)
+        for f in gate.failing_episodes
+    )
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 20
+    assert report.readiness is not None and report.readiness.score == 0.0
     assert "dataset traits" in gate.summary
 
 
@@ -349,11 +359,12 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
 
     assert r is not None and r.passing_quality is not None
     assert report.gate is not None
-    assert (r.evaluated_episodes, r.passing_episodes, r.blocking_episodes) == (
-        20,
-        16,
-        4,
-    )
+    c = report.eligibility_counts
+    assert c is not None
+    assert (c.total, c.pass_count, c.blocked, c.review, c.unknown) == (20, 16, 4, 0, 0)
+    assert c.confirmed_eligible_share == pytest.approx(0.8)
+    assert r.formula_id == "pass-quality-over-known-inventory-v1"
+    assert r.reasons == []
     passing = [
         e.score.score
         for e in report.episodes
@@ -373,19 +384,32 @@ def test_a_clean_dataset_reads_as_its_mean(tmp_path):
     path = tmp_path / "clean.hdf5"
     _write_arm(path, 20, glitched=set())
 
-    r = grade(path).readiness
+    report = grade(path)
+    r = report.readiness
 
-    assert r is not None and r.blocking_episodes == 0
+    assert r is not None
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 0
     assert r.score == pytest.approx(r.passing_quality)
 
 
-def test_without_a_gate_there_is_no_readiness(tmp_path):
-    """legacy_0_5 has no blocking rule, so no readiness."""
+def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
+    """legacy_0_5 has no gate; eligibility, counts and readiness exist regardless.
+
+    The gate only caps a compatibility letter. The decision lives on each
+    episode, so a policy without a gate still decides and still reports.
+    """
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2})
 
-    assert grade(path, policy=load_policy(Path("legacy_0_5"))).readiness is None
+    report = grade(path, policy=load_policy(Path("legacy_0_5")))
+
+    assert report.gate is None
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 1
+    assert report.readiness is not None and report.readiness.score is not None
+    assert all(e.eligibility is not None for e in report.episodes)
 
 
 def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
@@ -401,7 +425,7 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
 
     assert report.readiness is not None
     assert f"READINESS {report.readiness.score:.0f}/100" in text
-    assert "4 blocking" in text
+    assert "16/20 pass, 4 blocked" in text
     assert text.count("BLOCK ") >= 4
     header = text.splitlines()[:8]
     assert not any(

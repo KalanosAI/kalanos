@@ -112,30 +112,38 @@ def _grade_cell(score: ScoreResult) -> Text:
 
 
 def _readiness_cell(report: Report) -> Text:
-    """The plate's headline: readiness out of 100 and the blocking episodes.
+    """The plate's headline: readiness, or why it is undefined, and the counts.
 
-    Falls back to the mean score for a report without a gate (legacy_0_5),
-    labelled as such. No letter grade: the number is the headline.
+    Reads the eligibility counts, never the gate: the two are derived from
+    the same decisions, and the counts are the ones that carry `review` and
+    `unknown`. No letter grade: the number, or its absence, is the headline.
     """
 
-    r = report.readiness
-    if r is None:
+    r, c = report.readiness, report.eligibility_counts
+    if r is None or c is None:
         if report.score.score is None:
             return Text("NOT GRADED", style=_ACCENT)
         return Text.assemble(
             ("SCORE ", f"{_PAPER} dim"), (f"{report.score.score:.0f}/100", "bold")
         )
-    if r.score is None:
-        return Text("NOT GRADED", style=_ACCENT)
-    blocking = (
-        f"  {r.blocking_episodes} blocking"
-        if r.blocking_episodes
-        else "  no blocking episodes"
+    counts = (
+        f"  {c.pass_count}/{c.total} pass"
+        + (f", {c.blocked} blocked" if c.blocked else "")
+        + (f", {c.review} review" if c.review else "")
+        + (f", {c.unknown} unknown" if c.unknown else "")
     )
+    tone = _ACCENT if (c.blocked or c.review or c.unknown) else _GOOD
+    if r.score is None:
+        return Text.assemble(
+            ("READINESS ", f"{_PAPER} dim"),
+            ("undefined", "bold"),
+            (counts, tone),
+            (f"  ({'; '.join(r.reasons)})", f"italic {_RULE}"),
+        )
     return Text.assemble(
         ("READINESS ", f"{_PAPER} dim"),
         (f"{r.score:.0f}/100", "bold"),
-        (blocking, _ACCENT if r.blocking_episodes else _GOOD),
+        (counts, tone),
     )
 
 

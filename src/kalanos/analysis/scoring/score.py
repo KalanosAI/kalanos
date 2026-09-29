@@ -18,6 +18,8 @@ import math
 import statistics
 from collections.abc import Sequence
 
+from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
+
 # Internal
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
@@ -34,7 +36,9 @@ from kalanos.analysis.models.scoring import (
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
-_TRAIN_READY_MINIMUM = 70.0  # "train_ready is score >= 70", docs/METRICS.md's own line.
+# Since schema 7 no score threshold decides training readiness. `train_ready`
+# is a compatibility field that report assembly fills from the episode's
+# eligibility; scoring leaves it `None` at every level.
 
 # A metric that lands exactly on the bad bound scores 0 points,
 # which this module treats as a failure for `fail_penalty` purposes.
@@ -214,6 +218,48 @@ def _severity_for_status(status: MetricStatus) -> Severity | None:
     return None
 
 
+def consequence_for(
+    severity: Severity, *, metric_policy: MetricPolicy, policy: Policy, key: str
+) -> tuple[Consequence, BlockingRoute | None]:
+    """Decide what a finding does to eligibility, and by which route.
+
+    A warning is report-only. A critical result blocks unless its metric
+    policy says `review`. A statistical block is downgraded to review when the
+    policy enforces calibration and no accepted manifest covers this metric;
+    a contract block never is.
+
+    Parameters
+    ----------
+    severity : Severity
+        The assessment the bands assigned.
+    metric_policy : MetricPolicy
+        The metric's own policy entry.
+    policy : Policy
+        The whole policy.
+    key : str
+        The metric's policy key, for the calibration lookup.
+
+    Returns
+    -------
+    tuple[Consequence, BlockingRoute or None]
+        The consequence, and the route when it is `BLOCK`.
+    """
+
+    if severity != Severity.CRITICAL:
+        return Consequence.REPORT_ONLY, None
+    consequence = metric_policy.consequence or Consequence.BLOCK
+    if consequence != Consequence.BLOCK:
+        return consequence, None
+    route = metric_policy.route or BlockingRoute.STATISTICAL
+    if (
+        route == BlockingRoute.STATISTICAL
+        and policy.enforce_calibration
+        and key not in policy.calibrated_metrics
+    ):
+        return Consequence.REVIEW, None
+    return Consequence.BLOCK, route
+
+
 def _finding_for(
     result: MetricResult,
     *,
@@ -221,6 +267,9 @@ def _finding_for(
     family: str,
     points: float,
     location: FindingLocation,
+    metric_policy: MetricPolicy,
+    policy: Policy,
+    key: str,
 ) -> Finding | None:
     """Build one Finding from a regraded metric result, if it graded a defect.
 
@@ -236,6 +285,12 @@ def _finding_for(
         The 0-100 this metric scored — its own contribution to the rollup.
     location : FindingLocation
         Where the node this metric ran on sits in the graded tree.
+    metric_policy : MetricPolicy
+        This metric's policy entry, for its declared consequence and route.
+    policy : Policy
+        The whole policy, for calibration enforcement.
+    key : str
+        The metric's policy key, `family.metric`.
 
     Returns
     -------
@@ -250,6 +305,9 @@ def _finding_for(
     # result.value is guaranteed set: _resolve demotes any value-less or
     # non-finite result to not_applicable before a status can grade.
     assert result.value is not None
+    consequence, route = consequence_for(
+        severity, metric_policy=metric_policy, policy=policy, key=key
+    )
     return Finding(
         metric_id=f"{family}.{metric_name}",
         family=family,
@@ -262,6 +320,8 @@ def _finding_for(
         instance=location.instance,
         channel=location.channel,
         evidence=result.evidence,
+        consequence=consequence,
+        route=route,
     )
 
 
@@ -557,6 +617,9 @@ def score_metrics(
             family=family,
             points=points,
             location=location,
+            metric_policy=metric_policy,
+            policy=policy,
+            key=f"{family}.{name}",
         )
         if finding is not None:
             findings.append(finding)
@@ -613,7 +676,7 @@ def score_metrics(
             level=level,
             score=score,
             grade=grade_for(score, policy),
-            train_ready=score >= _TRAIN_READY_MINIMUM,
+            train_ready=None,
             n_contributing=contributing_metrics,
             families=families,
         ),
@@ -675,7 +738,7 @@ def rollup(
         level=level,
         score=score,
         grade=grade_for(score, policy),
-        train_ready=score >= _TRAIN_READY_MINIMUM,
+        train_ready=None,
         n_contributing=len(scores),
         families=families,
     )

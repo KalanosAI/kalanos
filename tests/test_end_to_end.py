@@ -15,6 +15,9 @@ import pytest
 from typer.testing import CliRunner
 from upath import UPath
 
+# Since schema 7, `grade` exits 1 when the decision gate (default
+# `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
+# so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
 from kalanos.analysis.adapters.lerobot.common import CONFIDENCE
 from kalanos.analysis.models.discovery import SkipReason
@@ -64,7 +67,7 @@ def _grade(path: Path | UPath) -> Report:
     """
 
     result = runner.invoke(app, ["grade", str(path), "--json"])
-    assert result.exit_code == 0, result.output or repr(result.exception)
+    assert result.exit_code in (0, 1), result.output or repr(result.exception)
     return Report.model_validate_json(result.stdout)
 
 
