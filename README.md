@@ -2,7 +2,7 @@
 
 **Grade your robot data before you train on it.**
 
-One command gives the dataset a **readiness score** out of 100, names the **blocking episodes** to exclude, and scores every recording, with the exact episode, stream and channel behind every problem. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
+One command gives the dataset a **readiness score** out of 100, decides every episode (**pass**, **blocked**, **review** or **unknown**) under a named scope, and scores every recording, with the exact episode, stream and channel behind every problem. When the evidence isn't there, it says so instead of guessing. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
 
 ```bash
 pip install kalanos
@@ -83,11 +83,11 @@ That's the whole workflow. Everything below is detail.
 Every run prints a report card to the terminal. It looks like this (numbers illustrative):
 
 ```
-╭──────────────────────────────────────────────────────────────────────────╮
-│ KALANOS · DATASET REPORT                                                 │
-│ /data/my_demos                             READINESS 80/100  24 blocking │
-│ 120 recordings · 38 findings · 2 not analysed · 1 no schema              │
-╰──────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ KALANOS · DATASET REPORT                                                    │
+│ /data/my_demos                    READINESS 80/100  96/120 pass, 24 blocked │
+│ 120 recordings · 38 findings · 2 not analysed · 1 no schema                 │
+╰─────────────────────────────────────────────────────────────────────────────╯
 RECORDINGS ─────────────────────────────────────────────────────────────────
        RECORDING                      SCORE                METRICS
                                                   PASS WARN FAIL SKIP
@@ -111,7 +111,7 @@ How to read it, top to bottom:
 
 | Part | What it tells you | What to do with it |
 |---|---|---|
-| **Readiness, blocking episodes** | Readiness out of 100 (blocking episodes count as zero), how many episodes block, and a one-line reason | How much of this dataset you can train on as it is, and what excluding the blocking episodes would leave |
+| **Readiness, eligibility counts** | Readiness out of 100 (blocked episodes count as zero, or `undefined` with its reasons when episodes need review or more evidence), how many episodes pass, are blocked, need review or are unknown, and a one-line reason | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
 | **Recordings** | Every recording, worst first, with its own score; `BLOCK` marks the ones with blocking findings | Start at the top: these are the episodes to fix or drop |
 | **PASS / WARN / FAIL / SKIP** | How many metric checks landed in each bucket | A high score with a large `SKIP` count means less of the data was actually graded. Check coverage before trusting it |
 | **Findings** | The worst problems, addressed down to `episode/stream/channel.metric`, with the measured value and evidence | Open that exact channel; no hunting |
@@ -135,13 +135,15 @@ Readiness = sum of passing episodes' quality scores / number of evaluated episod
           = passing share × passing-episode quality
 ```
 
-So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of the dataset you can train on, times how clean it is. The report names every blocking episode with its reasons, and the readiness once they are excluded ("84 as it is, 100 after excluding 8 episodes"). Findings that describe how the data was recorded rather than a fault in some episodes (the same finding on every episode of a task, or on nearly every episode of the dataset) are reported as traits and block nothing. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` scores without blocking episodes, reproducing 0.5, and so reports no readiness.
+So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of the dataset you can train on, times how clean it is. The report names every blocked episode with its reasons, and the mean quality of the rest. Readiness is only defined when every episode is either `pass` or `blocked`: an episode that needs `review`, or is `unknown` because a required check couldn't run, makes it `undefined` with the reasons listed, rather than a number that pretends the evidence is in.
+
+Findings shared by every episode of a task, or by nearly every episode of the dataset, are reported as **traits** so you see the pattern, but they still block: the report can't tell a recording convention from corruption in every episode, so it doesn't guess. A scoped policy rule can exempt such a finding explicitly. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` grades with no dataset gate and no letter cap, reproducing 0.5's numbers, while every episode still carries its eligibility.
 
 Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them and they drive no decision. Since 0.7.0 every episode carries one `eligibility` (`pass`, `blocked`, `review`, `unknown`) under a named scope; see `docs/DECISIONS.md`.
 
 ### What will my data score? Worked examples
 
-Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, scored by Kalanos 0.6.5. Everything else is clean, including a realistic 0.25% clock wobble.
+Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, scored by Kalanos 0.6.5; the dataset-trait row shows the 0.7.0 result, which is the only one that changed. Everything else is clean, including a realistic 0.25% clock wobble.
 
 | What's wrong | Readiness | Episodes passing | Blocking | After excluding them |
 |---|---|---|---|---|
@@ -154,7 +156,7 @@ Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, scored 
 | Control glitches (sudden command jumps) in 4 episodes (8%) | **92** | 46/50 | 4 | 100 |
 | Clock declared 50 Hz, actually 45 Hz (10% slow) | **100** | 50/50 | 0 | — |
 | Clock declared 50 Hz, actually 40 Hz (20% slow) | **95** | 50/50 | 0 (warning: lowers timing) | — |
-| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **93** | 50/50 | 0: a dataset trait (see below) | — |
+| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **0** | 0/50 | 50: a dataset trait, still blocking (see below) | — |
 | Clock jitter of 5% of the sampling period, every episode | **100** | 50/50 | 0: jitter is measured, not yet scored | — |
 | 5% jitter **and** 8% of samples dropped in 10 episodes | **80** | 40/50 | 10 (the drops) | 100 |
 | 5% repeated timestamps in 10 episodes | **100** | 50/50 | 0: measured, not yet scored | — |
@@ -163,7 +165,7 @@ How to read it:
 
 - **Dropped samples**: under 1% of an episode is fine, 1–5% is a warning that lowers its quality, over 5% makes the episode blocking. Readiness then falls with the share of blocking episodes: 10 blocking of 50 is 80.
 - **Glitches** make the episodes they hit blocking, through the spike and noise checks.
-- **A problem in every episode is a dataset trait, not blocking.** A clock 30% slow in all 50 episodes can't be fixed by excluding episodes, so it blocks nothing; the timing check still lowers every episode's quality (93, not 100), and the report lists the trait. A dataset-wide defect like this should lower readiness further, and a future release will make it do so; until then, read the report's dataset traits alongside the number.
+- **A problem in every episode blocks every episode.** A clock 30% slow in all 50 episodes is listed as a dataset trait so you see it's systemic, but it still blocks all 50: readiness 0, not 93. Excluding episodes can't fix it; the remedy is fixing the recording, or, if it's a known convention rather than a defect, a policy rule that exempts that finding under a named scope. (Before 0.7.0 traits were exempt, which let a defect in every episode read as 93.)
 - **Jitter and repeated timestamps** appear in every report with their numbers but don't change readiness yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
 
 All of these thresholds are candidates, tested on synthetic and real datasets and open to revision against labelled failures.
@@ -241,7 +243,14 @@ kalanos metrics       # every quality check
 kalanos plugins       # summary, plus anything that failed to load
 ```
 
-Planned: `kalanos inspect`, `--fail-under`, `--sample`.
+```bash
+kalanos inspect report.json                  # scope, decision counts, readiness and reasons of a saved report
+kalanos inspect report.json --episode ID     # every reason on one episode
+```
+
+`inspect` also reads reports written by 0.6 (schema 6.3–6.5) without changing them, and points out where their old fields contradict each other.
+
+Planned: `kalanos compare`, `--sample`.
 
 ---
 
@@ -321,13 +330,14 @@ Some field names mean different things on different robots, so the dictionary le
 kalanos grade hf://datasets/lerobot/toto --map observation.state=proprio.joint_position
 ```
 
-The same override can come from three places, merged per field:
+The same override can come from four places, merged per field:
 
 1. `--map FEATURE=TYPE`, repeatable. From Python, `grade(path, mapping={...})`.
 2. `--map-file PATH`. From Python, `grade(path, mapping_file=...)`.
-3. A `kalanos-map.yaml` sidecar in the graded folder, or beside the graded file. `--no-sidecar` (or `sidecar=False`) ignores it.
+3. The `binding.features` section of a `--profile` bundle. From Python, `grade(path, bundle=...)`.
+4. A `kalanos-map.yaml` sidecar in the graded folder, or beside the graded file. `--no-sidecar` (or `sidecar=False`) ignores only this one.
 
-`--map` beats `--map-file`, which beats the sidecar. Both files use the same shape:
+`--map` beats `--map-file`, which beats the bundle, which beats the sidecar. Two inputs at the same level that disagree stop the run with exit code 2; every lower-level assertion that lost is recorded in `report.binding_conflicts`. A map file or sidecar can only assert mappings. A bundle also carries the evaluation scope (`requirements`), the decision `policy` and the execution `tier`, each with its own identity recorded in `report.run`; see [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/SCHEMA-7.md](docs/SCHEMA-7.md). Map files and sidecars use this shape:
 
 ```yaml
 schema_version: 1
