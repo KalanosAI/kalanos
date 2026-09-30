@@ -2,7 +2,13 @@
 
 The catalogue. This file is the source of truth for what Kalanos computes; `policy.yaml` holds the thresholds and weights that grade it.
 
-This is the design. Today `timing`, `integrity` and `motion` are implemented, plus the first `annotation` metric, `task_instruction_missing`; every other metric below is designed and not yet built.
+The registered metric catalogue below includes implemented core metrics and
+older design proposals. The explicit **0.7.0 diagnostic plan** now supplies
+stream-pair timing, command response, sampled vision, dimensionless motion,
+training-window and cohort execution. Its definitions, prerequisites and policy
+behavior are authoritative in [DIAGNOSTICS-0.7.0.md](DIAGNOSTICS-0.7.0.md).
+Proposed thresholds and formulas in the historical tables do not configure that
+runner. FK/Jacobian and learned transition checks remain unimplemented.
 
 Thresholds marked *to define* are undecided. They must be settled against real recordings rather than filled in with a plausible number: once written down, an invented threshold is indistinguishable from a decided one, and it will be implemented as though it were one.
 

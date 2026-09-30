@@ -52,11 +52,14 @@ dependencies = [
 # `all` self-references each extra (PEP 621, supported by pip>=21.2, uv, hatch)
 # instead of repeating its pins, so a new extra is one line added to both lists.
 [project.optional-dependencies]
-all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]"]
+all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]", "kalanos[numeric]"]
 video = ["av>=13", "numpy"]
 hdf5 = ["h5py>=3"]
 mcap = ["mcap>=1.4", "mcap-ros2-support>=0.5"]
 hf = ["huggingface-hub>=1.31.0"]
+numeric = [
+    "numpy>=2.2.6",
+]
 
 [project.urls]
 Homepage = "https://kalanos.ai"

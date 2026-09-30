@@ -56,7 +56,7 @@ execution:
   tier: full
 ```
 
-This preset requires video quality. There is no visual quality runner in this
+This preset requires video quality. Without an explicit visual diagnostic plan, no visual quality runner executes in this
 patch, including at full tier, so it remains unknown. Camera metadata and numeric
 analysis do not satisfy that requirement. Choosing a weaker profile changes the
 question asked and must not be described as completing the original audit.
@@ -122,3 +122,20 @@ validated again. Native sample rate must match. The validator is responsible for
 verifying configuration and bandwidth against acquisition records. This evidence
 makes the reference usable; statistical blocking still needs a separately
 accepted, exactly matching calibration manifest.
+
+
+## Deeper diagnostic plans
+
+An optional `diagnostics` bundle section selects work without weakening existing
+requirements. `sampled_video_quality` requires the requested samples on every
+camera; `video_quality` requires every declared frame examined. Reducing the tier
+or budget preserves the requirement and records skipped/unavailable work.
+`cross_stream_timing`, `action_consistency`, `motion_shape` and `training_windows`
+can be required capabilities; individual checks can be required with keys such as
+`diagnostics.timing.camera_state` in `required_metrics`.
+
+Use `requirements.min_pass_windows: {train: 10000}` for an explicit dataset
+minimum. Configure review thresholds in the referenced policy's
+`diagnostic_reviews`, not in the plan. See the complete
+[diagnostic contract](DIAGNOSTICS-0.7.0.md) and
+[example bundle](examples/diagnostics.yaml).

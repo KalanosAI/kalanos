@@ -390,7 +390,7 @@ def resolve_stream(
         )
         binding.capabilities = capability_checks(binding, numeric=numeric)
         resolved.append(channel.model_copy(update={"binding": binding}))
-    updates = {"channels": resolved}
+    updates = {"channels": resolved, "source_identity": source}
     if override is not None:
         updates.update(
             taxonomy_type=override.taxonomy_type, mapping_source=MappingSource.OVERRIDE

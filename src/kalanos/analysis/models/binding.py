@@ -21,12 +21,13 @@ mappings but never change requirements, policy or tier.
 import math
 from collections.abc import Iterable, Sequence
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 # External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Internal
+from kalanos.analysis.models.diagnostics import DiagnosticPlan
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.provenance import ExecutionTier
@@ -489,6 +490,9 @@ class RequirementsSection(BaseModel):
     require_resolved_bindings: bool = False
     require_numeric_payloads: bool = True
     min_pass_episodes: int | None = Field(default=None, ge=0)
+    min_pass_windows: dict[str, Annotated[int, Field(ge=0, strict=True)]] = Field(
+        default_factory=dict
+    )
     required_capabilities: list[str] = Field(default_factory=list)
     required_metrics: list[str] = Field(default_factory=list)
 
@@ -562,6 +566,7 @@ class Bundle(BaseModel):
     requirements: RequirementsSection = Field(default_factory=RequirementsSection)
     policy: PolicySection = Field(default_factory=PolicySection)
     execution: ExecutionSection = Field(default_factory=ExecutionSection)
+    diagnostics: DiagnosticPlan | None = None
 
     def feature_assertions(self, path: AnyPath | None = None) -> list[FeatureAssertion]:
         """The binding section's whole-feature assertions, at bundle precedence."""
