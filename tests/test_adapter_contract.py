@@ -259,7 +259,21 @@ def _bare_unmapped_type(stream: Stream) -> Stream:
 def _shrink_timestamps_only(stream: Stream) -> Stream:
     """Drop a stream's last timestamp without touching its payload."""
 
-    return stream.model_copy(update={"timestamps": stream.timestamps.head(-1)})
+    return stream.model_copy(
+        update={
+            "timestamps": stream.timestamps.head(-1),
+            "native_timestamps": stream.native_timestamps.head(-1)
+            if stream.native_timestamps is not None
+            else None,
+            "source_order": stream.source_order.model_copy(
+                update={
+                    "original_index": stream.source_order.original_index[:-1]
+                    if stream.source_order.original_index is not None
+                    else None,
+                }
+            ),
+        }
+    )
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -360,12 +374,11 @@ def test_ignoring_a_nonzero_sample_fails():
         check_adapter(_IgnoringSampleAboveZeroAdapter(), SUPPORTED, UNSUPPORTED)
 
 
-def test_non_monotonic_timestamps_fail():
-    """Verify a decreasing timestamp series fails."""
+def test_non_monotonic_timestamps_remain_auditable():
+    """A decreasing time axis can be a source defect; the adapter must retain it."""
 
     adapter_cls = _rewriting_adapter(_reverse_timestamps)
-    with pytest.raises(AssertionError, match="non-decreasing"):
-        check_adapter(adapter_cls(), SUPPORTED, UNSUPPORTED)
+    check_adapter(adapter_cls(), SUPPORTED, UNSUPPORTED)
 
 
 def test_integer_timestamps_fail():
@@ -376,16 +389,10 @@ def test_integer_timestamps_fail():
         check_adapter(adapter_cls(), SUPPORTED, UNSUPPORTED)
 
 
-def test_null_timestamps_fail():
-    """Verify a null in the timestamp series fails.
-
-    `Stream` construction does not itself reject nulls, so only
-    `check_adapter` catches this.
-    """
-
+def test_null_timestamps_remain_auditable():
+    """Missing timestamps can be source evidence, not an adapter contract failure."""
     adapter_cls = _rewriting_adapter(_null_first_timestamp)
-    with pytest.raises(AssertionError, match="null"):
-        check_adapter(adapter_cls(), SUPPORTED, UNSUPPORTED)
+    check_adapter(adapter_cls(), SUPPORTED, UNSUPPORTED)
 
 
 def test_a_bare_unmapped_taxonomy_type_fails():

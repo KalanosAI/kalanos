@@ -12,9 +12,12 @@ one for a stream or channel and one for an episode.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
+
+from kalanos.analysis.models.coverage import Availability
 
 # Internal
 from kalanos.analysis.models.metrics import (
@@ -118,7 +121,9 @@ def metric(
         func: Callable[[CtxT], MetricResult],
     ) -> Callable[[CtxT], MetricResult]:
         if level is Level.EPISODE and (
-            resolved_requires.regular_sampling or resolved_requires.min_samples
+            resolved_requires.regular_sampling
+            or resolved_requires.min_samples
+            or resolved_requires.capabilities
         ):
             raise ValueError(
                 f"{func.__name__} is registered at Level.EPISODE with a "
@@ -190,6 +195,15 @@ def _unmet_node_reason(
         return "sampling is not regular"
     if ctx.n_samples < requires.min_samples:
         return f"fewer than {requires.min_samples} samples"
+    channels = [ctx.channel] if isinstance(ctx, ChannelContext) else ctx.stream.channels
+    for capability in requires.capabilities:
+        if not channels or any(
+            c.binding is None
+            or capability not in c.binding.capabilities
+            or not c.binding.capabilities[capability].ready
+            for c in channels
+        ):
+            return f"binding prerequisites for {capability!r} are unavailable"
     return None
 
 
@@ -258,11 +272,38 @@ def _run(
                 unit=None,
                 status=MetricStatus.NOT_APPLICABLE,
                 evidence={"reason": reason},
+                availability=(
+                    Availability.NOT_APPLICABLE
+                    if entry.requires.taxonomy
+                    and not isinstance(ctx, EpisodeContext)
+                    and ctx.taxonomy_type not in entry.requires.taxonomy
+                    and not ctx.taxonomy_type.startswith("unmapped")
+                    else Availability.UNAVAILABLE
+                ),
             )
             continue
 
         # Step 2: requirements hold, so the function runs for real.
-        results[entry.name] = entry.func(ctx)
+        try:
+            result = entry.func(ctx)
+        except Exception as exc:
+            result = MetricResult(
+                value=None,
+                unit=None,
+                status=MetricStatus.NOT_APPLICABLE,
+                availability=Availability.ERROR,
+                evidence={"reason": str(exc), "error_type": type(exc).__name__},
+            )
+        if result.availability is None or result.availability == Availability.COMPUTED:
+            state = (
+                Availability.COMPUTED
+                if result.value is not None
+                and math.isfinite(result.value)
+                and result.status != MetricStatus.NOT_APPLICABLE
+                else Availability.UNAVAILABLE
+            )
+            result = result.model_copy(update={"availability": state})
+        results[entry.name] = result
 
     return results
 

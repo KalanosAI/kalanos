@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 # Internal
 from kalanos.analysis.models.policy import Policy
+from kalanos.assets.yaml_strict import safe_load_strict
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -109,7 +110,7 @@ def _parse_policy(raw_yaml: str, *, source: str) -> Policy:
 
     # Step 1: the file must at least be YAML before its shape is worth checking.
     try:
-        payload = yaml.safe_load(raw_yaml)
+        payload = safe_load_strict(raw_yaml)
     except yaml.YAMLError as exc:
         raise ValueError(f"{source} is not valid YAML: {exc}") from exc
 

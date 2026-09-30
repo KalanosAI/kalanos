@@ -34,12 +34,13 @@ A Stream carries:
 | `timestamps` | canonical seconds, eager |
 | `payload` | the data, lazy |
 | `source_path`, `source_field` | which file it came from and what it was called there |
-| `clock` | capture, receive, log, or unknown |
+| `clock` | capture, receive, log, reconstructed, or unknown |
+| `timestamp_dtype` | the float format the timestamps were stored in at the source: float16, float32 or float64 |
 | `is_regular` | whether the sampling behind this stream classified as regular |
 
 Timestamps are eager because every timing metric needs them and they are cheap. Payloads are lazy because decoding a camera stream is not, and most of a grade can be computed without doing it.
 
-`clock` exists so a synthesised timebase can be told apart from a recorded one. Some formats record no wall-clock time per sample and only declare a nominal rate. A latency measured against timestamps derived from that rate would be a restatement of the rate, so a metric that depends on real timing reports lower confidence rather than a number that looks measured.
+`clock` exists so a synthesised timebase can be told apart from a recorded one. Some formats record no wall-clock time per sample and only declare a nominal rate. A timebase an adapter synthesises from that rate, or finds to be frame numbers divided by it, is labelled `reconstructed`. A latency measured against timestamps derived from that rate would be a restatement of the rate, so a metric that depends on real timing reports lower confidence rather than a number that looks measured.
 
 ### Why there is no file level
 

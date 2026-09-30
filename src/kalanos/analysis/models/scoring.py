@@ -17,13 +17,19 @@ the claim without rerunning anything.
 
 # Built-in
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 # External
 from pydantic import BaseModel, Field
 
 # Internal
+from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 from kalanos.analysis.models.metrics import Level
+from kalanos.analysis.models.support import (  # noqa: F401
+    SampleInterval,
+    SupportKind,
+    TemporalSupport,
+)
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -56,8 +62,11 @@ class ScoreResult(BaseModel):
         `score` mapped through docs/METRICS.md's table,
         or `None` alongside a `None` score.
     train_ready : bool or None
-        Whether `score` clears the training-readiness bar,
-        or `None` alongside a `None` score.
+        Compatibility only. Since schema 7 no score threshold sets this: at
+        episode level it mirrors `GradedEpisode.eligibility` (`True` pass,
+        `False` blocked, `None` review/unknown) and is filled in by report
+        assembly; at every other level it is `None`. Do not read it as a
+        decision; read the eligibility.
     n_contributing : int
         How many results fed `score` — graded metrics for `score_metrics`,
         scored children for `rollup`.
@@ -108,6 +117,9 @@ class FindingLocation(BaseModel):
     """
 
     episode_id: str
+    source_index: int | None = None
+    source_field: str | None = None
+    source_path: str | None = None
     stream: str | None = None
     instance: str | None = None
     channel: str | None = None
@@ -143,8 +155,24 @@ class Finding(BaseModel):
     evidence : dict[str, Any]
         Supporting detail behind the verdict, carried over from the metric's
         own `MetricResult.evidence`.
+    consequence : Consequence
+        What the policy says this finding does to eligibility. Severity is
+        the assessment; this is the decision about it.
+    route : BlockingRoute or None
+        For `BLOCK`, which route justified it. A statistical block without
+        an accepted calibration manifest is downgraded to review before it
+        reaches here.
+    support : TemporalSupport
+        Where in time the evidence lives. Whole-episode unless the metric
+        located it.
     """
 
+    subject_level: Level | None = None
+    evidence_strength: Literal["deterministic", "statistical", "heuristic"] = (
+        "heuristic"
+    )
+    id: str | None = None
+    calibration: dict[str, Any] = Field(default_factory=dict)
     metric_id: str
     family: str
     severity: Severity
@@ -152,7 +180,13 @@ class Finding(BaseModel):
     unit: str | None
     points: float
     episode_id: str
+    source_index: int | None = None
+    source_field: str | None = None
+    source_path: str | None = None
     stream: str | None = None
     instance: str | None = None
     channel: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
+    consequence: Consequence = Consequence.REPORT_ONLY
+    route: BlockingRoute | None = None
+    support: TemporalSupport = Field(default_factory=TemporalSupport)

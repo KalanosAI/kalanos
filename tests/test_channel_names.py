@@ -13,10 +13,14 @@ from pathlib import Path
 # External
 import h5py
 import numpy as np
+import polars as pl
+from calibration_helpers import grade_with_test_calibration
+from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters.lerobot.common import channels_for, declared_names
-from kalanos.analysis.reporting.assemble import channel_taxonomy
+from kalanos.analysis.bindings import resolve_stream
+from kalanos.analysis.models.domain import Channel, Kind, Stream, TimestampDtype
 from kalanos.api import grade
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -37,6 +41,20 @@ ALOHA_MOTORS = [
     "right_wrist_rotate",
     "right_gripper",
 ]
+
+
+def channel_taxonomy(stream_type: str, name: str) -> str:
+    """Exercise the resolver, rather than a hidden reporting-stage heuristic."""
+    stream = Stream(
+        taxonomy_type=stream_type,
+        kind=Kind.SERIES,
+        timestamps=pl.Series("t", [0.0, 0.1]),
+        source_path=UPath("fixture.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
+        channels=[Channel(name=name)],
+    )
+    resolved = resolve_stream(stream, dictionary=load_default_dictionary())
+    return resolved.channels[0].binding.taxonomy_type
 
 
 def test_names_declared_as_a_list_are_read():
@@ -125,7 +143,7 @@ def test_a_glitching_gripper_still_fails_its_episode(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_with_gripper(path, 20, glitched={4})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     assert report.gate is not None
     assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [

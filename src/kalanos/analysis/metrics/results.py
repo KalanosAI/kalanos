@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Internal
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 
 
@@ -13,7 +14,7 @@ from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def not_applicable(reason: str) -> MetricResult:
+def not_applicable(reason: str, *, inapplicable: bool = False) -> MetricResult:
     """Build the not_applicable result every check across the families returns.
 
     Parameters
@@ -32,4 +33,7 @@ def not_applicable(reason: str) -> MetricResult:
         unit=None,
         status=MetricStatus.NOT_APPLICABLE,
         evidence={"reason": reason},
+        availability=Availability.NOT_APPLICABLE
+        if inapplicable
+        else Availability.UNAVAILABLE,
     )

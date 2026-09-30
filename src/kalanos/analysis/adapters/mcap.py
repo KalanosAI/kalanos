@@ -30,11 +30,14 @@ from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.domain import (
     UNMAPPED_TAXONOMY_PREFIX,
     Channel,
-    Clock,
+    ClockInfo,
+    ClockOrigin,
     Episode,
     FramePayload,
     Kind,
+    OriginEvidence,
     Stream,
+    TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -211,6 +214,8 @@ def _topic_stream(
     origin_ns: int,
     dictionary: Dictionary,
     source_path: UPath,
+    *,
+    from_publish: bool = False,
 ) -> Stream:
     """Build one topic's Stream, on its own clock rather than a shared axis.
 
@@ -221,7 +226,7 @@ def _topic_stream(
     schema_name : str
         The topic's message type.
     stamps_ns : list[int]
-        Each message's chosen timestamp, in nanoseconds, sorted ascending.
+        Each message's chosen timestamp, in nanoseconds, in source message order.
     from_header : bool
         Whether `stamps_ns` came from `header.stamp` rather than `log_time`.
     rows : list[dict[str, float]]
@@ -246,7 +251,31 @@ def _topic_stream(
         [(ns - origin_ns) / _NS_PER_S for ns in stamps_ns], dtype=pl.Float64
     )
     is_regular = regularity(entity_split_gaps([timestamps.to_list()])).is_regular
-    clock = Clock.CAPTURE if from_header else Clock.LOG
+    # Header presence alone is not a producer declaration of acquisition time.
+    origin = (
+        ClockOrigin.UNKNOWN
+        if from_header
+        else ClockOrigin.PUBLISH
+        if from_publish
+        else ClockOrigin.LOG
+    )
+    field = (
+        "header.stamp"
+        if from_header
+        else "publish_time"
+        if from_publish
+        else "log_time"
+    )
+    clock_info = ClockInfo(
+        origin=origin,
+        origin_evidence=OriginEvidence.NONE if from_header else OriginEvidence.PRODUCER,
+        source_field=field,
+        native_unit="ns",
+        native_dtype="int64" if from_header else "uint64",
+        # A shared numeric epoch does not prove cross-topic clock alignment.
+        epoch=None,  # MCAP permits arbitrary producer epochs, including boot time.
+        transforms=[f"subtract log origin {origin_ns} ns", "ns->s"],
+    )
 
     blob_kind = _BLOB_KINDS.get(schema_name)
     if blob_kind is not None:
@@ -264,7 +293,12 @@ def _topic_stream(
         payload=payload,
         source_path=source_path,
         source_field=topic,
-        clock=clock,
+        clock=clock_info.origin.compatibility_clock,
+        clock_info=clock_info,
+        native_timestamps=pl.Series(
+            stamps_ns, dtype=pl.Int64 if from_header else pl.UInt64
+        ),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         is_regular=is_regular,
         channels=channels,
     )
@@ -395,16 +429,18 @@ class McapAdapter:
 
                 header_ns_by_topic: dict[str, list[int | None]] = defaultdict(list)
                 log_time_by_topic: dict[str, list[int]] = defaultdict(list)
+                publish_time_by_topic: dict[str, list[int]] = defaultdict(list)
                 rows_by_topic: dict[str, list[dict[str, float] | None]] = defaultdict(
                     list
                 )
 
                 for _, channel, message, decoded in reader.iter_decoded_messages(
-                    topics=list(readable)
+                    topics=list(readable), log_time_order=False
                 ):
                     topic = channel.topic
                     header_ns_by_topic[topic].append(_header_stamp_ns(decoded))
                     log_time_by_topic[topic].append(message.log_time)
+                    publish_time_by_topic[topic].append(message.publish_time)
                     if readable[topic] not in _BLOB_KINDS:
                         rows_by_topic[topic].append(_flatten(decoded))
 
@@ -416,23 +452,30 @@ class McapAdapter:
                     # a single unset header stamp — common while a driver comes up —
                     # must not leave the rest of the topic on the other clock silently.
                     from_header = all(ns is not None for ns in header_ns_list)
+                    publishes = publish_time_by_topic[topic]
+                    logs = log_time_by_topic[topic]
+                    # MCAP writers must copy log_time when publish time is absent.
+                    # Identical columns therefore cannot establish a publish clock.
+                    from_publish = (
+                        not from_header
+                        and all(p > 0 for p in publishes)
+                        and publishes != logs
+                    )
                     raw_stamps = (
                         [ns for ns in header_ns_list if ns is not None]
                         if from_header
-                        else log_time_by_topic[topic]
+                        else publishes
+                        if from_publish
+                        else logs
                     )
                     rows: list[dict[str, float]]
 
                     if schema_name in _BLOB_KINDS:
-                        stamps_ns = sorted(raw_stamps)
+                        stamps_ns = raw_stamps
                         rows = []
                     else:
-                        paired = sorted(
-                            zip(raw_stamps, rows_by_topic[topic], strict=True),
-                            key=lambda pair: pair[0],
-                        )
-                        stamps_ns = [stamp for stamp, _ in paired]
-                        raw_rows = [row for _, row in paired]
+                        stamps_ns = raw_stamps
+                        raw_rows = rows_by_topic[topic]
 
                         first_row = raw_rows[0]
                         if not first_row:
@@ -483,6 +526,7 @@ class McapAdapter:
                             origin_ns,
                             dictionary,
                             path,
+                            from_publish=from_publish,
                         )
                     )
 

@@ -25,6 +25,8 @@ from helpers import FIXTURES_DIR
 
 PUBLIC_SURFACE = {
     "grade",
+    "compare",
+    "load_report",
     "load_policy",
     "load_dictionary",
     "Policy",
@@ -52,6 +54,10 @@ PUBLIC_SURFACE = {
     "SourceLimits",
     "SourceTooLarge",
     "DatasetInfo",
+    "MappingOverride",
+    "MappingOverrideError",
+    "MappingSource",
+    "OverrideOrigin",
 }
 
 
@@ -118,4 +124,4 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "6.5.0"
+    assert report.schema_version == "7.0.0"

@@ -19,22 +19,35 @@ from typing import Any
 import polars as pl
 from upath import UPath
 
-# Internal
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    declared_series_streams,
     describe_from_info,
+    episode_clock,
     feature_plan,
     read_info,
     sampling_is_regular,
     series_streams,
+    timestamp_dtype_of,
+    with_episode_clock,
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
+
+# Internal
+from kalanos.analysis.execution import reads_numeric_payloads
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
-from kalanos.analysis.models.domain import Clock, Episode, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Clock,
+    Episode,
+    Kind,
+    MappingSource,
+    Stream,
+    TimestampDtype,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -96,6 +109,9 @@ def _video_stream(
     timestamps: pl.Series,
     dataset_root: UPath,
     *,
+    mapping_source: MappingSource | None,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
     is_regular: bool,
 ) -> Stream:
     """Build one video Stream for `video_key`, its payload lazy and undecoded.
@@ -115,6 +131,8 @@ def _video_stream(
         The episode's own timestamps, shared across every one of its streams.
     dataset_root : UPath
         The dataset root, `video_path` is resolved relative to it.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided.
     is_regular : bool
         Whether the episode's own sampling classified as regular.
 
@@ -142,7 +160,9 @@ def _video_stream(
         ),
         source_path=video_path,
         source_field=video_key,
-        clock=Clock.UNKNOWN,
+        mapping_source=mapping_source,
+        clock=clock,
+        timestamp_dtype=timestamp_dtype,
         is_regular=is_regular,
         channels=[],
     )
@@ -236,6 +256,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
             info = read_info(path)
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
+            fps = float(info["fps"]) if "fps" in info else None
             # Each row of the episode index lists its task instructions, when the
             # dataset records any; read for every episode, not just the sampled ones,
             # since whether the dataset carries instructions at all is a dataset fact.
@@ -262,6 +283,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # So only the current chunk is ever needed, and a one-entry cache is enough.
         cached_path: UPath | None = None
         cached_frame: pl.DataFrame | None = None
+        cached_schema: list[str] = []
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -273,27 +295,58 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     chunk_index=row["data/chunk_index"],
                     file_index=row["data/file_index"],
                 )
+                materialise = reads_numeric_payloads()
                 if data_path != cached_path:
                     with data_path.open("rb") as handle:
-                        cached_frame = pl.read_parquet(handle)
+                        # A metadata-tier run projects the index and clock
+                        # columns only: the numeric feature vectors never leave
+                        # the file. The schema still says which columns exist.
+                        cached_schema = list(pl.read_parquet_schema(handle))
+                    with data_path.open("rb") as handle:
+                        cached_frame = pl.read_parquet(
+                            handle,
+                            columns=None
+                            if materialise
+                            else [
+                                c
+                                for c in ("episode_index", TIME_COLUMN, "frame_index")
+                                if c in cached_schema
+                            ],
+                        )
                     cached_path = data_path
                 assert cached_frame is not None
                 frame = cached_frame
 
                 episode_frame = frame.filter(
                     pl.col("episode_index") == row["episode_index"]
-                ).sort(TIME_COLUMN)
+                )
+                timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
+                clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
                 is_regular = sampling_is_regular(timestamps)
 
-                streams = series_streams(
-                    episode_frame,
-                    plan,
-                    timestamps,
-                    data_path,
-                    path=path,
-                    episode_label=row["episode_index"],
-                    is_regular=is_regular,
+                streams = (
+                    series_streams(
+                        episode_frame,
+                        plan,
+                        timestamps,
+                        data_path,
+                        path=path,
+                        episode_label=row["episode_index"],
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
+                        is_regular=is_regular,
+                    )
+                    if materialise
+                    else declared_series_streams(
+                        plan,
+                        cached_schema,
+                        timestamps,
+                        data_path,
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
+                        is_regular=is_regular,
+                    )
                 )
                 streams.extend(
                     _video_stream(
@@ -303,9 +356,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         taxonomy_type,
                         timestamps,
                         path,
+                        mapping_source=mapping_source,
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
                         is_regular=is_regular,
                     )
-                    for video_key, taxonomy_type in plan.video.items()
+                    for video_key, (taxonomy_type, mapping_source) in plan.video.items()
                 )
             except AdapterRefusal:
                 raise
@@ -314,6 +370,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     path, f"episode {row.get('episode_index')}: {exc}"
                 ) from exc
 
+            streams = with_episode_clock(
+                streams,
+                episode_frame,
+                clock=clock,
+                domain=f"{path}#episode:{row['episode_index']}",
+            )
             yield Episode(
                 id=f"episode_{row['episode_index']:06d}",
                 streams=streams,

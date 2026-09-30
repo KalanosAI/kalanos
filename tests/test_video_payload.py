@@ -12,7 +12,7 @@ import pytest
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.video import DecoderUnavailable, VideoPayload
 from kalanos.analysis.metrics import registry
-from kalanos.analysis.models.domain import Clock, Kind, Stream
+from kalanos.analysis.models.domain import Clock, Kind, Stream, TimestampDtype
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -83,6 +83,7 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
             path=LEROBOT_VIDEO, frame_count=2, start_s=0.0, end_s=2 / 30
         ),
         source_path=LEROBOT_VIDEO,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         clock=Clock.UNKNOWN,
         is_regular=True,
         channels=[],
@@ -97,7 +98,8 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
     )
 
     assert graded.metrics["stub_frame_metric"].status == MetricStatus.NOT_APPLICABLE
-    assert graded.metrics["effective_hz"].value is not None
+    assert graded.metrics["effective_hz"].value is None
+    assert graded.metrics["recorded_hz"].value is not None
 
 
 def test_fetch_decodes_the_fixture():

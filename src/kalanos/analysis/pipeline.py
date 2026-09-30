@@ -15,6 +15,8 @@ It never writes a file; its caller, such as the CLI, does that with
 
 # Built-in
 import logging
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from time import perf_counter
 
 # External
@@ -23,7 +25,9 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
+from kalanos.analysis.bindings import binding_identity, check_matched, resolve_episodes
 from kalanos.analysis.discovery.walk import walk_folder
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.discovery import (
     SkippedSource,
@@ -31,11 +35,22 @@ from kalanos.analysis.models.discovery import (
     SourceCandidate,
     SourceInfo,
 )
-from kalanos.analysis.models.domain import Episode
+from kalanos.analysis.models.domain import Episode, MappingSource
+from kalanos.analysis.models.errors import MappingOverrideError
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import (
+    ExecutionTier,
+    Inventory,
+    Producer,
+    RunCompletion,
+    RunInfo,
+)
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.assets.bundle import RunConfiguration
+from kalanos.assets.dictionary import load_default_dictionary
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -43,6 +58,14 @@ from kalanos.analysis.reporting.assemble import assemble_report
 # ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 logger = logging.getLogger(__name__)
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# How many seen source fields an unmatched-override error lists before it stops.
+_SEEN_FIELDS_SHOWN = 20
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -65,8 +88,15 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
 
     An adapter names an episode with whatever the file it read calls it.
     Two files in different folders can share that name, and their place under the
-    walked root tells them apart, so it becomes the id; a file holding several
-    recordings keeps the adapter's name for each after it.
+    walked root tells them apart, so it prefixes the id: `source::episode`.
+
+    A single-recording file keeps the short form, `source` alone. Which files
+    those are is the adapter's statement, not a count: an adapter that names
+    its episode after the file itself (its stem or name) is saying the file
+    *is* the recording. A container that names episodes by their own keys
+    (LeRobot's `episode_000000`, an HDF5 group) always gets the qualified
+    form, so a recording keeps the same id whether one or all of its
+    siblings loaded.
 
     Parameters
     ----------
@@ -84,15 +114,100 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
     """
 
     source = _source_id(path, base)
-    if len(episodes) == 1:
-        return [episodes[0].model_copy(update={"id": source})]
+    whole_file = {path.name, path.stem}
     return [
-        episode.model_copy(update={"id": f"{source}::{episode.id}"})
+        episode.model_copy(
+            update={
+                "id": source if episode.id in whole_file else f"{source}::{episode.id}"
+            }
+        )
         for episode in episodes
     ]
 
 
-def _with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
+def _apply_overrides(
+    episodes: list[Episode],
+    by_feature: Mapping[str, MappingOverride],
+    matched: set[str],
+    seen: set[str],
+) -> list[Episode]:
+    """Retype every stream whose `source_field` a mapping override names.
+
+    An override replaces a dictionary match as well as an unmapped fallback.
+
+    Parameters
+    ----------
+    episodes : list[Episode]
+        Everything one adapter read from a candidate.
+    by_feature : Mapping[str, MappingOverride]
+        The run's overrides, keyed by the source field each matches.
+    matched : set[str]
+        Grown in place with every override feature that matched a stream.
+    seen : set[str]
+        Grown in place with every source field read.
+        An unmatched override's error lists them.
+
+    Returns
+    -------
+    list[Episode]
+        The same episodes, in the same order, with matching streams retyped.
+    """
+
+    retyped: list[Episode] = []
+    for episode in episodes:
+        streams = []
+        for stream in episode.streams:
+            if stream.source_field is None:
+                streams.append(stream)
+                continue
+            seen.add(stream.source_field)
+            override = by_feature.get(stream.source_field)
+            if override is None:
+                streams.append(stream)
+                continue
+            matched.add(override.feature)
+            streams.append(
+                stream.model_copy(
+                    update={
+                        "taxonomy_type": override.taxonomy_type,
+                        "mapping_source": MappingSource.OVERRIDE,
+                    }
+                )
+            )
+        retyped.append(episode.model_copy(update={"streams": streams}))
+    return retyped
+
+
+def _unmatched_override_error(
+    unmatched: Sequence[MappingOverride], seen: set[str]
+) -> MappingOverrideError:
+    """Build the error for overrides that matched no stream.
+
+    Parameters
+    ----------
+    unmatched : Sequence[MappingOverride]
+        The overrides no stream's `source_field` equalled.
+    seen : set[str]
+        Every source field the run read.
+
+    Returns
+    -------
+    MappingOverrideError
+        Naming each unmatched feature with its origin, and the fields that were seen.
+    """
+
+    missing = ", ".join(f"{o.feature!r} (from {o.origin.value})" for o in unmatched)
+    fields = sorted(seen)
+    listed = ", ".join(fields[:_SEEN_FIELDS_SHOWN])
+    if len(fields) > _SEEN_FIELDS_SHOWN:
+        listed += f", and {len(fields) - _SEEN_FIELDS_SHOWN} more"
+    return MappingOverrideError(
+        f"mapping override matched no stream: {missing}; "
+        f"source fields seen: {listed or 'none'}"
+    )
+
+
+def with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
     """Fill in every limit a metric's own policy entry asks `describe()` for.
 
     Each metric's `target_source`, declared in the policy file, names the
@@ -135,7 +250,16 @@ def _lies_under(path: UPath, claimed_root: UPath) -> bool:
     return True
 
 
-def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Report:
+def run(
+    root: UPath,
+    *,
+    policy: Policy,
+    source: SourceInfo | None = None,
+    overrides: Sequence[MappingOverride] = (),
+    config: RunConfiguration | None = None,
+    producer: Producer | None = None,
+    run_info: RunInfo | None = None,
+) -> Report:
     """Grade `root` end to end: walk, select an adapter, read, then assemble.
 
     Parameters
@@ -147,6 +271,14 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         The loaded grading policy to score every metric against.
     source : SourceInfo or None
         What `root` was resolved from, recorded on the Report as given.
+    overrides : Sequence[MappingOverride]
+        Per-run mapping overrides, already merged and checked against the dictionary.
+        Each retypes every stream whose `source_field` equals its `feature`.
+    config : RunConfiguration or None
+        The resolved scope, requirements and binding conflicts. `None` grades
+        under the built-in `numeric-core` scope.
+    producer, run_info : Producer, RunInfo or None
+        Provenance to record on the report, when the caller built it.
 
     Returns
     -------
@@ -159,6 +291,8 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
     AdapterTie
         If more than one discovered adapter bid the same maximum confidence
         on a candidate.
+    MappingOverrideError
+        If an override matched no stream anywhere in the run.
     """
 
     start = perf_counter()
@@ -189,6 +323,16 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
     datasets: list[DatasetInfo] = []
     unresolved: list[UnresolvedSource] = []
     claimed: list[UPath] = []
+    by_feature = {override.feature: override for override in overrides}
+    matched: set[str] = set()
+    seen: set[str] = set()
+    channel_assertions = (
+        config.bundle.binding.channels if config and config.bundle.binding else []
+    )
+    matched_channels: set[tuple[str | None, str, int | None]] = set()
+    unresolved_episodes = 0
+    refused_sources: list[str] = []
+    inventory_notes: list[str] = []
 
     for candidate in candidates:
         # Step 2: a candidate a directory adapter already claimed was
@@ -225,22 +369,77 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
             )
             info = DatasetInfo(adapter=selection.name, path=candidate.path)
 
-        episode_policy = _with_declared_limits(policy, info)
+        episode_policy = with_declared_limits(policy, info)
 
-        # Step 5: read the path's episodes. Only a refusal the adapter raised
-        # about the input file is caught here — anything else, a ValidationError
-        # from our own models included, is a bug and propagates.
-        try:
-            episodes = list(selection.adapter.episodes(candidate.path))
-        except AdapterRefusal as exc:
-            logger.warning("%s: unresolved: %s", exc.path, exc.reason)
-            unresolved.append(exc.as_unresolved())
-            continue
+        # Step 5: read the path's episodes one at a time, keeping every episode
+        # the adapter yielded before it refused. Only a refusal the adapter
+        # raised about the input file is caught here — anything else, a
+        # ValidationError from our own models included, is a bug and propagates.
+        # The source's declaration is retained either way, so a refusal
+        # part-way through is reconciled against it like a clean read.
+        episodes: list[Episode] = []
+        refusal: AdapterRefusal | None = None
+        with use_tier(config.scope.tier if config else ExecutionTier.STANDARD):
+            try:
+                for episode in selection.adapter.episodes(candidate.path):
+                    episodes.append(episode)
+            except AdapterRefusal as exc:
+                refusal = exc
         datasets.append(info)
+        # A directory an adapter selected belongs to that adapter whatever
+        # the read produced — episodes, none, or a refusal. Offering its
+        # manifest and data files to other adapters would grade the same
+        # source twice.
+        if candidate.path.is_dir():
+            claimed.append(candidate.path)
+        if refusal is not None:
+            logger.warning(
+                "%s: unresolved after %d episode(s): %s",
+                refusal.path,
+                len(episodes),
+                refusal.reason,
+            )
+            unresolved.append(refusal.as_unresolved())
+            # A refused source is not one failed episode: the episodes it did
+            # not yield are a gap of unknown size unless it declared a count.
+            refused_sources.append(str(candidate.path))
+        # A declared count the adapter did not deliver is an inventory gap:
+        # those episodes exist somewhere and have no identities here, so they
+        # are counted as unresolved rather than silently dropped from the
+        # denominator. More loaded than declared is noted, not a gap.
+        if info.episode_count is not None:
+            if info.episode_count > len(episodes):
+                unresolved_episodes += info.episode_count - len(episodes)
+                inventory_notes.append(
+                    f"{candidate.path}: declared {info.episode_count} episodes, "
+                    f"loaded {len(episodes)}"
+                    + (" before the adapter refused" if refusal else "")
+                )
+            elif info.episode_count < len(episodes):
+                inventory_notes.append(
+                    f"{candidate.path}: declared {info.episode_count} episodes, "
+                    f"loaded {len(episodes)} (more than declared)"
+                )
+        if not episodes:
+            continue
 
         # Step 6: an adapter's name for a recording is local to the file it read,
         # so re-mint it against the walked root to keep it unique across the run.
         episodes = _qualify_ids(episodes, path=candidate.path, base=base)
+        for episode in episodes:
+            for stream in episode.streams:
+                if stream.source_field is not None:
+                    seen.add(stream.source_field)
+                    if stream.source_field in by_feature:
+                        matched.add(stream.source_field)
+        episodes = resolve_episodes(
+            episodes,
+            dictionary=load_default_dictionary(),
+            channels=channel_assertions,
+            overrides=overrides,
+            source_identity=str(candidate.path),
+            matched=matched_channels,
+        )
         analysed.extend(
             AnalysedEpisode(
                 episode=episode,
@@ -252,11 +451,46 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         )
         logger.info("%s: analysed by %s", candidate.path, selection.name)
 
-        if candidate.path.is_dir():
-            claimed.append(candidate.path)
+    unmatched = [o for o in overrides if o.feature not in matched]
+    if unmatched:
+        raise _unmatched_override_error(unmatched, seen)
+    check_matched(channel_assertions, matched_channels)
 
     # Step 7: grade everything that made it through, and assemble the report.
     logger.info("graded %d episode(s); %d unresolved", len(analysed), len(unresolved))
+    expected = (
+        sum(d.episode_count for d in datasets if d.episode_count is not None)
+        if any(d.episode_count is not None for d in datasets)
+        else None
+    )
+    inventory = Inventory(
+        expected=expected,
+        loaded=len(analysed),
+        # `failed` is for episodes with identities. A refused source is not
+        # one episode; it is listed as a source, and whatever it declared but
+        # did not yield is in `unresolved`.
+        failed=[],
+        unresolved=unresolved_episodes,
+        refused_sources=refused_sources,
+        # Finishing the walk proves nothing about episodes a source declared
+        # but never yielded, and a refused source may hold any number of them.
+        complete=unresolved_episodes == 0 and not refused_sources,
+        notes=inventory_notes,
+    )
+    if run_info is not None:
+        run_info = run_info.model_copy(
+            update={
+                "finished_at": datetime.now(timezone.utc),
+                "binding": binding_identity(
+                    [a.episode for a in analysed], config.binding_id if config else None
+                ),
+                "completion": (
+                    RunCompletion.COMPLETE
+                    if inventory.complete
+                    else RunCompletion.PARTIAL
+                ),
+            }
+        )
     return assemble_report(
         root=root,
         analysed=analysed,
@@ -266,4 +500,17 @@ def run(root: UPath, *, policy: Policy, source: SourceInfo | None = None) -> Rep
         duration_s=perf_counter() - start,
         source=source,
         datasets=datasets,
+        mapping_overrides=list(overrides),
+        requirements=config.requirements if config else None,
+        scope=(
+            config.scope.model_copy(update={"binding_id": run_info.binding.id})
+            if config and run_info and run_info.binding
+            else config.scope
+            if config
+            else None
+        ),
+        producer=producer,
+        run=run_info,
+        inventory=inventory,
+        binding_conflicts=config.conflicts if config else (),
     )

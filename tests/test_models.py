@@ -13,7 +13,6 @@ import polars as pl
 import pytest
 from upath import UPath
 
-# Internal
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -22,7 +21,9 @@ from kalanos.analysis.models.domain import (
     Episode,
     FramePayload,
     Kind,
+    MappingSource,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.report import (
@@ -33,6 +34,9 @@ from kalanos.analysis.models.report import (
     Report,
 )
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+
+# Internal
+from helpers import decided
 
 
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
@@ -97,20 +101,22 @@ def _sample_report() -> Report:
         score=channel_score,
         metrics={"drop_rate": metric},
     )
-    episode = GradedEpisode(
-        id="arm_multi_device",
-        adapter="csv",
-        adapter_confidence=0.9,
-        source_paths=[UPath("/data/example/arm_multi_device.csv")],
-        score=channel_score,
-        streams=[
-            GradedStream(
-                taxonomy_type="unmapped.tcp_pose",
-                instance="armA",
-                score=channel_score,
-                channels=[channel],
-            )
-        ],
+    episode = decided(
+        GradedEpisode(
+            id="arm_multi_device",
+            adapter="csv",
+            adapter_confidence=0.9,
+            source_paths=[UPath("/data/example/arm_multi_device.csv")],
+            score=channel_score,
+            streams=[
+                GradedStream(
+                    taxonomy_type="unmapped.tcp_pose",
+                    instance="armA",
+                    score=channel_score,
+                    channels=[channel],
+                )
+            ],
+        )
     )
     return Report(root=UPath("/data/example"), score=channel_score, episodes=[episode])
 
@@ -138,6 +144,7 @@ def _stream(source_path: Path, **overrides: Any) -> Stream:
         "payload": FramePayload(frame=pl.DataFrame({"tcp_pose_x_mm": [1.0, 2.0]})),
         "source_path": source_path,
         "source_field": "tcp_pose",
+        "timestamp_dtype": TimestampDtype.FLOAT64,
         "channels": [Channel(name="tcp_pose_x_mm")],
     }
     return Stream(**{**fields, **overrides})
@@ -273,6 +280,26 @@ def test_stream_rejects_an_attribution_that_contradicts_instance():
             Path("/data/example/bad.csv"),
             instance="armA",
             attribution=Attribution.UNATTRIBUTED,
+        )
+
+
+def test_stream_defaults_mapping_source_from_whether_it_is_typed():
+    """Verify a typed Stream defaults to DICTIONARY, and an unmapped one to None."""
+
+    typed = _stream(Path("/data/example/typed.csv"), taxonomy_type="proprio.ee_pose")
+    unmapped = _stream(Path("/data/example/unmapped.csv"), taxonomy_type="unmapped.q")
+    assert typed.mapping_source is MappingSource.DICTIONARY
+    assert unmapped.mapping_source is None
+
+
+def test_stream_rejects_a_mapping_source_on_an_unmapped_type():
+    """Verify an unmapped stream cannot claim an override typed it."""
+
+    with pytest.raises(ValueError):
+        _stream(
+            Path("/data/example/bad.csv"),
+            taxonomy_type="unmapped.q",
+            mapping_source=MappingSource.OVERRIDE,
         )
 
 

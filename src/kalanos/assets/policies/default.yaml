@@ -10,6 +10,11 @@
 schema_version: 1
 
 metrics:
+  # Recorded-axis diagnostics are report-only. They establish no capture quality.
+  timing.recorded_hz: {}
+  timing.recorded_dt_spread_ms: {}
+  timing.recorded_drop_estimate: {}
+
   # Both bounds decided: good < 1%, bad > 5%.
   timing.drop_rate:
     thresholds:

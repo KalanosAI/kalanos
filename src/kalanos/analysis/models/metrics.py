@@ -20,8 +20,11 @@ from typing import Any, Protocol, runtime_checkable
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kalanos.analysis.models.coverage import Availability
+
 # Internal
 from kalanos.analysis.models.domain import Channel, Episode, Payload, Stream
+from kalanos.analysis.models.support import TemporalSupport
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -88,6 +91,8 @@ class MetricResult(BaseModel):
     unit: str | None
     status: MetricStatus
     evidence: dict[str, Any] = Field(default_factory=dict)
+    availability: Availability | None = None
+    support: TemporalSupport = Field(default_factory=TemporalSupport)
 
 
 class Requires(BaseModel):
@@ -113,6 +118,7 @@ class Requires(BaseModel):
     regular_sampling: bool = False
     min_samples: int = 0
     taxonomy: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
 
 
 @runtime_checkable
@@ -266,6 +272,8 @@ class ChannelContext(BaseModel):
             `self.stream.taxonomy_type`.
         """
 
+        if self.channel.binding is not None:
+            return self.channel.binding.taxonomy_type
         return self.stream.taxonomy_type
 
     @model_validator(mode="after")

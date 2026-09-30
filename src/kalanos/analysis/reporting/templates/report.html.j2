@@ -285,10 +285,10 @@
 {%- endmacro %}
 
 {% macro finding_row(finding, index=none) -%}
-<tr class="sev-{{ finding.severity.value }}"{% if index is not none %} style="--i: {{ index }}"{% endif %}>
-  <td>{{ finding.severity.value }}</td>
+<tr class="sev-{{ finding.severity.value }}" id="finding-{{ finding.id }}"{% if index is not none %} style="--i: {{ index }}"{% endif %}>
+  <td>{{ finding.severity.value }} / {{ finding.consequence.value }}{% if finding.calibration %}<br>{{ finding.calibration.get("reason", finding.calibration.get("manifest_id", "")) }}{% endif %}</td>
   <td class="mono">{{ finding.metric_id }}</td>
-  <td class="mono">{{ finding.episode_id }}{% if finding.stream %} &middot; {{ finding.stream }}{% endif %}{% if finding.instance %} &middot; {{ finding.instance }}{% endif %}{% if finding.channel %} &middot; {{ finding.channel }}{% endif %}</td>
+  <td class="mono">{{ finding.episode_id }}{% if finding.stream %} &middot; {{ finding.stream }}{% endif %}{% if finding.instance %} &middot; {{ finding.instance }}{% endif %}{% if finding.channel %} &middot; {{ finding.channel }}{% endif %}<details><summary>Evidence location</summary>{{ finding.source_field or "" }} {{ finding.source_path or "" }}<br>{{ finding.support.kind.value }}{% for interval in finding.support.intervals %}<br>[{{ interval.start }}, {{ interval.end_exclusive }}){% if interval.support_start is not none %}; support [{{ interval.support_start }}, {{ interval.support_end_exclusive }}){% endif %}{% endfor %}</details></td>
   <td class="mono">{{ "%.4g"|format(finding.value) }}{% if finding.unit %} {{ finding.unit }}{% endif %}</td>
   <td class="points">{{ points_rail(finding.points) }}<span class="mono">{{ "%.0f"|format(finding.points) }}</span></td>
 </tr>
@@ -307,14 +307,25 @@
         </p>
       </div>
       <div class="plate-score">
-        {{ grade_chip(report.score) }}
-        <span class="dataset-score">{% if report.score.score is none %}&ndash;{% else %}{{ "%.1f"|format(report.score.score) }}{% endif %}</span>
-        {% if report.score.train_ready is none %}
+        <span>Readiness</span>
+        <span class="dataset-score">{% if report.readiness is none or report.readiness.score is none %}undefined{% else %}{{ "%.1f"|format(report.readiness.score) }}{% endif %}</span>
+        <span>Quality: {% if report.score.score is none %}unassessed{% else %}{{ "%.1f"|format(report.score.score) }}{% endif %}</span>
+        {% if report.eligibility_counts is not none %}
+        {% set c = report.eligibility_counts %}
+        <span class="verdict {% if c.blocked %}verdict-bad{% elif c.review or c.unknown %}verdict-unknown{% else %}verdict-good{% endif %}">{{ c.pass_count }}/{{ c.total }} eligible{% if c.blocked %}, {{ c.blocked }} blocked{% endif %}{% if c.review %}, {{ c.review }} review{% endif %}{% if c.unknown %}, {{ c.unknown }} unknown{% endif %}</span>
+        {% elif report.score.train_ready is none %}
         <span class="verdict verdict-unknown">train-readiness unknown</span>
         {% elif report.score.train_ready %}
         <span class="verdict verdict-good">train ready</span>
         {% else %}
         <span class="verdict verdict-bad">not train ready</span>
+        {% endif %}
+        {% if report.sufficiency %}<span>Sufficiency: {{ report.sufficiency.status.value }}</span>{% endif %}
+        {% if report.scope is not none %}
+        <span class="verdict verdict-unknown">scope {{ report.scope.requirements_id }} &middot; {{ report.scope.policy_id }}</span>
+        {% endif %}
+        {% if report.readiness is not none and report.readiness.score is none %}
+        <span class="verdict verdict-unknown">readiness undefined: {{ report.readiness.reasons | join('; ') }}</span>
         {% endif %}
       </div>
     </div>
@@ -344,6 +355,14 @@
 
 <div class="column">
 
+<section aria-label="Analysis coverage">
+  <h2>Analysis coverage</h2>
+  {% for line in coverage_lines %}<p>{{ line }}</p>{% endfor %}
+  {% if report.coverage %}<details><summary>Metric coverage counts</summary><table class="plain"><tr><th>Metric</th><th>Computed / eligible</th><th>Unit</th><th>Unavailable / skipped / error</th><th>Not applicable</th></tr>
+  {% for row in report.coverage.metrics %}<tr><td>{{ row.key }}</td><td>{{ row.computed }} / {{ row.eligible }}</td><td>{{ row.unit }}</td><td>{{ row.unavailable }} / {{ row.skipped }} / {{ row.error }}</td><td>{{ row.not_applicable }}</td></tr>{% endfor %}
+  </table></details>{% endif %}
+</section>
+<details><summary>Finding groups</summary>{% for group in finding_groups %}<p>{{ group.metric }} · {{ group.role }} · {{ group.adapter }} · {{ group.tasks | join(", ") }} · {{ group.consequence }}: {{ group.count }} findings across {{ group.episode_count }} episodes. {% for id in group.member_ids %}<a href="#finding-{{ id }}">{{ loop.index }}</a> {% endfor %}</p>{% endfor %}</details>
 <section class="findings-section">
   <h2 class="eyebrow">FINDINGS</h2>
   {% if not report.findings %}

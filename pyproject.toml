@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.6.5"
+version = "0.7.0"
 description = "Grade robot training data before you train on it: a 0-100 readiness score, the blocking episodes to exclude, and the evidence behind every finding, for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -103,13 +103,16 @@ packages = ["src/kalanos"]
 # The sdist is an allowlist, not "everything git tracks": only what is needed to
 # build the wheel and run the tests from source. pyproject.toml, README.md and
 # LICENSE are always added by hatchling. Anything not listed here (scripts/,
-# .github/, uv.lock, local output) never reaches PyPI.
+# .github/, uv.lock, local output) never reaches PyPI, except the explicit
+# release-check script included below for its metadata tests.
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
     "/tests",
     "/docs",
     "/CONTRIBUTING.md",
+    "/CITATION.cff",
+    "/scripts/check_release.py",
     "/SECURITY.md",
 ]
 

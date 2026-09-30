@@ -18,6 +18,10 @@ from typing import cast
 # External
 from upath import UPath
 
+from kalanos.analysis.calibration import apply_calibration
+from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
+from kalanos.analysis.identities import adapter_versions, detector_versions
+
 # Internal
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -25,9 +29,15 @@ from kalanos.analysis.metrics.registry import (
     run_stream_metrics,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
+from kalanos.analysis.models.binding import (
+    BindingConflict,
+    EvaluationScope,
+    RequirementsSection,
+)
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
     ChannelContext,
     EpisodeContext,
@@ -35,16 +45,32 @@ from kalanos.analysis.models.metrics import (
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import (
+    ExecutionTier,
+    Inventory,
+    Producer,
+    RunCompletion,
+    RunInfo,
+)
 from kalanos.analysis.models.report import (
     AnalysedEpisode,
     GradedChannel,
     GradedEpisode,
     GradedStream,
+    PayloadStatus,
     Report,
+    StreamEvaluation,
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
-from kalanos.analysis.scoring.gate import apply_gate, readiness_of
+from kalanos.analysis.scoring.eligibility import (
+    counts_of,
+    dataset_train_ready,
+    decide_all,
+    readiness_of,
+    sufficiency_of,
+)
+from kalanos.analysis.scoring.gate import apply_gate
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -61,45 +87,6 @@ logger = logging.getLogger(__name__)
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-# A channel the dataset names as a gripper inside a wider vector (ALOHA's
-# `left_gripper` in `observation.state`) grades as a gripper: it holds open or
-# closed for long stretches and then snaps, which the stuck-sensor and noise
-# checks would otherwise read as faults.
-_GRIPPER_WORD = "gripper"
-_GRIPPER_TYPES = {
-    "action": "action.gripper_command",
-    "proprio": "proprio.gripper_width",
-}
-
-
-def channel_taxonomy(stream_type: str, channel_name: str) -> str:
-    """The taxonomy type a channel grades under: its stream's, or a gripper's.
-
-    Parameters
-    ----------
-    stream_type : str
-        The stream's taxonomy type.
-    channel_name : str
-        The channel's name, as the dataset declares it.
-
-    Returns
-    -------
-    str
-        `action.gripper_command` for a gripper channel of an action stream,
-        `proprio.gripper_width` for one of a state stream, and the stream's own
-        type for every other channel, a gripper's torque channel included.
-    """
-
-    if _GRIPPER_WORD not in channel_name.lower() or _GRIPPER_WORD in stream_type:
-        return stream_type
-    # A gripper's motor current is a torque reading, not its position: it keeps
-    # its stream's torque type and checks.
-    if "torque" in stream_type:
-        return stream_type
-    family = "action" if stream_type.startswith("action.") else "proprio"
-    return _GRIPPER_TYPES[family]
-
-
 def grade_stream(
     stream: Stream,
     *,
@@ -107,6 +94,7 @@ def grade_stream(
     is_regular: bool,
     episode_id: str,
     category: str | None,
+    tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -136,13 +124,20 @@ def grade_stream(
     findings: list[Finding] = []
     location = FindingLocation(
         episode_id=episode_id,
+        source_path=str(stream.source_path),
+        source_field=stream.source_field,
         stream=stream.taxonomy_type,
         instance=stream.instance,
     )
 
     # Step 1: grade the stream's own metrics — the ones that read its clock
     # or its payload as a whole. These run whether or not the stream carries a payload.
-    stream_ctx = StreamContext(stream=stream, is_regular=is_regular)
+    stream_ctx = StreamContext(
+        stream=stream.model_copy(update={"payload": None})
+        if tier == ExecutionTier.METADATA
+        else stream,
+        is_regular=is_regular,
+    )
     stream_results = run_stream_metrics(stream_ctx)
     stream_metrics, own_score, stream_findings = score_metrics(
         stream_results,
@@ -153,35 +148,75 @@ def grade_stream(
     )
     findings.extend(stream_findings)
 
-    # Step 2: fetch the payload only when there is a channel to grade with it.
-    # A video stream carries no channels, so it is never fetched here.
+    # Step 2: fetch the payload only when there is a channel to grade with it,
+    # and only when the execution tier reads payloads at all. Whatever
+    # happens is recorded on the stream so a requirement can see it; a
+    # warning in a log is not evidence.
     graded_channels = []
+    evaluation = StreamEvaluation(payload=PayloadStatus.NOT_REQUIRED)
     if stream.channels:
-        if stream.payload is None:
+        if tier == ExecutionTier.METADATA:
+            evaluation = StreamEvaluation(
+                payload=PayloadStatus.SKIPPED,
+                reason="metadata tier does not read numeric payloads",
+                n_channels_declared=len(stream.channels),
+            )
+        elif stream.payload is None:
             logger.warning(
                 "%s: stream %r has %d channel(s) but no payload",
                 stream.source_path,
                 stream.taxonomy_type,
                 len(stream.channels),
             )
+            evaluation = StreamEvaluation(
+                payload=PayloadStatus.MISSING_INPUT,
+                reason=f"{len(stream.channels)} channel(s) declared but no payload",
+                n_channels_declared=len(stream.channels),
+            )
         else:
-            frame = stream.payload.fetch()
-            for channel in stream.channels:
-                ctx = ChannelContext(
-                    channel=channel, values=frame[channel.name], stream=stream_ctx
+            try:
+                frame = stream.payload.fetch()
+                if frame.height != len(stream.timestamps):
+                    raise ValueError("payload rows do not align with timestamps")
+                absent = [
+                    c.name for c in stream.channels if c.name not in frame.columns
+                ]
+                if absent:
+                    raise ValueError(f"payload is missing declared channels: {absent}")
+            except Exception as exc:
+                evaluation = StreamEvaluation(
+                    payload=PayloadStatus.ERROR,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    n_channels_declared=len(stream.channels),
                 )
-                results = run_channel_metrics(ctx)
-                graded, score, channel_findings = score_metrics(
-                    results,
-                    level=Level.CHANNEL,
-                    taxonomy_type=channel_taxonomy(stream.taxonomy_type, channel.name),
-                    policy=policy,
-                    location=location.model_copy(update={"channel": channel.name}),
+            else:
+                evaluation = StreamEvaluation(
+                    payload=PayloadStatus.COMPUTED,
+                    n_channels_declared=len(stream.channels),
+                    n_channels_graded=len(stream.channels),
                 )
-                graded_channels.append(
-                    GradedChannel(channel=channel, score=score, metrics=graded)
-                )
-                findings.extend(channel_findings)
+                for channel in stream.channels:
+                    ctx = ChannelContext(
+                        channel=channel, values=frame[channel.name], stream=stream_ctx
+                    )
+                    results = run_channel_metrics(ctx)
+                    graded, score, channel_findings = score_metrics(
+                        results,
+                        level=Level.CHANNEL,
+                        taxonomy_type=ctx.taxonomy_type,
+                        policy=policy,
+                        location=location.model_copy(
+                            update={
+                                "channel": channel.name,
+                                "stream": ctx.taxonomy_type,
+                                "source_index": channel.source_index,
+                            }
+                        ),
+                    )
+                    graded_channels.append(
+                        GradedChannel(channel=channel, score=score, metrics=graded)
+                    )
+                    findings.extend(channel_findings)
 
     # Step 3: fold the stream's own score in alongside its channels' —
     # one more equal-weight contributor, the same rule every other level uses.
@@ -191,12 +226,22 @@ def grade_stream(
     return (
         GradedStream(
             taxonomy_type=stream.taxonomy_type,
+            kind=stream.kind.value,
+            source_path=str(stream.source_path),
+            coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
             instance=stream.instance,
             attribution=stream.attribution,
             category=category,
+            mapping_source=stream.mapping_source,
             score=stream_score,
             metrics=stream_metrics,
             channels=graded_channels,
+            source_field=stream.source_field,
+            declared_channels=stream.channels if not graded_channels else [],
+            clock=stream.clock,
+            clock_info=stream.clock_info,
+            source_order=stream.source_order,
+            evaluation=evaluation,
         ),
         findings,
     )
@@ -209,6 +254,7 @@ def grade_episode(
     adapter_confidence: float,
     policy: Policy,
     dictionary: Dictionary,
+    tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -245,6 +291,7 @@ def grade_episode(
             is_regular=stream.is_regular,
             episode_id=episode.id,
             category=dictionary.category_of(stream.taxonomy_type),
+            tier=tier,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -302,6 +349,13 @@ def assemble_report(
     duration_s: float | None = None,
     source: SourceInfo | None = None,
     datasets: Sequence[DatasetInfo] = (),
+    mapping_overrides: Sequence[MappingOverride] = (),
+    requirements: RequirementsSection | None = None,
+    scope: EvaluationScope | None = None,
+    producer: Producer | None = None,
+    run: RunInfo | None = None,
+    inventory: Inventory | None = None,
+    binding_conflicts: Sequence[BindingConflict] = (),
 ) -> Report:
     """Grade every analysed Episode and assemble the run's Report.
 
@@ -326,6 +380,19 @@ def assemble_report(
         What `root` was resolved from, if the caller resolved it.
     datasets : Sequence[DatasetInfo]
         What the adapter declared about each path it read, in walk order.
+    mapping_overrides : Sequence[MappingOverride]
+        The per-run overrides the pipeline applied.
+    requirements : RequirementsSection or None
+        What a pass needs. `None` uses the built-in `numeric-core` scope.
+    scope : EvaluationScope or None
+        The scope identities to name on the report.
+    producer, run : Producer, RunInfo or None
+        Provenance, when the caller resolved it.
+    inventory : Inventory or None
+        Expected/loaded/failed episodes. `None` means every loaded episode
+        is the whole inventory.
+    binding_conflicts : Sequence[BindingConflict]
+        Mapping disagreements the resolver recorded.
 
     Returns
     -------
@@ -335,6 +402,7 @@ def assemble_report(
     """
 
     dictionary = load_default_dictionary()
+    tier = scope.tier if scope is not None else ExecutionTier.STANDARD
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
     for item in analysed:
@@ -344,19 +412,93 @@ def assemble_report(
             adapter_confidence=item.adapter_confidence,
             policy=item.policy,
             dictionary=dictionary,
+            tier=tier,
         )
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
 
+    # Step 1: decide eligibility once, now that every metric has run. Every
+    # count, the gate and the compatibility booleans derive from this.
+    requirements = requirements or RequirementsSection()
+    scope = scope or EvaluationScope(
+        requirements_id=requirements.id, policy_id="default-decisions-v1"
+    )
+    inventory = inventory or Inventory(loaded=len(graded_episodes))
+    producer = producer or Producer(version="unknown")
+    producer = producer.model_copy(
+        update={
+            "metrics": detector_versions(),
+            "adapters": adapter_versions(item.adapter for item in analysed),
+        }
+    )
+    graded_episodes = [
+        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
+        for e in graded_episodes
+    ]
+    findings = apply_calibration(
+        findings,
+        {item.episode.id: item.policy for item in analysed},
+        run,
+        scope,
+        producer,
+    )
+    decisions = decide_all(
+        graded_episodes, findings, requirements=requirements, policy_id=scope.policy_id
+    )
+    graded_episodes = [
+        episode.model_copy(
+            update={
+                "eligibility": decisions[episode.id],
+                "score": episode.score.model_copy(
+                    update={
+                        "train_ready": decisions[episode.id].compatibility_train_ready
+                    }
+                ),
+            }
+        )
+        for episode in graded_episodes
+    ]
+    counts = counts_of(decisions.values(), inventory)
+    readiness = readiness_of(graded_episodes, decisions, counts)
+    sufficiency = sufficiency_of(requirements, counts)
+
+    # Step 2: the dataset rollup and the gate, which now only derives.
     dataset_score = rollup(
         Level.DATASET, [ge.score for ge in graded_episodes], policy=policy
     )
-    # The gate caps the letter by the share of failing episodes; the number
-    # stays the mean. Without a gate in the policy, this changes nothing.
-    dataset_score, gate = apply_gate(graded_episodes, findings, dataset_score, policy)
+    dataset_score, gate = apply_gate(
+        graded_episodes,
+        findings,
+        dataset_score,
+        policy,
+        decisions=decisions,
+        readiness_score=readiness.score,
+        passing_quality=readiness.passing_quality,
+    )
+    # The dataset compatibility boolean derives from the counts and the
+    # inventory, whether or not the policy has a letter gate.
+    dataset_score = dataset_score.model_copy(
+        update={"train_ready": dataset_train_ready(counts)}
+    )
 
+    errors = []
+    for episode in graded_episodes:
+        if episode.coverage:
+            for row in episode.coverage.metrics:
+                if row.error:
+                    errors.append(
+                        {
+                            "episode_id": episode.id,
+                            "metric": row.key,
+                            "reason": "; ".join(row.reasons),
+                        }
+                    )
+    if errors and run is not None:
+        run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
     return Report(
+        operational_errors=errors,
         root=root,
+        coverage=report_coverage(graded_episodes, inventory),
         score=dataset_score,
         episodes=graded_episodes,
         findings=sort_findings(findings),
@@ -367,6 +509,14 @@ def assemble_report(
         source=source,
         datasets=list(datasets),
         categories=dictionary.category_groups,
+        mapping_overrides=list(mapping_overrides),
         gate=gate,
-        readiness=readiness_of(graded_episodes, gate),
+        readiness=readiness,
+        producer=producer,
+        run=run,
+        scope=scope,
+        inventory=inventory,
+        eligibility_counts=counts,
+        sufficiency=sufficiency,
+        binding_conflicts=list(binding_conflicts),
     )

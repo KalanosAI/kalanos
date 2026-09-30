@@ -17,6 +17,9 @@ from pathlib import Path
 # External
 from typer.testing import CliRunner
 
+# Since schema 7, `grade` exits 1 when the decision gate (default
+# `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
+# so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
 from kalanos.analysis import pipeline
 from kalanos.analysis.models.report import Report
@@ -107,7 +110,7 @@ def test_the_default_verbosity_leaves_stdout_to_the_report_card():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
     for level in ("DEBUG", "INFO", "WARNING", "ERROR"):
         assert level not in result.stdout
@@ -118,7 +121,7 @@ def test_the_default_verbosity_emits_no_debug_records():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "DEBUG" not in result.stderr
 
 
@@ -127,7 +130,7 @@ def test_debug_verbosity_writes_the_inference_trace_to_stderr():
 
     result = runner.invoke(app, ["--verbosity", "debug", "grade", str(CSV_FIXTURE)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
     assert "kalanos.analysis.inference" in result.stderr
     assert "DEBUG" in result.stderr
@@ -144,7 +147,7 @@ def test_json_stdout_stays_parseable_at_debug_verbosity():
         app, ["--verbosity", "debug", "grade", str(CSV_FIXTURE), "--json"]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
 

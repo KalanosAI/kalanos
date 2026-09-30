@@ -16,10 +16,37 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.hdf5 import Hdf5Adapter
 from kalanos.analysis.models.adapters import AdapterRefusal
+from kalanos.analysis.models.domain import Clock, TimestampDtype
 from kalanos.testing import check_adapter
 
 # Local
 from helpers import CSV_FIXTURE, HDF5_FIXTURE
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _write_demos(
+    path,
+    timestamps,
+    *,
+    key="timestamps",
+    rate=None,
+    dtype: type[np.floating] = np.float64,
+):
+    """Write a two-demo robomimic-shaped file, each demo carrying `timestamps`."""
+
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        if rate is not None:
+            data.attrs["fps"] = rate
+        for name in ("demo_0", "demo_1"):
+            group = data.create_group(name)
+            n = len(timestamps)
+            group.create_dataset("actions", data=np.zeros((n, 2), dtype=np.float32))
+            group.create_dataset(key, data=np.asarray(timestamps, dtype=dtype))
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -261,20 +288,6 @@ def test_describe_does_not_read_dataset_values(monkeypatch):
     assert info.episode_count == 2
 
 
-def _write_demos(path, timestamps, *, key="timestamps", rate=None):
-    """Write a two-demo robomimic-shaped file, each demo carrying `timestamps`."""
-
-    with h5py.File(str(path), "w") as store:
-        data = store.create_group("data")
-        if rate is not None:
-            data.attrs["fps"] = rate
-        for name in ("demo_0", "demo_1"):
-            group = data.create_group(name)
-            n = len(timestamps)
-            group.create_dataset("actions", data=np.zeros((n, 2), dtype=np.float32))
-            group.create_dataset(key, data=np.asarray(timestamps, dtype=np.float64))
-
-
 def test_an_episodes_own_timestamps_become_its_timebase(tmp_path):
     """Verify a recorded time dataset times the episode and isn't graded as a channel.
 
@@ -326,23 +339,29 @@ def test_a_repeated_timestamp_is_kept_for_the_timing_metrics_to_find(tmp_path):
     assert stream.is_regular is True
 
 
-def test_a_time_named_dataset_that_runs_backwards_is_not_a_clock(tmp_path):
-    """Verify a non-monotonic `t` column stays a channel on a synthesised timebase."""
+def test_a_backwards_named_clock_is_preserved_instead_of_regenerated(tmp_path):
+    """A broken recorded time axis must remain available for ordering diagnostics."""
 
     path = tmp_path / "not_a_clock.hdf5"
     _write_demos(path, [3.0, 1.0, 2.0, 0.0, 5.0, 4.0], key="t", rate=10.0)
 
     [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
 
-    assert sorted(s.source_field for s in first.streams) == ["actions", "t"]
-    assert first.streams[0].timestamps.to_list() == pytest.approx(
-        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-    )
+    assert sorted(s.source_field for s in first.streams) == ["actions"]
+    assert first.streams[0].native_timestamps.to_list() == [
+        3.0,
+        1.0,
+        2.0,
+        0.0,
+        5.0,
+        4.0,
+    ]
+    assert first.streams[0].clock is Clock.UNKNOWN
     assert all(s.is_regular is False for s in first.streams)
 
 
-def test_without_a_time_dataset_the_timebase_is_synthesised_and_not_regular(tmp_path):
-    """Verify the rate-synthesised fallback is unchanged and never claims regularity."""
+def test_without_a_time_dataset_the_regular_grid_is_labelled_synthesised(tmp_path):
+    """A regular generated grid does not certify measured acquisition timing."""
 
     path = tmp_path / "untimed.hdf5"
     with h5py.File(str(path), "w") as store:
@@ -358,7 +377,22 @@ def test_without_a_time_dataset_the_timebase_is_synthesised_and_not_regular(tmp_
     assert first.streams[0].timestamps.to_list() == pytest.approx(
         [0.0, 0.02, 0.04, 0.06]
     )
-    assert first.streams[0].is_regular is False
+    assert first.streams[0].is_regular is True
+    assert not first.streams[0].clock_info.certifies_acquisition
+    assert first.streams[0].clock is Clock.RECONSTRUCTED
+    assert first.streams[0].timestamp_dtype is TimestampDtype.FLOAT64
+
+
+def test_a_float32_time_dataset_is_recorded_as_float32_on_an_unknown_clock(tmp_path):
+    """The stored format is what bounds the stamps' rounding, whatever the cast."""
+
+    path = tmp_path / "float32.hdf5"
+    _write_demos(path, [0.0, 0.02, 0.0401, 0.06, 0.0799, 0.1], dtype=np.float32)
+
+    [first, _] = list(Hdf5Adapter().episodes(UPath(path)))
+
+    assert all(s.timestamp_dtype is TimestampDtype.FLOAT32 for s in first.streams)
+    assert all(s.clock is Clock.UNKNOWN for s in first.streams)
 
 
 def test_robomimic_keys_resolve_to_their_types(tmp_path):

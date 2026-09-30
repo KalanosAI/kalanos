@@ -17,17 +17,43 @@ and a path is a real filesystem path.
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from enum import Enum
+
 # External
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Internal
 from kalanos.analysis.models.adapters import DatasetInfo
+from kalanos.analysis.models.binding import (
+    BindingConflict,
+    EvaluationScope,
+)
+from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
+from kalanos.analysis.models.coverage import CoverageRow
 from kalanos.analysis.models.dictionary import CategoryGroup
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
-from kalanos.analysis.models.domain import Attribution, Channel, Episode
+from kalanos.analysis.models.domain import (
+    Attribution,
+    Channel,
+    Clock,
+    ClockInfo,
+    Episode,
+    MappingSource,
+    SourceOrder,
+)
+from kalanos.analysis.models.eligibility import (
+    EligibilityCounts,
+    EligibilityStatus,
+    EpisodeEligibility,
+    Readiness,
+    Sufficiency,
+)
+from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import Inventory, Producer, RunInfo
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
@@ -38,7 +64,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "6.5.0"
+CURRENT_SCHEMA_VERSION = "7.0.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -90,6 +116,40 @@ class GradedChannel(BaseModel):
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
 
 
+class PayloadStatus(str, Enum):
+    """Whether a stream's channel payload was actually examined.
+
+    A required capability's outcome must be explicit: a stream that was never
+    read cannot pass by having another stream in the same family pass.
+    """
+
+    # fmt: off
+    COMPUTED      = "computed"       # Payload fetched; channels graded
+    NOT_REQUIRED  = "not_required"   # No channels to grade (video, text)
+    MISSING_INPUT = "missing_input"  # Channels declared but no payload to read
+    SKIPPED       = "skipped"        # Execution tier did not read payloads
+    ERROR         = "error"          # Fetching or grading the payload raised
+    # fmt: on
+
+
+class StreamEvaluation(BaseModel):
+    """What was done with a stream's payload, and why when it was not read.
+
+    Attributes
+    ----------
+    payload : PayloadStatus
+    reason : str or None
+    n_channels_declared : int
+        Channels the source declares, whether or not they were graded.
+    n_channels_graded : int
+    """
+
+    payload: PayloadStatus = PayloadStatus.COMPUTED
+    reason: str | None = None
+    n_channels_declared: int = 0
+    n_channels_graded: int = 0
+
+
 class GradedStream(BaseModel):
     """One Stream with its own rolled-up score.
 
@@ -103,6 +163,8 @@ class GradedStream(BaseModel):
         Where `instance` came from — mirrors `domain.Stream.attribution`.
     category : str or None
         The dictionary category of `taxonomy_type`, `None` when the stream is unmapped.
+    mapping_source : MappingSource or None
+        How `taxonomy_type` was decided — mirrors `domain.Stream.mapping_source`.
     score : ScoreResult
         The Stream-level rollup over the stream's own metrics and `channels`.
     metrics : dict[str, MetricResult]
@@ -110,15 +172,28 @@ class GradedStream(BaseModel):
         and regraded against the policy, via `scoring.resolve_status`.
     channels : list[GradedChannel]
         The graded channels within this stream.
+    evaluation : StreamEvaluation
+        Whether the payload was read. Requirements decide eligibility from
+        this, not from whether some other stream produced a result.
     """
 
     taxonomy_type: str
     instance: str | None = None
     attribution: Attribution = Attribution.SINGLE
     category: str | None = None
+    mapping_source: MappingSource | None = None
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     channels: list[GradedChannel] = Field(default_factory=list)
+    kind: str | None = None
+    source_path: str | None = None
+    coverage: list[CoverageRow] = Field(default_factory=list)
+    source_field: str | None = None
+    declared_channels: list[Channel] = Field(default_factory=list)
+    clock: Clock = Clock.UNKNOWN
+    clock_info: ClockInfo | None = None
+    source_order: SourceOrder = Field(default_factory=SourceOrder)
+    evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
 
 
 class GradedEpisode(BaseModel):
@@ -151,6 +226,9 @@ class GradedEpisode(BaseModel):
     tasks : list[str] or None
         The episode's task instructions as the source stored them — mirrors
         `domain.Episode.tasks`, so a reader sees what each episode was told.
+    eligibility : EpisodeEligibility or None
+        The authoritative decision. `None` only while the episode is being
+        assembled; a finished Report refuses an episode without one.
     """
 
     id: str
@@ -163,10 +241,14 @@ class GradedEpisode(BaseModel):
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     streams: list[GradedStream] = Field(default_factory=list)
     tasks: list[str] | None = None
+    eligibility: EpisodeEligibility | None = None
+    coverage: AnalysisCoverage | None = None
 
 
 class FailingEpisode(BaseModel):
-    """An episode the gate counts as failing, and the critical findings why.
+    """An episode whose eligibility is `blocked`, and the reasons why.
+
+    Derived from `GradedEpisode.eligibility`; never decided here.
 
     Attributes
     ----------
@@ -181,7 +263,11 @@ class FailingEpisode(BaseModel):
 
 
 class TaskTrait(BaseModel):
-    """A critical finding on every episode of one task and on none of any other.
+    """A blocking finding on every episode of one task and on none of any other.
+
+    Descriptive since schema 7: it is reported so a reader can see a task-wide
+    pattern, and it exempts nothing. Prevalence cannot excuse a violated
+    contract; a scoped policy rule can, explicitly.
 
     Attributes
     ----------
@@ -199,11 +285,11 @@ class TaskTrait(BaseModel):
 
 
 class DatasetTrait(BaseModel):
-    """A critical finding on (nearly) every graded episode of the dataset.
+    """A blocking finding on (nearly) every graded episode of the dataset.
 
-    It describes how the dataset was recorded (a state dimension no episode ever
-    moves, say), not a fault in some episodes, so dropping episodes cannot fix it
-    and it fails none of them. It is reported so a reader still sees it.
+    Descriptive since schema 7: it may describe how the dataset was recorded,
+    or it may be corruption in every episode; the report cannot tell, so it
+    exempts nothing. Blocked episodes stay blocked.
 
     Attributes
     ----------
@@ -257,35 +343,32 @@ class Coverage(BaseModel):
 
 
 class Gate(BaseModel):
-    """The dataset gate's verdict: failing episodes cap the dataset's letter.
+    """The dataset gate: which episodes are blocked, and what the grade rests on.
 
-    `Report.score.score` stays the mean of the episode scores; `Report.score.grade`
-    and `train_ready` are this gate's. The mean's own letter is `uncapped_grade`.
+    Since schema 7 the gate decides nothing; `failing_episodes` lists the
+    episodes whose eligibility is `blocked`. Letter fields remain for
+    compatibility and are not a decision surface.
 
     Attributes
     ----------
     n_episodes : int
         The episodes graded.
     failing_episodes : list[FailingEpisode]
-        The episodes with a critical finding that is not a task trait.
+        The episodes whose eligibility is `blocked`.
     failing_share : float
         `len(failing_episodes) / n_episodes`.
     task_traits : list[TaskTrait]
-        Critical findings set aside as describing a task rather than a fault.
+        Blocking findings shared by every episode of one task: descriptive.
     dataset_traits : list[DatasetTrait]
-        Critical findings on every episode, set aside as describing how the
-        dataset was recorded rather than a fault in some of its episodes.
+        Blocking findings on (nearly) every episode: descriptive.
     uncapped_grade : Grade or None
         The letter the mean alone would get.
     cap : Grade or None
         The best letter the failing share allows; `None` when it allows any.
     pruned_score : float or None
-        The mean without the failing episodes; `None` when none fail.
-    pruned_grade : Grade or None
-        `pruned_score`'s letter.
-    train_ready_after_pruning : bool or None
-        Whether the dataset is train-ready once the failing episodes are removed;
-        `None` when none fail.
+        Mean quality of the non-blocked episodes: a description of a
+        candidate selection, not a claim that it is sufficient training data.
+        `None` when none are blocked or none remain.
     coverage : Coverage
         What the grade rests on.
     summary : str
@@ -300,40 +383,8 @@ class Gate(BaseModel):
     uncapped_grade: Grade | None
     cap: Grade | None
     pruned_score: float | None = None
-    pruned_grade: Grade | None = None
-    train_ready_after_pruning: bool | None = None
     coverage: Coverage
     summary: str
-
-
-class Readiness(BaseModel):
-    """The dataset's headline number: how much of it you can train on, and how clean.
-
-    An episode with a blocking finding (a critical finding that is not a task
-    or dataset trait) contributes 0; every other evaluated episode contributes
-    its quality score. Readiness is the mean of those contributions over the
-    evaluated episodes, equivalently passing share x passing-episode quality.
-
-    Attributes
-    ----------
-    score : float or None
-        Readiness from 0 to 100, full precision; `None` when no episode could
-        be evaluated (not graded).
-    evaluated_episodes : int
-        Episodes with a quality score.
-    passing_episodes : int
-        Evaluated episodes without a blocking finding.
-    blocking_episodes : int
-        Evaluated episodes with one.
-    passing_quality : float or None
-        The mean quality of the passing episodes; `None` when none pass.
-    """
-
-    score: float | None
-    evaluated_episodes: int
-    passing_episodes: int
-    blocking_episodes: int
-    passing_quality: float | None
 
 
 class Report(BaseModel):
@@ -376,13 +427,35 @@ class Report(BaseModel):
     categories : dict[str, CategoryGroup]
         Every category slug in the active dictionary mapped onto its group,
         so a reader can group streams by `category` without the dictionary.
+    mapping_overrides : list[MappingOverride]
+        Every per-run override applied, with where it came from.
+        Kalanos records each type as given and does not verify it.
 
-    Letter grades are deprecated since 0.6.5: `score.grade`, `gate.cap`,
-    `gate.uncapped_grade` and `gate.pruned_grade` are still written for
-    compatibility and will be removed in 0.7.0. `readiness` is the headline.
+    producer : Producer or None
+        The software that wrote this report.
+    run : RunInfo or None
+        This run's identity: source evidence, configuration identities, tier.
+    scope : EvaluationScope or None
+        What every decision in this report is relative to.
+    inventory : Inventory or None
+        Which episodes were expected, loaded and failed.
+    eligibility_counts : EligibilityCounts or None
+        How the known inventory partitions by eligibility.
+    readiness : Readiness or None
+        The readiness index, `null` with reasons whenever undefined.
+    sufficiency : Sufficiency or None
+        Whether the eligible set meets the scope's explicit requirements.
+    binding_conflicts : list[BindingConflict]
+        Every feature where two mapping sources disagreed, and which won.
+
+    Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
+    compatibility fields only and drive no decision. The headline is
+    `eligibility_counts` and `readiness`.
     """
 
+    operational_errors: list[dict[str, str]] = Field(default_factory=list)
     schema_version: str = CURRENT_SCHEMA_VERSION
+    coverage: AnalysisCoverage | None = None
     root: AnyPath
     score: ScoreResult
     episodes: list[GradedEpisode] = Field(default_factory=list)
@@ -394,5 +467,88 @@ class Report(BaseModel):
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
     categories: dict[str, CategoryGroup] = Field(default_factory=dict)
+    mapping_overrides: list[MappingOverride] = Field(default_factory=list)
     gate: Gate | None = None
     readiness: Readiness | None = None
+    producer: Producer | None = None
+    run: RunInfo | None = None
+    scope: EvaluationScope | None = None
+    inventory: Inventory | None = None
+    eligibility_counts: EligibilityCounts | None = None
+    sufficiency: Sufficiency | None = None
+    binding_conflicts: list[BindingConflict] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _decisions_agree(self) -> "Report":
+        """Refuse a report whose surfaces could disagree about an episode.
+
+        Every episode carries an eligibility; its compatibility `train_ready`
+        mirrors it exactly; the gate's failing list is exactly the blocked
+        episodes; and the counts partition the episodes plus the failed ones.
+        """
+
+        if self.coverage is not None:
+            from kalanos.analysis.coverage import report_coverage
+
+            if self.inventory is None or any(e.coverage is None for e in self.episodes):
+                raise ValueError("coverage requires episode ledgers and inventory")
+            if self.coverage != report_coverage(self.episodes, self.inventory):
+                raise ValueError("report coverage does not reconcile with episodes")
+        ids = [f.id for f in self.findings if f.id is not None]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate finding ids")
+        for episode in self.episodes:
+            if episode.eligibility is None:
+                raise ValueError(f"episode {episode.id!r} has no eligibility")
+            expected = episode.eligibility.compatibility_train_ready
+            if episode.score.train_ready != expected:
+                raise ValueError(
+                    f"episode {episode.id!r}: train_ready={episode.score.train_ready} "
+                    f"contradicts eligibility {episode.eligibility.status.value!r}"
+                )
+        blocked = {
+            e.id
+            for e in self.episodes
+            if e.eligibility is not None
+            and e.eligibility.status == EligibilityStatus.BLOCKED
+        }
+        if self.gate is not None:
+            listed = {item.episode_id for item in self.gate.failing_episodes}
+            if listed != blocked:
+                raise ValueError(
+                    "gate.failing_episodes is not the set of blocked episodes"
+                )
+        if self.eligibility_counts is not None:
+            counts = self.eligibility_counts
+            failed = len(self.inventory.failed) if self.inventory else 0
+            gap = self.inventory.unresolved if self.inventory else 0
+            if counts.total != len(self.episodes) + failed + gap:
+                raise ValueError(
+                    "eligibility_counts.total does not cover the inventory"
+                )
+            if counts.blocked != len(blocked):
+                raise ValueError(
+                    "eligibility_counts.blocked disagrees with the episodes"
+                )
+            if self.inventory is not None and (
+                counts.inventory_complete != self.inventory.complete
+            ):
+                raise ValueError(
+                    "eligibility_counts and inventory disagree on completeness"
+                )
+            # The dataset compatibility boolean is a function of the counts.
+            expected_ready = (
+                False
+                if counts.blocked
+                else True
+                if counts.inventory_complete
+                and counts.total
+                and counts.pass_count == counts.total
+                else None
+            )
+            if self.score.train_ready != expected_ready:
+                raise ValueError(
+                    f"dataset train_ready={self.score.train_ready} contradicts the "
+                    f"eligibility counts (expected {expected_ready})"
+                )
+        return self

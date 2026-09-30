@@ -25,7 +25,17 @@ import polars as pl
 from upath import UPath
 
 # Internal
-from kalanos.analysis.models.domain import Channel, Clock, FramePayload, Kind, Stream
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    ClockInfo,
+    ClockOrigin,
+    FramePayload,
+    Kind,
+    OriginEvidence,
+    Stream,
+    TimestampDtype,
+)
 from kalanos.analysis.models.metrics import ChannelContext, MetricInput, StreamContext
 from kalanos.analysis.optional import load_numpy
 
@@ -168,6 +178,14 @@ def clean_recording(
         payload=FramePayload(frame=frame),
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        # Synthetic positive control models a producer-declared capture clock.
+        clock_info=ClockInfo(
+            origin=ClockOrigin.CAPTURE,
+            origin_evidence=OriginEvidence.PRODUCER,
+            native_unit="s",
+            transforms=["synthetic test control"],
+        ),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name=name) for name in channels],
     )
 
@@ -224,6 +242,14 @@ def clean_taxels(
         payload=FramePayload(frame=frame),
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        # Synthetic positive control models a producer-declared capture clock.
+        clock_info=ClockInfo(
+            origin=ClockOrigin.CAPTURE,
+            origin_evidence=OriginEvidence.PRODUCER,
+            native_unit="s",
+            transforms=["synthetic test control"],
+        ),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name=name) for name in names],
     )
 
@@ -253,6 +279,22 @@ def _require_channel(stream: Stream, channel: str) -> None:
 
     if channel not in {c.name for c in stream.channels}:
         raise ValueError(f"{channel!r} is not one of this stream's channels")
+
+
+def _retimed_info(stream: Stream, operation: str) -> ClockInfo:
+    """Document synthetic retiming without promoting the source clock's origin."""
+    info = stream.clock_info or ClockInfo.from_legacy(stream.clock)
+    return info.model_copy(
+        update={
+            "native_unit": "s",
+            "native_dtype": "float64",
+            "tick_period_s": None,
+            "transforms": [
+                *info.transforms,
+                f"synthetic {operation} in canonical seconds",
+            ],
+        }
+    )
 
 
 def _window(frame: pl.DataFrame, start: int, length: int) -> int:
@@ -361,11 +403,30 @@ def drop_samples(stream: Stream, *, start: int = 40, count: int = 10) -> Stream:
     keep = [row for row in range(frame.height) if not (start <= row < end)]
     new_frame = frame[keep]
     new_timestamps = stream.timestamps.gather(keep)
+    original_indices = stream.source_order.original_index or list(
+        range(len(stream.timestamps))
+    )
 
     return stream.model_copy(
         update={
             "payload": FramePayload(frame=new_frame),
             "timestamps": new_timestamps,
+            "native_timestamps": stream.native_timestamps.gather(keep)
+            if stream.native_timestamps is not None
+            else None,
+            "source_order": stream.source_order.model_copy(
+                update={"original_index": [original_indices[i] for i in keep]}
+            ),
+            "clock_info": (
+                stream.clock_info or ClockInfo.from_legacy(stream.clock)
+            ).model_copy(
+                update={
+                    "transforms": [
+                        *(stream.clock_info.transforms if stream.clock_info else []),
+                        "synthetic row dropout",
+                    ]
+                }
+            ),
         }
     )
 
@@ -406,7 +467,11 @@ def repeat_timestamps(stream: Stream, *, start: int = 30, count: int = 5) -> Str
     for row in range(start, last + 1, 2):
         stamps[row] = stamps[row - 1]
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, stamps)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, stamps),
+            "native_timestamps": None,
+            "clock_info": _retimed_info(stream, "repeated timestamps"),
+        }
     )
 
 
@@ -452,7 +517,11 @@ def jitter_clock(stream: Stream, *, milliseconds: float = 2.0) -> Stream:
         jittered[index] += offset if index % 2 == 1 else -offset
 
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, jittered)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, jittered),
+            "native_timestamps": None,
+            "clock_info": _retimed_info(stream, "jitter"),
+        }
     )
 
 
@@ -538,7 +607,11 @@ def stretch_clock(stream: Stream, *, factor: float = 1.4) -> Stream:
         stretched.append(running)
 
     return stream.model_copy(
-        update={"timestamps": pl.Series(stream.timestamps.name, stretched)}
+        update={
+            "timestamps": pl.Series(stream.timestamps.name, stretched),
+            "native_timestamps": None,
+            "clock_info": _retimed_info(stream, "clock drift"),
+        }
     )
 
 
@@ -814,6 +887,14 @@ def clean_frames(
         payload=payload,
         source_path=UPath("synthetic"),
         clock=Clock.CAPTURE,
+        # Synthetic positive control models a producer-declared capture clock.
+        clock_info=ClockInfo(
+            origin=ClockOrigin.CAPTURE,
+            origin_evidence=OriginEvidence.PRODUCER,
+            native_unit="s",
+            transforms=["synthetic test control"],
+        ),
+        timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[],
     )
 

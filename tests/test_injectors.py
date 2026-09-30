@@ -8,7 +8,12 @@
 import pytest
 
 # Internal
-from kalanos.analysis.models.domain import FramePayload
+from kalanos.analysis.models.domain import (
+    Clock,
+    ClockInfo,
+    FramePayload,
+    TimestampDtype,
+)
 from kalanos.testing import (
     Defect,
     add_noise,
@@ -92,6 +97,23 @@ def test_dropping_samples_removes_timestamps_and_rows_together():
     surviving = dropped.timestamps.to_list()
     expected = clean.timestamps.to_list()[:40] + clean.timestamps.to_list()[50:]
     assert surviving == expected
+
+
+def test_dropout_preserves_clock_origin_and_keeps_the_dtype():
+    """A missing row does not turn generated timestamps into measured capture time."""
+
+    reconstructed = clean_recording().model_copy(
+        update={
+            "clock": Clock.RECONSTRUCTED,
+            "clock_info": ClockInfo.from_legacy(Clock.RECONSTRUCTED),
+            "timestamp_dtype": TimestampDtype.FLOAT32,
+        }
+    )
+    dropped = drop_samples(reconstructed)
+
+    assert dropped.clock is Clock.RECONSTRUCTED
+    assert not dropped.clock_info.certifies_acquisition
+    assert dropped.timestamp_dtype is TimestampDtype.FLOAT32
 
 
 def test_jittering_the_clock_keeps_the_timestamps_strictly_increasing():

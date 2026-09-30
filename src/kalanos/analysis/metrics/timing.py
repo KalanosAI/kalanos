@@ -1,29 +1,16 @@
-"""effective_hz, dt_jitter_ms, drop_rate and monotonic_violations — the timing family.
+"""Recorded timeline diagnostics and acquisition timing have separate claims.
 
-All four read the time column alone. All but monotonic_violations require
-regular sampling: a series indexed by event rather than a steady clock has no
-meaningful sampling rate, and reporting one is worse than reporting none.
-monotonic_violations asks only whether the clock moves forward, which any clocked
-series must, however irregular — and a clock broken badly enough to fail the
-regularity test is exactly the one it must still see.
-
-None of them is graded here. Grading needs a nominal rate and
-threshold bands that live in the policy, which this stage does not read —
-every result below carries `report_only` with an `ungraded_reason` in its evidence,
-so scoring can tell "not graded yet" apart from a metric like `p99_torque`
-that is report-only by design and will never be graded at all.
+Ordering always uses adjacent source rows. Recorded cadence/spread/drop estimates
+are descriptive and do not establish sensor capture timing. The historical
+rate/jitter/drop metrics require explicit producer evidence for capture time.
+Uniformity alone neither proves generation nor disproves measured capture time.
 """
 
-# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
-# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
-# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
-
-# Built-in
 import statistics
 
-# Internal
+from kalanos.analysis.clocks import clock_evidence, samples
 from kalanos.analysis.metrics.registry import metric
-from kalanos.analysis.metrics.results import not_applicable
+from kalanos.analysis.models.domain import ClockInfo
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -34,286 +21,146 @@ from kalanos.analysis.models.metrics import (
 )
 
 
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
-# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
-# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
-
-
-# Two samples are the fewest that yield even one gap, which is what
-# effective_hz needs and no more.
-_REQUIRES_REGULAR_SAMPLING = Requires(regular_sampling=True, min_samples=2)
-
-# A standard deviation over one or two gaps is not a spread anyone should act on;
-# five samples buys four gaps, enough for the number to mean something.
-_REQUIRES_ENOUGH_GAPS_FOR_A_SPREAD = Requires(regular_sampling=True, min_samples=5)
-
-# Whether a clock advances needs one gap and nothing about its regularity.
-_REQUIRES_A_GAP = Requires(min_samples=2)
-
-# The reason every result below carries report_only —
-# factored out so the functions all say the same thing rather than
-# slightly different ones.
 _UNGRADED_REASON = "grading needs policy thresholds, which this stage does not read"
+_RECORDED_REASON = "recorded timeline diagnostic; does not certify acquisition timing"
 
 
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
-
-
-def _ordered_timestamps(ctx: StreamContext) -> list[float]:
-    """List the stream's timestamps in row order, with any nulls dropped.
-
-    A row whose timestamp did not resolve carries no gap information on either side
-    of it, so it is left out entirely rather than subtracted against `None`.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream context; only its `timestamps` are read.
-
-    Returns
-    -------
-    list[float]
-        Non-null timestamps, in their original row order.
-    """
-
-    return ctx.timestamps.drop_nulls().to_list()
-
-
-# Gaps all within this fraction of the median gap are exactly even: what frame
-# number ÷ fps, or a simulator's fixed step, produces — not a clock that measured
-# anything. Floating-point rounding of such stamps stays far below it; a physical
-# clock's jitter sits well above (a realistic 50 µs on a 20 ms period is 0.25%).
-_RECONSTRUCTED_TOLERANCE = 1e-4
-
-_RECONSTRUCTED_REASON = (
-    "timestamps are exactly evenly spaced (every gap within 0.01% of the period), "
-    "as when they are reconstructed from frame numbers or a simulator's fixed step, "
-    "so capture timing is not observable"
-)
-
-
-def _reconstructed_clock(gaps: list[float]) -> bool:
-    """Check whether every gap is within `_RECONSTRUCTED_TOLERANCE` of the median.
-
-    Parameters
-    ----------
-    gaps : list[float]
-        Consecutive timestamp gaps, in row order.
-
-    Returns
-    -------
-    bool
-        `True` for two or more gaps, a positive median, and none further than
-        `_RECONSTRUCTED_TOLERANCE` times the median from it.
-    """
-
-    if len(gaps) < 2:
-        return False
-    median_gap = statistics.median(gaps)
-    if median_gap <= 0:
-        return False
-    return max(abs(gap - median_gap) for gap in gaps) <= (
-        _RECONSTRUCTED_TOLERANCE * median_gap
+def _cadence(ctx: StreamContext, *, acquisition: bool, kind: str) -> MetricResult:
+    data = samples(ctx.stream)
+    info = ctx.stream.clock_info or ClockInfo.from_legacy(ctx.stream.clock)
+    evidence = clock_evidence(ctx.stream, data)
+    evidence["measurement_scope"] = (
+        "acquisition" if acquisition else "recorded_timeline"
     )
-
-
-def _consecutive_gaps(ctx: StreamContext) -> list[float]:
-    """List the gaps between consecutive non-null timestamps.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream context; only its `timestamps` are read.
-
-    Returns
-    -------
-    list[float]
-        Every `ordered[i + 1] - ordered[i]`,
-        one shorter than the number of non-null timestamps — possibly empty.
-    """
-
-    ordered = _ordered_timestamps(ctx)
-    return [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
-
-
-@metric(level=Level.STREAM, family=Family.TIMING, requires=_REQUIRES_REGULAR_SAMPLING)
-def effective_hz(ctx: StreamContext) -> MetricResult:
-    """Samples per second, from the median gap between timestamps.
-
-    Median rather than mean, so one long gap cannot move it.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream to measure; only its `timestamps` are read.
-
-    Returns
-    -------
-    MetricResult
-        `not_applicable`, with a reason in `evidence`, when:
-        - fewer than two valid timestamps survive to take a gap over
-        - the median gap is zero or negative
-        `report_only` otherwise.
-    """
-
-    gaps = _consecutive_gaps(ctx)
-    if not gaps:
-        return not_applicable("fewer than two valid timestamps to take a gap over")
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
-
-    median_gap = statistics.median(gaps)
-    if median_gap <= 0:
-        return not_applicable("median gap is zero or negative")
-
-    return MetricResult(
-        value=1.0 / median_gap,
-        unit="Hz",
-        status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "n_gaps": len(gaps),
-            "median_gap_s": median_gap,
-            "ungraded_reason": _UNGRADED_REASON,
-        },
-    )
-
-
-@metric(
-    level=Level.STREAM,
-    family=Family.TIMING,
-    requires=_REQUIRES_ENOUGH_GAPS_FOR_A_SPREAD,
-)
-def dt_jitter_ms(ctx: StreamContext) -> MetricResult:
-    """Standard deviation of the gaps between consecutive timestamps.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream to measure; only its `timestamps` are read.
-
-    Returns
-    -------
-    MetricResult
-        `not_applicable`, with a reason in `evidence`, when:
-        - fewer than two gaps survive to take a spread over
-        - the median gap is zero or negative
-        `report_only` otherwise.
-    """
-
-    gaps = _consecutive_gaps(ctx)
-    if len(gaps) < 2:
-        return not_applicable("fewer than two gaps to take a spread over")
-    if statistics.median(gaps) <= 0:
-        return not_applicable("median gap is zero or negative")
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
-
-    jitter_s = statistics.stdev(gaps)
-    return MetricResult(
-        value=jitter_s * 1000.0,
-        unit="ms",
-        status=MetricStatus.REPORT_ONLY,
-        evidence={"n_gaps": len(gaps), "ungraded_reason": _UNGRADED_REASON},
-    )
-
-
-@metric(level=Level.STREAM, family=Family.TIMING, requires=_REQUIRES_REGULAR_SAMPLING)
-def drop_rate(ctx: StreamContext) -> MetricResult:
-    """Fraction of expected samples that never arrived.
-
-    Expected count is this series' own duration divided by its own median gap,
-    so a stream is judged against the clock it actually kept rather than
-    a nominal rate declared elsewhere.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream to measure; only its `timestamps` are read.
-
-    Returns
-    -------
-    MetricResult
-        `not_applicable`, with a reason in `evidence`, when:
-        - fewer than two valid timestamps survive to measure a duration over
-        - the duration or the median gap is zero or negative
-        `report_only` otherwise.
-    """
-
-    ordered = _ordered_timestamps(ctx)
-    if len(ordered) < 2:
-        return not_applicable(
-            "fewer than two valid timestamps to measure a duration over"
+    reason = data.reason
+    if not reason and acquisition and not info.certifies_acquisition:
+        reason = (
+            f"capture timing is not observable: clock origin {info.origin.value!r} "
+            f"has {info.origin_evidence.value!r} evidence; explicit producer "
+            "evidence for capture time is required"
         )
-
-    duration = ordered[-1] - ordered[0]
-    gaps = [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
-    median_gap = statistics.median(gaps)
-
-    if duration <= 0 or median_gap <= 0:
-        return not_applicable("duration or median gap is zero or negative")
-
-    expected_samples = duration / median_gap + 1
-    if _reconstructed_clock(gaps):
-        return not_applicable(_RECONSTRUCTED_REASON)
-    observed_samples = len(ordered)
-    fraction = max(0.0, (expected_samples - observed_samples) / expected_samples)
-
+    if not reason and (info.native_unit == "unknown" or not data.seconds):
+        reason = "timestamp units are unknown; cannot measure cadence in seconds"
+    if not reason and data.invalid_rows:
+        reason = "invalid timestamps prevent a whole-stream cadence estimate"
+    if not reason and len(data.gaps) < (4 if kind == "spread" else 1):
+        reason = (
+            "fewer than five valid samples"
+            if kind == "spread"
+            else "fewer than two valid samples"
+        )
+    if not reason and any(gap <= 0 for gap in data.gaps):
+        reason = "repeated/backwards timestamps prevent a whole-stream cadence estimate"
+    if not reason and not ctx.is_regular:
+        reason = "sampling is not regular"
+    if reason:
+        return MetricResult(
+            value=None,
+            unit=None,
+            status=MetricStatus.NOT_APPLICABLE,
+            evidence={**evidence, "reason": reason},
+        )
+    median_gap = statistics.median(data.gaps)
+    evidence["median_gap_s"] = median_gap
+    if kind == "rate":
+        value, unit = 1.0 / median_gap, "Hz"
+    elif kind == "spread":
+        value, unit = statistics.stdev(data.gaps) * 1000.0, "ms"
+    else:
+        # An estimate against the observed median cadence, never a hardware
+        # frame-loss count. Only a complete, strictly increasing axis gets one.
+        expected = sum(data.gaps) / median_gap + 1
+        value = max(0.0, (expected - data.n_samples) / expected)
+        unit = "fraction"
+        evidence.update(
+            expected_samples=expected,
+            observed_samples=data.n_samples,
+            denominator="duration / median adjacent gap + 1",
+            estimate=True,
+        )
+    evidence["ungraded_reason"] = _UNGRADED_REASON if acquisition else _RECORDED_REASON
     return MetricResult(
-        value=fraction,
-        unit="fraction",
-        status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "expected_samples": expected_samples,
-            "observed_samples": observed_samples,
-            "ungraded_reason": _UNGRADED_REASON,
-        },
+        value=value, unit=unit, status=MetricStatus.REPORT_ONLY, evidence=evidence
     )
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=_REQUIRES_A_GAP)
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def effective_hz(ctx: StreamContext) -> MetricResult:
+    """Capture rate from a producer-declared acquisition clock."""
+    return _cadence(ctx, acquisition=True, kind="rate")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def dt_jitter_ms(ctx: StreamContext) -> MetricResult:
+    """Acquisition interval spread, requiring producer capture-clock evidence."""
+    return _cadence(ctx, acquisition=True, kind="spread")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def drop_rate(ctx: StreamContext) -> MetricResult:
+    """Missing-sample estimate on a verified capture timebase."""
+    return _cadence(ctx, acquisition=True, kind="drop")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def recorded_hz(ctx: StreamContext) -> MetricResult:
+    """Median cadence of the recorded timeline, including generated grids."""
+    return _cadence(ctx, acquisition=False, kind="rate")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def recorded_dt_spread_ms(ctx: StreamContext) -> MetricResult:
+    """Recorded interval spread; zero does not establish perfect capture timing."""
+    return _cadence(ctx, acquisition=False, kind="spread")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+def recorded_drop_estimate(ctx: StreamContext) -> MetricResult:
+    """Estimated holes in the recorded grid, not verified sensor frame loss."""
+    return _cadence(ctx, acquisition=False, kind="drop")
+
+
+@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
 def monotonic_violations(ctx: StreamContext) -> MetricResult:
-    """Count the samples whose timestamp is at or before the one before it.
+    """Repeated/backwards adjacent steps, addressed in original source rows.
 
-    A timestamp equal to its predecessor is a repeated step — in simulation,
-    usually a dropped physics step; one earlier than its predecessor is a clock
-    that ran backwards, a reordered or merged log. Both break velocity estimates
-    and time alignment, and neither shows in `drop_rate`, which only sees samples
-    that never arrived. Row order is kept, never sorted, so a backwards step
-    is visible.
-
-    Parameters
-    ----------
-    ctx : StreamContext
-        The stream to measure; only its `timestamps` are read.
-
-    Returns
-    -------
-    MetricResult
-        `not_applicable` when fewer than two valid timestamps survive;
-        `report_only` otherwise, as a count, with the fraction of steps,
-        the repeated and backwards counts and the first offending sample
-        in `evidence`.
+    Invalid timestamps break adjacency. Missing rows are never removed and then
+    bridged to invent a step. Clock origin does not suppress structural evidence.
     """
-
-    gaps = _consecutive_gaps(ctx)
-    if not gaps:
-        return not_applicable("fewer than two valid timestamps to take a gap over")
-
-    repeated = [index for index, gap in enumerate(gaps) if gap == 0]
-    backwards = [index for index, gap in enumerate(gaps) if gap < 0]
+    data = samples(ctx.stream)
+    evidence = clock_evidence(ctx.stream, data)
+    evidence["measurement_scope"] = "recorded_timeline"
+    reason = data.reason or (
+        "fewer than two adjacent valid timestamps to take a gap over"
+        if not data.gaps
+        else None
+    )
+    if reason:
+        return MetricResult(
+            value=None,
+            unit=None,
+            status=MetricStatus.NOT_APPLICABLE,
+            evidence={**evidence, "reason": reason},
+        )
+    repeated = [
+        row for row, gap in zip(data.end_rows, data.gaps, strict=True) if gap == 0
+    ]
+    backwards = [
+        row for row, gap in zip(data.end_rows, data.gaps, strict=True) if gap < 0
+    ]
     offending = sorted(repeated + backwards)
+    evidence.update(
+        fraction=len(offending) / len(data.gaps),
+        n_repeated=len(repeated),
+        n_backwards=len(backwards),
+        first_sample=offending[0] if offending else None,
+        sample_indices=offending[:100],
+        sample_indices_truncated=len(offending) > 100,
+        ungraded_reason=_UNGRADED_REASON,
+    )
     return MetricResult(
         value=float(len(offending)),
         unit="count",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "n_gaps": len(gaps),
-            "fraction": len(offending) / len(gaps),
-            "n_repeated": len(repeated),
-            "n_backwards": len(backwards),
-            "first_sample": offending[0] + 1 if offending else None,
-            "ungraded_reason": _UNGRADED_REASON,
-        },
+        evidence=evidence,
     )

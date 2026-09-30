@@ -56,23 +56,31 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 
 | Metric | Level | Requires | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
-| `effective_hz` | STREAM | regular sampling | Hz | Samples per second, from the median gap between timestamps. Median so one long gap cannot move it. | *candidate: within 10% of nominal good, 25% bad*; ungraded where the policy declares no nominal rate |
-| `dt_jitter_ms` | STREAM | regular sampling | ms | Standard deviation of the gaps between consecutive timestamps. | *candidate: good < 5 ms at 100 Hz*; one-sided (no bad bound), so it stays report-only |
-| `drop_rate` | STREAM | regular sampling | fraction | Fraction of expected samples that never arrived, expected being duration ÷ median gap. | good < 1%, bad > 5% |
+| `effective_hz` | STREAM | regular sampling + producer capture evidence | Hz | Capture samples per second, from the median gap between timestamps. Median so one long gap cannot move it. | *candidate: within 10% of nominal good, 25% bad*; ungraded where the policy declares no nominal rate |
+| `dt_jitter_ms` | STREAM | regular sampling + producer capture evidence | ms | Standard deviation of adjacent capture-time gaps. | *candidate: good < 5 ms at 100 Hz*; one-sided (no bad bound), so it stays report-only |
+| `drop_rate` | STREAM | regular sampling + producer capture evidence | fraction | Missing-sample estimate against the observed cadence; expected count is duration ÷ median gap + 1. | good < 1%, bad > 5% |
 | `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
 
-**Reconstructed clocks.** When every gap between timestamps is within 0.01% of the period, the stamps did not come from a clock that measured anything: they were reconstructed — frame number ÷ fps, as LeRobot conversions write, or a simulator's fixed step. `effective_hz`, `dt_jitter_ms` and `drop_rate` then return `not_applicable` ("capture timing is not observable") instead of a perfect score, per the rule above: a perfect score would claim timing that was never observed. Grading six converted LeRobot datasets (2,647 episodes) showed exactly this — no jitter above 0.001 ms, no drops, every rate exact — and a timing family scoring 100 without measuring. Floating-point rounding of such stamps stays far below 0.01%; a physical clock sits well above (a realistic 50 µs on a 20 ms period is 0.25%). `monotonic_violations` still runs: a repeated step is visible on any clock.
+**Clock provenance (R07-04).** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered. HDF5's adapter-created grid is known generation.
+
+| Recorded-axis metric | Meaning | Decision behavior |
+| --- | --- | --- |
+| `recorded_hz` | Reciprocal median adjacent interval | Report-only by default |
+| `recorded_dt_spread_ms` | Sample standard deviation of recorded intervals | Report-only by default; not sensor jitter |
+| `recorded_drop_estimate` | Estimated holes relative to recorded median cadence | Report-only by default; not verified sensor frame loss |
+
+Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval. See [R07-04](R07-04.md) for migration and acceptance tests.
 
 ---
 
 ## integrity
 
-Universal. Computed for every numeric channel whether or not its type was identified, which is why nothing here gates on taxonomy. A mystery column that is flatlined must still fail loudly.
+Universal. Computed for every numeric channel whether or not its type was identified, which is why nothing here gates on taxonomy. A mystery column that is flatlined still produces a diagnostic; automatic exclusion requires the appropriate authority.
 
 | Metric | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|
 | `missing_pct` | CHANNEL | % | Share of null or NaN values. | *candidate: good < 0.5%, bad > 5%* |
-| `flatline_pct` | CHANNEL | % | Percentage of time the value does not change, which is a stuck sensor. Evidence carries the longest run. | *candidate: good < 50%, bad > 90%* (revised against real 50 Hz teleoperation, where joints hold still for 20–45% of an episode; a stuck sensor is unchanged for nearly all of it). A channel that **never changes at all** in an episode grades as a **warning** at the middle of the band, never critical: it is an unused joint or a disconnected sensor, which the data cannot tell apart, and it does not show the episode is worse than the others (on `lerobot/berkeley_fanuc_manipulation` a state dimension constant in 158 of 415 episodes capped the dataset at D). A channel that moves and then **freezes partway** is the stuck sensor, and stays critical; reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
+| `flatline_pct` | CHANNEL | % | Percentage of finite adjacent pairs that do not change. This alone does not establish a stuck sensor. Evidence carries source-row intervals and the longest run. | *candidate: good < 50%, bad > 90%* (revised against real 50 Hz teleoperation, where joints hold still for 20–45% of an episode; a stuck sensor is unchanged for nearly all of it). A channel that **never changes at all** in an episode grades as a **warning** at the middle of the band, never critical: it is an unused joint or a disconnected sensor, which the data cannot tell apart, and it does not show the episode is worse than the others (on `lerobot/berkeley_fanuc_manipulation` a state dimension constant in 158 of 415 episodes capped the dataset at D). A channel that moves and then **freezes partway** is the stuck sensor, and stays critical; reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
 | `spike_pct` | CHANNEL | % | Percentage of samples beyond 6σ of a local window. | *candidate: good < 0.1%, bad > 2%* (default and joint velocity) |
 | `drift` | CHANNEL | unit/min | Slow trend where the signal should be stationary. Evidence carries the fitted slope and r². | motor and joint temperature: Δ < 15 °C over an episode; other types graded only where the policy marks the signal stationary |
 | `snr_db` | CHANNEL | dB | Signal against the high-frequency noise floor: the variance of a 5-sample moving average against what it removes. **Not applicable below about 45 Hz**, where 5 samples span more than 0.1 s and smooth away real motion, which would then read as noise (on real 5-15 Hz LeRobot datasets the ratio tracked the sampling rate rather than the robot). At 50 Hz and above the window is unchanged. | *candidate:* joint velocity good > 20 / bad < 10 dB; joint acceleration good > 12 / bad < 6 dB; other types good > 30 / bad < 15 dB |
@@ -228,42 +236,52 @@ Family scores are weighted means of their metrics; the overall score is a weight
 The dataset's headline number is **readiness**, from 0 to 100, in the report's `readiness` section:
 
 ```text
-An episode with a blocking finding contributes 0.
-Every other evaluated episode contributes its score, from 0 to 100.
+Readiness is defined only when the declared inventory is complete,
+all episodes are evaluated, and every episode is pass or blocked.
+A blocked episode contributes 0; a passing episode contributes its quality.
+Review or unknown episodes leave readiness undefined.
 
-readiness = sum of contributions / number of evaluated episodes
-          = passing share × passing-episode quality
+readiness = sum of contributions / expected episode count
 ```
 
-An episode is **blocking** when any of its metrics grades `critical`, unless that finding is a task or dataset trait (the dataset gate, below). The denominator includes blocking episodes; `passing_quality` is the mean over passing episodes only, never the overall mean. When every evaluated episode is blocking, readiness is 0 and `passing_quality` is `null`; when no episode could be evaluated, readiness is `null` (not graded). A report scored without a gate (`legacy_0_5`) has no blocking rule, and so no readiness.
+Only an authorized blocking consequence blocks an episode. Critical severity alone
+does not supply that authorization. `passing_quality` describes passing episodes;
+when none pass it is null. Review and required missing evidence cannot be converted
+into a high readiness score by averaging the remaining episodes.
 
 Readiness is an index of technical readiness under the evaluated checks, not a prediction of training success.
 
-**Letter grades are deprecated** since 0.6.5. Reports still carry `score.grade` (from the bands A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, F below, in `policy.yaml`'s `letters`), `gate.cap`, `gate.uncapped_grade` and `gate.pruned_grade` for compatibility, but nothing presents them, and 0.7.0 removes them.
+**Letter grades are deprecated** since 0.6.5. Reports still carry `score.grade` (from the bands A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, F below, in `policy.yaml`'s `letters`), `gate.cap` and `gate.uncapped_grade` for compatibility; nothing presents them and they drive no decision. `gate.pruned_grade` and `gate.train_ready_after_pruning` were removed in 0.7.0.
 
 Every score also carries a **graded fraction**: of the metrics that could have been graded at a node, how many actually were. A metric that resolved to a grade counts toward it; a metric left `report_only` for want of a band counts against it; `not_applicable` results and metrics that are `report_only` by design (`p99_torque`, `energy_proxy`, `drift`) are excluded from the denominator entirely, since a metric that was never meant to grade here is not a gap. An A over a graded fraction of 0.15 is a different claim from an A over 0.95, and the report carries the number so a reader can tell them apart. (Not to be confused with the `coverage` family; the policy key drafted as `min_coverage` is a candidate for renaming to `min_graded_fraction` to keep the two apart.)
 
-`train_ready` requires all of: `score ≥ 70`; no metric graded `critical`; the graded fraction at or above the policy's floor; and every family the policy names as required having graded at least one metric. A single `critical` channel is enough to withhold it, regardless of the mean. Today it is `score ≥ 70` at the stream and episode level; at the dataset level the gate below applies it as a share, so a large dataset is not withheld for one odd episode.
+**`train_ready` is a compatibility field** since schema 7. No score threshold sets it. At episode level it mirrors the episode's `eligibility` (`true` pass, `false` blocked, `null` review or unknown); at every other level it is `null`. Read the eligibility, not the boolean — see `docs/DECISIONS.md`.
 
 ### The dataset gate
 
-A mean lets a minority of bad episodes hide: eight glitched episodes in fifty still average to 98. The gate decides which episodes are **blocking**, and readiness counts each of them as zero. The report's `gate` section lists the blocking episodes (`failing_episodes`), why each blocks, and the readiness once they are excluded (`passing_quality`).
+A mean lets a minority of bad episodes hide: eight glitched episodes in fifty still average to 98. Since schema 7 the gate decides nothing: each episode carries one authoritative `eligibility`, decided once after every metric has run (`kalanos.analysis.scoring.eligibility`), and the gate lists the `blocked` ones in `failing_episodes`, why each blocks, and the mean quality of the rest (`pruned_score`, a description of a candidate selection, not a sufficiency claim).
 
-**An episode is blocking** when any of its metrics grades `critical` — the train-ready rule above — unless that finding is a **task trait**: the same critical finding on every episode of one task and on no episode of any other, on a task of at least 20 episodes. A trait describes the task, not a fault (grading `berkeley_autolab_ur5`, a gripper-state "flatline" hit exactly the 250 episodes of its one sweeping task, which never closes the gripper), so it is reported in `gate.task_traits` and blocks nothing.
+**An episode is blocked** when a finding carries the consequence `block`. A finding's *severity* is the assessment its bands assigned; its *consequence* is what the policy says that does to eligibility, and the two are recorded separately. A `critical` statistical result is a candidate for blocking and resolves to review without accepted, matching calibration. Two routes justify a block: a **contract** violation (a declared invariant broken with direct evidence) needs no statistical calibration; a **statistical** rule needs a structured accepted manifest matching its detector, thresholds, binding and scope. Calibration enforcement is always on and cannot be disabled. An explicit `consequence: review` remains review.
 
-A critical finding on **nearly every episode of the whole dataset** is a **dataset trait**, reported in `gate.dataset_traits` and blocking nothing: it describes how the dataset was recorded, and excluding episodes cannot remove it. "Nearly every" is at least 95% of the episodes (one minus the gate's 5% allowance, below), on a dataset of at least 20 episodes. Grading `lerobot/cmu_stretch` (135 episodes, five tasks), two state dimensions never changed in any episode and blocked all 135, leaving readiness 0 with "exclude every episode" as the remedy; as dataset traits they block nothing. **Known limit:** a dataset trait that is a real defect (a clock 30% slow in every episode, or a sensor that is pure noise throughout) lowers episode quality through its check but blocks nothing, so it lowers readiness less than it should; a future release will let such traits lower readiness directly. A finding confined to some tasks but short of every episode of one, such as a joint two of six tasks never move, is not yet covered and still fails its episodes.
+**Prevalence exempts nothing.** A blocking finding on every episode of one task is reported in `gate.task_traits`, and one on (nearly) every episode of the dataset in `gate.dataset_traits`, so a reader sees the pattern — but the episodes stay blocked. The report cannot tell a recording convention from corruption in every episode; a scoped policy rule may exempt a finding explicitly, the gate never does on its own. (Before schema 7 both traits exempted; grading `lerobot/cmu_stretch` under the old rule turned 135 blocked episodes into 0, which a defect in every episode would also have done.)
 
-**Gripper channels.** A channel the dataset names as a gripper inside a wider vector (ALOHA's `left_gripper` in `observation.state` or `action`) grades under the gripper type for its stream: `proprio.gripper_width` for state, `action.gripper_command` for actions. A gripper holds open or closed for most of an episode and then snaps, which the stuck-sensor check would call stuck and the noise check would call noise (ALOHA's grippers, carrying a battery or a towel, read 90–99% unchanged and −2 to 15 dB), so for grippers both are reported, not graded; the spike check still grades them, so a glitching gripper still fails its episode. A gripper's motor current keeps its torque type. Names come from the dataset: LeRobot's `info.json` declares them either as a list or nested under a label (`"names": {"motors": [...]}`), and both are read. An unnamed gripper cannot be told from any other channel and grades as one.
+**Gripper channels.** A channel the dataset names as a gripper inside a wider vector (ALOHA's `left_gripper` in `observation.state` or `action`) grades under the gripper type for its stream: `proprio.gripper_width` for state, `action.gripper_command` for actions. A gripper holds open or closed for most of an episode and then snaps, which the stuck-sensor check would call stuck and the noise check would call noise (ALOHA's grippers, carrying a battery or a towel, read 90–99% unchanged and −2 to 15 dB), so for grippers both are reported, not graded; the spike check still grades them, so a glitching gripper produces a finding that reviews by default and blocks only with accepted matching calibration. A gripper's motor current keeps its torque type. Names come from the dataset: LeRobot's `info.json` declares them either as a list or nested under a label (`"names": {"motors": [...]}`), and both are read. An unnamed gripper cannot be told from any other channel and grades as one.
 
-*Candidate*: the blocking rule was tested on twelve datasets — six synthetic with planted defects, where it caught every planted glitched episode (41 of 41) and blocked no clean one, and six LeRobot hub datasets — then revised against real 50 Hz teleoperation (ALOHA, Unitree H1), but it is unconfirmed against labelled real-world failures.
+*Historical diagnostic evidence*: the former blocking rule was tested on twelve datasets — six synthetic with planted defects, where it caught every planted glitched episode (41 of 41) and blocked no clean one, and six LeRobot hub datasets — then revised against real 50 Hz teleoperation (ALOHA, Unitree H1), but it is unconfirmed against labelled real-world failures.
 
 *Deprecated*: the gate also still writes a letter cap by the share of blocking episodes (up to 5%: none; 15%: B; 30%: C; more: D), `gate.cap` and the capped `score.grade`, for 0.6 compatibility. The 5% allowance is what sets the dataset-trait share above; the cap itself is removed in 0.7.0.
 
-**Every gated report states what readiness rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. A readiness of 100 graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the number. There is deliberately no minimum evidence for a high readiness: converted datasets cannot show capture timing, and a format should not cost points — the coverage line is what keeps such a score honest.
+**Every gated report states what readiness rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. A readiness of 100 graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the number. Required capabilities and metrics must be evaluated before an episode can pass. Optional missing capabilities do not invent a score penalty, but remain visible in the separate coverage ledger. Required acquisition timing, for example, stays unknown without usable producer capture evidence.
 
 A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
 
-**Known limitation.** `snr_db` flags a channel that holds still under a little sensor noise — an axis the robot never turns — as `critical`: without a sense of scale, a still axis and an all-noise sensor read the same, and a rule that set both aside also hid episodes destroyed by glitches. It touched 2 of 2,797 graded results in the real datasets so far; a scale-aware check is the fix.
+**Context and reference evidence (0.7.0).** `snr_db` is a smooth/residual
+diagnostic, not a sensor-health measurement. Known discrete/reward/annotation
+signals do not qualify. A validated native-scale residual reference permits a
+within-reference result to remain report-only without an SNR penalty. Missing
+reference evidence leaves critical candidates at review even if a manifest
+matches. See [the 0.7.0 release contract](RELEASE-0.7.0.md) for applicability, sample/window handling and
+physical-reference prerequisites.
 
 Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
 
@@ -277,3 +295,11 @@ Weights are *to define*. Only their ordering is settled, with timing weighing mo
 Out of tree, the same function ships as a package declaring a `kalanos.metrics` entry point. That group names the *module*, not the function: importing it is what runs the decoration. `kalanos new metric` writes one.
 
 A metric added without those four steps gives the tool an opinion nobody agreed to. If the catalogue looks like it is missing something, raise it and file an issue rather than closing the gap in a table.
+
+## Computation coverage and consequences
+
+Metric `availability` records computation separately from graded `status`. A report-only torque statistic is computed and belongs in its eligible torque denominator. Known taxonomy mismatch is not applicable; unresolved taxonomy, insufficient samples or missing prerequisites remain unavailable. Skipped payloads retain declared channels in the denominator. Unexpected computation errors are recorded and cause exit 2.
+
+Flatline evaluation no longer bridges null, NaN or infinite values; this can change its measured fraction. Spike intervals identify scored source samples and their wider 51-sample support. Neither SNR nor spectrum measurements invent intervals.
+
+Severity thresholds still describe measurements. Statistical critical findings require matching accepted calibration to block; otherwise their consequence is review. Existing SNR applicability and noise-floor improvements are deferred to R07-03. No new calibrated-performance claim accompanies these changes.

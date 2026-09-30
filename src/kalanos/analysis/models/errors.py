@@ -22,3 +22,17 @@ class SourceUnavailable(KalanosError):
 
 class SourceTooLarge(KalanosError):
     """A remote root is over the size or file-count limit; nothing was read."""
+
+
+class MappingOverrideError(KalanosError):
+    """A per-run mapping override could not be applied.
+
+    It is malformed, names an unknown taxonomy type, or matched no stream.
+    """
+
+
+class ConfigurationError(KalanosError):
+    """A bundle, policy or mapping input is malformed, missing, or contradictory.
+
+    Always a user-facing exit 2: the run never started.
+    """
