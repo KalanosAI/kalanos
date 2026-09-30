@@ -27,6 +27,11 @@ The decision-integrity release. Report schema 7.0.0.
 - Same-priority mapping conflicts are refused wherever they occur: repeated `--map` flags, duplicate YAML keys (strict loader for bundles and mapping files), and disagreements below the winning level.
 - A bundle's relative `policy.path` resolves against the bundle's directory; missing or malformed policies are `ConfigurationError` → exit 2.
 
+### Contract corrections (branch review round 3)
+
+- Inventory: an adapter that refuses part-way keeps the episodes it yielded and the count it declared; the gap is `unresolved`; a refused source is listed in `inventory.refused_sources` rather than counted as one failed episode; a refused directory is not re-offered file by file; `run.completion` is `partial`.
+- Metadata tier is enforced at the storage boundary for LeRobot v2/v3: parquet schema read, index/clock columns projected, numeric vectors never materialised (`kalanos.analysis.execution` carries the tier to adapters). `StreamEvaluation.n_channels_declared` added.
+
 ### Configuration
 
 - `--profile bundle.yaml`: one file, four sections with separate identities (`binding`, `requirements`, `policy`, `execution`).

@@ -100,7 +100,7 @@ def test_f1_the_default_gate_refuses_an_incomplete_audit(tmp_path):
 
 
 def test_f1_an_inventory_cannot_claim_a_gap_and_completeness():
-    with pytest.raises(ValueError, match="cannot be complete"):
+    with pytest.raises(ValueError, match="is not complete"):
         Inventory(loaded=1, unresolved=1, complete=True)
 
 
@@ -170,12 +170,13 @@ def test_f3_metadata_tier_fetches_no_numeric_payload_and_leaves_required_checks_
     with patch.object(FramePayload, "fetch", autospec=True) as fetch:
         report = grade(TINY_V3, bundle=bundle)
     assert fetch.call_count == 0
-    assert all(
-        s.evaluation.payload == PayloadStatus.SKIPPED
+    evaluated = [
+        s.evaluation.payload
         for e in report.episodes
         for s in e.streams
-        if s.channels
-    )
+        if s.evaluation.payload != PayloadStatus.NOT_REQUIRED
+    ]
+    assert evaluated and set(evaluated) == {PayloadStatus.SKIPPED}
     assert report.eligibility_counts is not None
     assert report.eligibility_counts.unknown == len(report.episodes)
     assert report.readiness is not None and report.readiness.score is None
@@ -208,7 +209,12 @@ def test_f4_a_failed_input_beside_passing_episodes_leaves_dataset_train_ready_nu
     (folder / "no_time.csv").write_text("a,b\n1,2\n3,4\n")
     report = grade(folder)
     c = report.eligibility_counts
-    assert c is not None and c.pass_count == 2 and c.unknown >= 1
+    assert c is not None and c.pass_count == 2
+    # A refused source is not one failed episode: it holds an unknown number
+    # of them, so the inventory is incomplete rather than short by one.
+    assert report.inventory is not None
+    assert report.inventory.refused_sources and not report.inventory.complete
+    assert c.inventory_complete is False
     assert report.score.train_ready is None
 
 

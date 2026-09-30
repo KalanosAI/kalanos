@@ -7,6 +7,7 @@
 # Built-in
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -480,6 +481,52 @@ def series_stream(
         is_regular=is_regular,
         channels=channels,
     )
+
+
+def declared_series_streams(
+    plan: FeaturePlan,
+    present_columns: Iterable[str],
+    timestamps: pl.Series,
+    source_path: UPath,
+    *,
+    clock: Clock,
+    timestamp_dtype: TimestampDtype,
+    is_regular: bool,
+) -> list[Stream]:
+    """Series streams with their channels declared but no payload read.
+
+    What a metadata-tier run yields: the stream exists, its channels are
+    known from the manifest and the parquet schema says the column is
+    there, but no numeric value has been materialised. Grading records such
+    a stream as `skipped`, never as computed.
+
+    Parameters
+    ----------
+    plan : FeaturePlan
+        The dataset's resolved feature plan.
+    present_columns : Iterable[str]
+        The columns the data parquet's schema declares, from
+        `pl.read_parquet_schema`, so a missing column is still noticed.
+    """
+
+    present = set(present_columns)
+    return [
+        Stream(
+            taxonomy_type=taxonomy_type,
+            kind=Kind.SERIES,
+            timestamps=timestamps,
+            payload=None,
+            source_path=source_path,
+            source_field=feature,
+            mapping_source=mapping_source,
+            clock=clock,
+            timestamp_dtype=timestamp_dtype,
+            is_regular=is_regular,
+            channels=channels,
+        )
+        for feature, (taxonomy_type, mapping_source, channels) in plan.series.items()
+        if feature in present
+    ]
 
 
 def series_streams(
