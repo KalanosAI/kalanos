@@ -188,6 +188,8 @@ Two files, split between facts and policy.
 | `dictionary.yaml` | *What is this signal?* Taxonomy types, aliases, unit, expected shape, plausible range. | Rarely. Ships in the wheel. Required. |
 | `policy.yaml` | *How do I grade this deployment?* Thresholds, weights, severities, declared limits. | Per deployment. A default ships; users override it. |
 
+`dictionary.yaml` also files each key family under its reference-taxonomy category, and puts each category in one group: sensor, command, derived, outcome or context. An entry takes its category from its key's family, and a dictionary with a family missing from that table fails to load.
+
 The split exists because thresholds vary by signal and by installation while physics does not. Joint velocity wants a different noise floor than joint acceleration, and a servo vendor and a factory team want different tolerances for the same signal. Combining them would mean overriding one number requires forking the whole dictionary.
 
 Both load into Pydantic models, and neither is read except through its loader.
@@ -242,7 +244,7 @@ Bands are keyed by taxonomy type, since the same metric can want a different ban
 
 ## Reporting
 
-The report renders to the terminal, JSON, YAML and HTML from one model. The terminal card leads with the score, then names what is wrong through its own findings block.
+The report renders to the terminal, JSON, YAML and HTML from one model. The terminal card leads with the score, then names what is wrong through its own findings block. Each graded stream carries its category, which is null when the stream is unmapped, and the report maps every category to its group.
 
 Two display rules hold in every format:
 

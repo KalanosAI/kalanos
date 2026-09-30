@@ -25,6 +25,7 @@ from kalanos.analysis.metrics.registry import (
     run_stream_metrics,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
+from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
 from kalanos.analysis.models.metrics import (
@@ -45,6 +46,7 @@ from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
 from kalanos.analysis.scoring.gate import apply_gate, readiness_of
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
+from kalanos.assets.dictionary import load_default_dictionary
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -99,7 +101,12 @@ def channel_taxonomy(stream_type: str, channel_name: str) -> str:
 
 
 def grade_stream(
-    stream: Stream, *, policy: Policy, is_regular: bool, episode_id: str
+    stream: Stream,
+    *,
+    policy: Policy,
+    is_regular: bool,
+    episode_id: str,
+    category: str | None,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -114,6 +121,8 @@ def grade_stream(
     episode_id : str
         The recording this stream belongs to,
         for addressing any finding it or its channels raise.
+    category : str or None
+        The dictionary category of the stream's taxonomy type, `None` when unmapped.
 
     Returns
     -------
@@ -184,6 +193,7 @@ def grade_stream(
             taxonomy_type=stream.taxonomy_type,
             instance=stream.instance,
             attribution=stream.attribution,
+            category=category,
             score=stream_score,
             metrics=stream_metrics,
             channels=graded_channels,
@@ -193,7 +203,12 @@ def grade_stream(
 
 
 def grade_episode(
-    episode: Episode, *, adapter: str, adapter_confidence: float, policy: Policy
+    episode: Episode,
+    *,
+    adapter: str,
+    adapter_confidence: float,
+    policy: Policy,
+    dictionary: Dictionary,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -207,6 +222,8 @@ def grade_episode(
         The adapter's winning bid, recorded on the result.
     policy : Policy
         The loaded grading policy.
+    dictionary : Dictionary
+        The dictionary each stream's category is looked up in.
 
     Returns
     -------
@@ -223,7 +240,11 @@ def grade_episode(
     findings: list[Finding] = []
     for stream in episode.streams:
         graded_stream, stream_findings = grade_stream(
-            stream, policy=policy, is_regular=stream.is_regular, episode_id=episode.id
+            stream,
+            policy=policy,
+            is_regular=stream.is_regular,
+            episode_id=episode.id,
+            category=dictionary.category_of(stream.taxonomy_type),
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -313,6 +334,7 @@ def assemble_report(
         alongside every skipped and unresolved file with its reason or evidence.
     """
 
+    dictionary = load_default_dictionary()
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
     for item in analysed:
@@ -321,6 +343,7 @@ def assemble_report(
             adapter=item.adapter,
             adapter_confidence=item.adapter_confidence,
             policy=item.policy,
+            dictionary=dictionary,
         )
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
@@ -343,6 +366,7 @@ def assemble_report(
         duration_s=duration_s,
         source=source,
         datasets=list(datasets),
+        categories=dictionary.category_groups,
         gate=gate,
         readiness=readiness_of(graded_episodes, gate),
     )

@@ -10,7 +10,7 @@ everything under the subpackages may move.
 
 # Internal
 from kalanos.analysis.models.adapters import AdapterTie, DatasetInfo
-from kalanos.analysis.models.dictionary import Dictionary
+from kalanos.analysis.models.dictionary import Category, CategoryGroup, Dictionary
 from kalanos.analysis.models.discovery import (
     SkippedSource,
     SkipReason,
@@ -40,6 +40,8 @@ from kalanos.assets.policy import load_policy
 
 __all__ = [
     "AdapterTie",
+    "Category",
+    "CategoryGroup",
     "DatasetInfo",
     "Dictionary",
     "Finding",

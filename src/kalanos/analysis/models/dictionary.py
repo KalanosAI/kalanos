@@ -16,9 +16,10 @@ Name matching normalises both sides through `normalise_name`, so a column called
 import re
 from enum import Enum
 from functools import cached_property
+from typing import Annotated
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 # Internal
 from kalanos.analysis.models.domain import Kind
@@ -36,6 +37,9 @@ _TAXONOMY_KEY = re.compile(rf"^{_SLUG}\.{_SLUG}$")
 
 # A category is the slug of one reference-taxonomy heading, e.g. `proprioceptive_state`.
 _CATEGORY_SLUG = re.compile(rf"^{_SLUG}$")
+
+# The family half of a taxonomy key, e.g. `proprio`.
+_Family = Annotated[str, StringConstraints(pattern=rf"^{_SLUG}$")]
 
 # Everything that is not a letter or a digit separates one token from the next,
 # which folds `observation.state`, `arm-x`, `q[0]` and `Joint Position` into one form.
@@ -187,6 +191,35 @@ class NameMatch(BaseModel):
     candidates: list[str] = Field(default_factory=list)
 
 
+class CategoryGroup(str, Enum):
+    """What role a category's streams play in a recording, coarser than the category."""
+
+    # fmt: off
+    SENSOR  = "sensor"   # What the robot measures: its own state and its surroundings
+    COMMAND = "command"  # What the robot was told to do
+    DERIVED = "derived"  # Computed from measurements rather than measured
+    OUTCOME = "outcome"  # How the recording was judged: rewards, labels, QC results
+    CONTEXT = "context"  # Everything describing the setting rather than the run
+    # fmt: on
+
+
+class Category(BaseModel):
+    """The reference-taxonomy heading one key family sits under.
+
+    Attributes
+    ----------
+    slug : str
+        The heading's slug, e.g. `proprioceptive_state`.
+    group : CategoryGroup
+        What role a stream of this category plays.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    slug: str = Field(pattern=_CATEGORY_SLUG.pattern)
+    group: CategoryGroup
+
+
 class DictionaryEntry(BaseModel):
     """One signal the taxonomy knows about.
 
@@ -199,8 +232,6 @@ class DictionaryEntry(BaseModel):
     ----------
     label : str
         What the report calls this signal.
-    category : str
-        The slug of the reference-taxonomy heading it sits under.
     modality : Modality
         What the signal is made of.
     kind : Kind or None
@@ -232,7 +263,6 @@ class DictionaryEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     label: str = Field(min_length=1)
-    category: str = Field(pattern=_CATEGORY_SLUG.pattern)
     modality: Modality
     kind: Kind | None = None
     shape: Shape
@@ -302,6 +332,8 @@ class Dictionary(BaseModel):
     schema_version : int
         The dictionary format version, so a future breaking change to this shape
         has something to check against.
+    categories : dict[str, Category]
+        The category each key family sits under, keyed by family, e.g. `proprio`.
     entries : dict[str, DictionaryEntry]
         Signals keyed by taxonomy type, e.g. `proprio.joint_torque`.
         A key's family groups signals for the report and for metric gating; matching
@@ -311,6 +343,7 @@ class Dictionary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: int
+    categories: dict[_Family, Category]
     entries: dict[str, DictionaryEntry]
 
     @model_validator(mode="after")
@@ -366,6 +399,54 @@ class Dictionary(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _category_slugs_are_distinct(self) -> "Dictionary":
+        """Refuse two families filed under the same category.
+
+        Returns
+        -------
+        Dictionary
+            `self`, unchanged, once every category belongs to one family.
+
+        Raises
+        ------
+        ValueError
+            If two families name the same category slug.
+        """
+
+        by_slug: dict[str, list[str]] = {}
+        for family, category in self.categories.items():
+            by_slug.setdefault(category.slug, []).append(family)
+
+        shared = {
+            slug: families for slug, families in by_slug.items() if len(families) > 1
+        }
+        if shared:
+            raise ValueError(f"categories must belong to one family each, got {shared}")
+        return self
+
+    @model_validator(mode="after")
+    def _entry_families_are_declared(self) -> "Dictionary":
+        """Refuse an entry whose key family the `categories` table does not declare.
+
+        Returns
+        -------
+        Dictionary
+            `self`, unchanged, once every key's family has a category.
+
+        Raises
+        ------
+        ValueError
+            If any entry's key family is missing from `categories`.
+        """
+
+        undeclared = [
+            key for key in self.entries if _family(key) not in self.categories
+        ]
+        if undeclared:
+            raise ValueError(f"taxonomy keys name undeclared families: {undeclared}")
+        return self
+
     @cached_property
     def alias_index(self) -> dict[str, tuple[str, ...]]:
         """Map every normalised name this dictionary answers to onto its taxonomy types.
@@ -415,10 +496,58 @@ class Dictionary(BaseModel):
             )
         return NameMatch(name=name, normalised=normalised, candidates=list(claimants))
 
+    def category_of(self, taxonomy_type: str) -> str | None:
+        """Look up the category a taxonomy type is filed under.
+
+        Parameters
+        ----------
+        taxonomy_type : str
+            A stream's taxonomy type, e.g. `proprio.joint_position`.
+
+        Returns
+        -------
+        str or None
+            The slug of its family's category, or `None` when the type has no entry,
+            as with every `unmapped.*` type.
+        """
+
+        if taxonomy_type not in self.entries:
+            return None
+        return self.categories[_family(taxonomy_type)].slug
+
+    @property
+    def category_groups(self) -> dict[str, CategoryGroup]:
+        """Map every category slug onto its group.
+
+        Returns
+        -------
+        dict[str, CategoryGroup]
+            Category slugs, each mapped to the group its streams belong to.
+        """
+
+        return {category.slug: category.group for category in self.categories.values()}
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _family(taxonomy_type: str) -> str:
+    """Read the family off a taxonomy key.
+
+    Parameters
+    ----------
+    taxonomy_type : str
+        A `family.name` key.
+
+    Returns
+    -------
+    str
+        Everything before the first dot.
+    """
+
+    return taxonomy_type.split(".", 1)[0]
 
 
 def _is_axis(token: str) -> bool:
