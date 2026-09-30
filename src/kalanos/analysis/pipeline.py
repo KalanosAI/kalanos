@@ -86,8 +86,15 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
 
     An adapter names an episode with whatever the file it read calls it.
     Two files in different folders can share that name, and their place under the
-    walked root tells them apart, so it becomes the id; a file holding several
-    recordings keeps the adapter's name for each after it.
+    walked root tells them apart, so it prefixes the id: `source::episode`.
+
+    A single-recording file keeps the short form, `source` alone. Which files
+    those are is the adapter's statement, not a count: an adapter that names
+    its episode after the file itself (its stem or name) is saying the file
+    *is* the recording. A container that names episodes by their own keys
+    (LeRobot's `episode_000000`, an HDF5 group) always gets the qualified
+    form, so a recording keeps the same id whether one or all of its
+    siblings loaded.
 
     Parameters
     ----------
@@ -105,10 +112,13 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
     """
 
     source = _source_id(path, base)
-    if len(episodes) == 1:
-        return [episodes[0].model_copy(update={"id": source})]
+    whole_file = {path.name, path.stem}
     return [
-        episode.model_copy(update={"id": f"{source}::{episode.id}"})
+        episode.model_copy(
+            update={
+                "id": source if episode.id in whole_file else f"{source}::{episode.id}"
+            }
+        )
         for episode in episodes
     ]
 
@@ -370,6 +380,12 @@ def run(
             except AdapterRefusal as exc:
                 refusal = exc
         datasets.append(info)
+        # A directory an adapter selected belongs to that adapter whatever
+        # the read produced — episodes, none, or a refusal. Offering its
+        # manifest and data files to other adapters would grade the same
+        # source twice.
+        if candidate.path.is_dir():
+            claimed.append(candidate.path)
         if refusal is not None:
             logger.warning(
                 "%s: unresolved after %d episode(s): %s",
@@ -381,10 +397,6 @@ def run(
             # A refused source is not one failed episode: the episodes it did
             # not yield are a gap of unknown size unless it declared a count.
             refused_sources.append(str(candidate.path))
-            if candidate.path.is_dir():
-                # Its contents have been accounted for as this source; offering
-                # them again file by file would count them twice.
-                claimed.append(candidate.path)
         # A declared count the adapter did not deliver is an inventory gap:
         # those episodes exist somewhere and have no identities here, so they
         # are counted as unresolved rather than silently dropped from the
@@ -420,9 +432,6 @@ def run(
             for episode in episodes
         )
         logger.info("%s: analysed by %s", candidate.path, selection.name)
-
-        if candidate.path.is_dir():
-            claimed.append(candidate.path)
 
     unmatched = [o for o in overrides if o.feature not in matched]
     if unmatched:

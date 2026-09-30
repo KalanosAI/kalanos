@@ -27,6 +27,8 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 
 ## Changed semantics
 
+- Episode ids are `source::episode` for every recording in a container (LeRobot, HDF5), however many of its siblings loaded; the short `source` form is kept only when the adapter names the episode after the file itself (single-recording CSV, JSON, JSONL, MCAP, delimited). A one-episode LeRobot export is now `root::episode_000000`, where 0.6 wrote `root`.
+
 - `episodes[].score.train_ready` mirrors `eligibility` (`true`/`false`/`null`). No score threshold sets it. Dataset `score.train_ready` is a compatibility summary. Validation rejects a contradiction.
 - `gate.failing_episodes` is exactly the set of `blocked` episodes; validation rejects any other set.
 - Dataset `score.train_ready` is a function of `eligibility_counts` and nothing else: `false` if any blocked, `true` only if the inventory is complete, non-empty and all pass, `null` otherwise — with or without a letter gate. Validation rejects a value that disagrees.
