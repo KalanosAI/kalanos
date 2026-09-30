@@ -86,3 +86,39 @@ The default gate fails `blocked,unknown`. For unattended training:
 kalanos grade ./recording --profile acquisition.yaml \
   --fail-on blocked,review,unknown --report audit.json
 ```
+
+
+## Noise reference evidence
+
+A per-channel binding may include the following `noise_floor` object. These
+numbers are a configuration illustration, **not a validated reference for your
+robot**:
+
+```yaml
+noise_floor:
+  standard_deviation: 0.001
+  unit: rad
+  source: reference_capture
+  reference: evidence/session-reference-v1.json
+  sensor_configuration: sensor-model-config-revision
+  sample_rate_hz: 100
+  bandwidth_hz: 50
+  estimator: centered_mean_5_residual_std_v1
+  scale_transform: null
+```
+
+The binding also needs `quantity`, `representation`, `unit`, feature/index and
+source scope. Supply separate `validations` for `identity`, `quantity`, `unit`
+and `noise_floor`, each with `value` equal to the resolved property, the exact
+`scope` recorded as `source_identity`, `validator`, `evidence`, and
+`capability: noise`. `identity` is `feature[index]`, including `[None]` for a
+scalar with no index. The `noise_floor` validation value is the complete object,
+including explicit null `scale_transform`. First inspect the actual resolved
+binding; do not guess source identities or copy test attestations.
+
+The reference must use the same native scale and estimator. An override to the
+floor, unit, scale transform or source invalidates applicability until it is
+validated again. Native sample rate must match. The validator is responsible for
+verifying configuration and bandwidth against acquisition records. This evidence
+makes the reference usable; statistical blocking still needs a separately
+accepted, exactly matching calibration manifest.

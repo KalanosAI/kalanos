@@ -21,7 +21,7 @@ mappings but never change requirements, policy or tier.
 import math
 from collections.abc import Iterable, Sequence
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 # External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -182,6 +182,32 @@ class CapabilityCheck(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class NoiseFloor(BaseModel):
+    """A residual standard-deviation reference already expressed in native units.
+
+    A reference must match the estimator, sample rate, sensor configuration and
+    scale transform. Its declaration alone is not validation or block authority.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    standard_deviation: float = Field(gt=0, allow_inf_nan=False)
+    unit: str = Field(min_length=1)
+    source: Literal["manufacturer", "reference_capture"]
+    reference: str = Field(min_length=1)
+    sensor_configuration: str = Field(min_length=1)
+    sample_rate_hz: float = Field(gt=0, allow_inf_nan=False)
+    bandwidth_hz: float = Field(gt=0, allow_inf_nan=False)
+    estimator: Literal["centered_mean_5_residual_std_v1"]
+    scale_transform: str | None = None
+
+    @model_validator(mode="after")
+    def bandwidth_within_nyquist(self):
+        """Reject bandwidth beyond the declared sampled signal's Nyquist limit."""
+        if self.bandwidth_hz > self.sample_rate_hz / 2:
+            raise ValueError("noise reference bandwidth exceeds Nyquist")
+        return self
+
+
 class ChannelBinding(BaseModel):
     """What one channel is, and how confidently.
 
@@ -233,6 +259,7 @@ class ChannelBinding(BaseModel):
     calibration_transform: str | None = None
     limits: tuple[float, float] | None = None
     noise_reference: str | None = None
+    noise_floor: NoiseFloor | None = None
     property_origins: dict[str, BindingOrigin] = Field(default_factory=dict)
     property_status: dict[str, ValidationStatus] = Field(default_factory=dict)
     conflicts: list[PropertyConflict] = Field(default_factory=list)

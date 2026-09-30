@@ -275,7 +275,13 @@ A mean lets a minority of bad episodes hide: eight glitched episodes in fifty st
 
 A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
 
-**Known limitation.** `snr_db` flags a channel that holds still under a little sensor noise — an axis the robot never turns — as `critical`: without a sense of scale, a still axis and an all-noise sensor read the same, and a rule that set both aside also hid episodes destroyed by glitches. It touched 2 of 2,797 graded results in the real datasets so far; a scale-aware check is the fix.
+**Context and reference evidence (0.7.0).** `snr_db` is a smooth/residual
+diagnostic, not a sensor-health measurement. Known discrete/reward/annotation
+signals do not qualify. A validated native-scale residual reference permits a
+within-reference result to remain report-only without an SNR penalty. Missing
+reference evidence leaves critical candidates at review even if a manifest
+matches. See [the 0.7.0 release contract](RELEASE-0.7.0.md) for applicability, sample/window handling and
+physical-reference prerequisites.
 
 Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
 

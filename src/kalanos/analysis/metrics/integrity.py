@@ -12,11 +12,11 @@ so they attach at Level.STREAM and gate on `extero.taxel_pressure` instead.
 
 # Built-in
 import math
-from typing import cast
 
 # External
 import polars as pl
 
+from kalanos.analysis.clocks import samples as clock_samples
 from kalanos.analysis.localization import finite, source_values, support_for
 
 # Internal
@@ -32,6 +32,7 @@ from kalanos.analysis.models.metrics import (
     Requires,
     StreamContext,
 )
+from kalanos.analysis.noise import noise_assessment, snr_exclusion
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -143,13 +144,13 @@ def missing_pct(ctx: ChannelContext) -> MetricResult:
     Returns
     -------
     MetricResult
-        `not_applicable` when the channel's dtype is not numeric;
+        `not_applicable` when the channel's dtype is neither numeric nor Boolean;
         `report_only` otherwise.
     """
 
-    if not ctx.values.dtype.is_numeric():
+    if not ctx.values.dtype.is_numeric() and ctx.values.dtype != pl.Boolean:
         return not_applicable(
-            "channel is not numeric; there is no missing value to count"
+            "channel is neither numeric nor Boolean; there is no missing value to count"
         )
 
     n_missing = ctx.values.null_count()
@@ -392,36 +393,35 @@ def drift(ctx: ChannelContext) -> MetricResult:
     requires=_REQUIRES_REGULAR_AND_SMOOTHABLE,
 )
 def snr_db(ctx: ChannelContext) -> MetricResult:
-    """Ratio of a smoothed component's variance to its residual's, in decibels.
-
-    Parameters
-    ----------
-    ctx : ChannelContext
-        The channel to measure.
+    """Measure a five-sample smooth/residual ratio, with explicit physical context.
 
     Returns
     -------
     MetricResult
-        `not_applicable` when:
-        - the dtype is not numeric
-        - the channel takes exactly two values (a switch or flag)
-        - the stream is sampled too slowly for the smoothing window to stay
-          within `_SNR_MAX_SPAN_SECONDS` (below about 45 Hz)
-        - the smoothed signal variance is zero
-        - the residual variance is zero
-        `report_only` otherwise.
+        The diagnostic ratio and component standard deviations. A validated
+        matching reference can establish residual level relative to that
+        reference, never sensor health or automatic blocking authority.
     """
-
     if not ctx.values.dtype.is_numeric():
-        return not_applicable("channel is not numeric; there is no signal to measure")
+        return not_applicable("channel is not numeric", inapplicable=True)
+    exclusion = snr_exclusion(ctx)
+    if exclusion:
+        return not_applicable(exclusion, inapplicable=True)
     if _is_switch(ctx.values):
         return not_applicable(
             _SWITCH_REASON.format(what="a signal-to-noise ratio"), inapplicable=True
         )
-
-    rate_hz = _sampling_rate(ctx)
-    if rate_hz is None:
-        return not_applicable("no positive gap between timestamps to take a rate from")
+    ordered = source_values(ctx)
+    ticks = clock_samples(ctx.stream.stream)
+    if ordered is None or ticks.reason:
+        return not_applicable("source row order is unavailable")
+    if not ticks.seconds:
+        return not_applicable("timestamp units do not establish seconds")
+    if ticks.invalid_rows or not ticks.gaps or any(g <= 0 for g in ticks.gaps):
+        return not_applicable("SNR needs a complete increasing time axis")
+    if not ctx.is_regular:
+        return not_applicable("sampling is not regular")
+    rate_hz = 1 / sorted(ticks.gaps)[len(ticks.gaps) // 2]
     span_s = _SNR_SMOOTHING_WINDOW / rate_hz
     if span_s > _SNR_MAX_SPAN_SECONDS * _SNR_SPAN_ALLOWANCE:
         return not_applicable(
@@ -429,36 +429,52 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
             f"motion: the {_SNR_SMOOTHING_WINDOW}-sample smoothing window spans "
             f"{span_s:.2g} s, more than {_SNR_MAX_SPAN_SECONDS} s"
         )
-
-    values = ctx.values.cast(pl.Float64)
+    ordered_values, _, _ = ordered
+    values = ordered_values.cast(pl.Float64)
+    invalid = values.is_null() | ~values.is_finite()
+    values = values.set(invalid, None)
     smoothed = values.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True)
     residual = values - smoothed
-    valid = smoothed.is_not_null()
-
-    smoothed_values = smoothed.filter(valid)
-    residual_values = residual.filter(valid)
-    if len(smoothed_values) < 2:
-        return not_applicable("too few samples survive smoothing to measure a ratio")
-
-    signal_variance = cast(float, smoothed_values.var())
-    noise_variance = cast(float, residual_values.var())
-    if signal_variance == 0:
-        return not_applicable("smoothed signal variance is zero")
-    if noise_variance == 0:
-        return not_applicable("residual variance is zero; the ratio would be infinite")
-
+    valid = smoothed.is_not_null() & residual.is_not_null()
+    smooth_values, residual_values = smoothed.filter(valid), residual.filter(valid)
+    if len(smooth_values) < 2:
+        return not_applicable("too few finite contiguous windows survive smoothing")
+    signal_variance = float(smooth_values.var())
+    noise_variance = float(residual_values.var())
+    if not all(math.isfinite(v) and v >= 0 for v in (signal_variance, noise_variance)):
+        return not_applicable("component variance is not finite")
+    signal_std, residual_std = math.sqrt(signal_variance), math.sqrt(noise_variance)
+    assessment = noise_assessment(ctx, rate_hz, residual_std, signal_std)
+    evidence = {
+        "signal_variance": signal_variance,
+        "noise_variance": noise_variance,
+        "signal_standard_deviation": signal_std,
+        "residual_standard_deviation": residual_std,
+        "amplitude_unit": ctx.channel.binding.unit if ctx.channel.binding else None,
+        "smoothing_window": _SNR_SMOOTHING_WINDOW,
+        "smoothing_span_s": span_s,
+        "rate_hz": rate_hz,
+        "n_samples": len(smooth_values),
+        "n_invalid_samples": int(invalid.sum()),
+        "estimator": "centered_mean_5_residual_std_v1",
+        "noise_assessment": assessment,
+        "interpretation": (
+            "smooth/residual diagnostic; neither measured sensor SNR "
+            "nor proof of health"
+        ),
+    }
+    if signal_variance == 0 or noise_variance == 0:
+        result = not_applicable(
+            "smoothed signal variance is zero"
+            if signal_variance == 0
+            else "residual variance is zero; the ratio would be infinite"
+        )
+        return result.model_copy(update={"evidence": {**evidence, **result.evidence}})
     return MetricResult(
-        value=10.0 * math.log10(signal_variance / noise_variance),
+        value=10.0 * (math.log10(signal_variance) - math.log10(noise_variance)),
         unit="dB",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "signal_variance": signal_variance,
-            "noise_variance": noise_variance,
-            "smoothing_window": _SNR_SMOOTHING_WINDOW,
-            "smoothing_span_s": span_s,
-            "rate_hz": rate_hz,
-            "n_samples": len(smoothed_values),
-        },
+        evidence=evidence,
     )
 
 

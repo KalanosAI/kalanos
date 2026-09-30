@@ -273,7 +273,7 @@ def test_default_review_and_explicit_calibration_propagate_to_every_decision(tmp
     )
     assert report.readiness.score is None and report.score.train_ready is None
     assert any(
-        f.calibration.get("reason") == "no accepted matching calibration"
+        f.calibration.get("reason") == "SNR physical noise assessment is unavailable"
         for f in report.findings
     )
     accepted = grade_with_test_calibration(path)
