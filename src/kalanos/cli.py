@@ -501,6 +501,24 @@ def benchmark(
             help="How many episodes per dataset to inject defects into.",
         ),
     ] = DEFAULT_SAMPLE,
+    profile: Annotated[
+        Path | None,
+        typer.Option("--profile", help="Configuration bundle, as for grade."),
+    ] = None,
+    map_: Annotated[
+        list[str] | None,
+        typer.Option("--map", help="FEATURE=TYPE; repeatable, as for grade."),
+    ] = None,
+    map_file: Annotated[
+        Path | None, typer.Option("--map-file", help="Explicit mapping file.")
+    ] = None,
+    no_sidecar: Annotated[
+        bool, typer.Option("--no-sidecar", help="Ignore automatic mapping sidecars.")
+    ] = False,
+    tier: Annotated[
+        ExecutionTier | None,
+        typer.Option("--tier", help="Execution tier; requirements remain unchanged."),
+    ] = None,
     out: Annotated[
         Path | None,
         typer.Option(
@@ -539,7 +557,15 @@ def benchmark(
 
     # Step 2: benchmark every dataset before writing anything.
     try:
-        result = run_benchmark(paths or REFERENCE_DATASETS, sample=sample)
+        result = run_benchmark(
+            paths or REFERENCE_DATASETS,
+            sample=sample,
+            bundle=profile,
+            mapping=[parse_map_argument(text) for text in map_ or []],
+            mapping_file=UPath(map_file) if map_file is not None else None,
+            sidecar=not no_sidecar,
+            tier=tier,
+        )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc

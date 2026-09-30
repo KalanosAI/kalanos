@@ -25,6 +25,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
+from kalanos.analysis.bindings import binding_identity, check_matched, resolve_episodes
 from kalanos.analysis.discovery.walk import walk_folder
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
@@ -49,6 +50,7 @@ from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.assets.bundle import RunConfiguration
+from kalanos.assets.dictionary import load_default_dictionary
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -324,6 +326,10 @@ def run(
     by_feature = {override.feature: override for override in overrides}
     matched: set[str] = set()
     seen: set[str] = set()
+    channel_assertions = (
+        config.bundle.binding.channels if config and config.bundle.binding else []
+    )
+    matched_channels: set[tuple[str | None, str, int | None]] = set()
     unresolved_episodes = 0
     refused_sources: list[str] = []
     inventory_notes: list[str] = []
@@ -420,8 +426,20 @@ def run(
         # Step 6: an adapter's name for a recording is local to the file it read,
         # so re-mint it against the walked root to keep it unique across the run.
         episodes = _qualify_ids(episodes, path=candidate.path, base=base)
-        if by_feature:
-            episodes = _apply_overrides(episodes, by_feature, matched, seen)
+        for episode in episodes:
+            for stream in episode.streams:
+                if stream.source_field is not None:
+                    seen.add(stream.source_field)
+                    if stream.source_field in by_feature:
+                        matched.add(stream.source_field)
+        episodes = resolve_episodes(
+            episodes,
+            dictionary=load_default_dictionary(),
+            channels=channel_assertions,
+            overrides=overrides,
+            source_identity=str(candidate.path),
+            matched=matched_channels,
+        )
         analysed.extend(
             AnalysedEpisode(
                 episode=episode,
@@ -436,6 +454,7 @@ def run(
     unmatched = [o for o in overrides if o.feature not in matched]
     if unmatched:
         raise _unmatched_override_error(unmatched, seen)
+    check_matched(channel_assertions, matched_channels)
 
     # Step 7: grade everything that made it through, and assemble the report.
     logger.info("graded %d episode(s); %d unresolved", len(analysed), len(unresolved))
@@ -462,6 +481,9 @@ def run(
         run_info = run_info.model_copy(
             update={
                 "finished_at": datetime.now(timezone.utc),
+                "binding": binding_identity(
+                    [a.episode for a in analysed], config.binding_id if config else None
+                ),
                 "completion": (
                     RunCompletion.COMPLETE
                     if inventory.complete
@@ -480,7 +502,13 @@ def run(
         datasets=datasets,
         mapping_overrides=list(overrides),
         requirements=config.requirements if config else None,
-        scope=config.scope if config else None,
+        scope=(
+            config.scope.model_copy(update={"binding_id": run_info.binding.id})
+            if config and run_info and run_info.binding
+            else config.scope
+            if config
+            else None
+        ),
         producer=producer,
         run=run_info,
         inventory=inventory,

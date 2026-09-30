@@ -29,16 +29,11 @@ from kalanos.analysis.models.provenance import (
     Producer,
     RunInfo,
     SourceEvidence,
-    content_digest,
 )
 from kalanos.analysis.models.report import Report
 from kalanos.assets.bundle import (
-    load_bundle,
-    load_bundle_policy,
-    resolve_run_configuration,
+    prepare_configuration,
 )
-from kalanos.assets.dictionary import load_dictionary, use_dictionary
-from kalanos.assets.policy import load_policy
 from kalanos.core.settings import get_settings
 
 
@@ -152,39 +147,19 @@ def grade(
         )
     enforce_limits(source, limits)
 
-    # Step 2: load whatever configuration the caller did not pass.
-    if policy is None:
-        policy = load_policy(settings.policy_path)
-    if dictionary is None:
-        dictionary = load_dictionary(settings.dictionary_path)
-    use_dictionary(dictionary)
-
-    # Step 3: resolve every configuration input through the one resolver
-    # `benchmark` also uses, so both describe the same interpretation.
-    loaded_bundle: Bundle | None
-    bundle_path: UPath | None = None
-    if isinstance(bundle, Bundle):
-        loaded_bundle = bundle
-    elif bundle is not None:
-        bundle_path = UPath(bundle)
-        loaded_bundle = load_bundle(bundle_path)
-    else:
-        loaded_bundle = None
-    if loaded_bundle is not None:
-        bundle_policy = load_bundle_policy(loaded_bundle, bundle_path)
-        if bundle_policy is not None:
-            policy = bundle_policy
-    config = resolve_run_configuration(
+    # Grade and benchmark share policy/bundle loading and every mapping input.
+    policy, dictionary, config = prepare_configuration(
         root,
+        policy=policy,
         dictionary=dictionary,
-        policy_digest=content_digest(policy.model_dump(mode="json")),
-        bundle=loaded_bundle,
-        bundle_path=bundle_path,
+        bundle=bundle,
         mapping=mapping,
         mapping_file=UPath(mapping_file) if mapping_file is not None else None,
         sidecar=sidecar,
         tier=tier,
+        limits=limits,
     )
+    enforce_limits(source, config.limits)
     for conflict in config.conflicts:
         logger.info(
             "mapping %s: %s from %s displaced %s",

@@ -349,6 +349,110 @@ features:
 
 Kalanos records the type as given and does not verify it. The report records every override applied, with where it came from, in `report.mapping_overrides`, and each stream's `mapping_source` says whether the dictionary, the format's declared channel names, or an override typed it.
 
+### Bind individual channels
+
+A vector can contain joint positions, motor effort and discrete commands. Use
+`binding.channels` when its members mean different things. `feature` identifies
+the original source field and `index` is its zero-based member index. For a scalar
+channel without a vector index, use `index: null`. LeRobot feature members retain
+their manifest indices, including a one-member feature at index `0`.
+
+```yaml
+schema_version: 1
+binding:
+  id: acquisition-layout-v1
+  channels:
+    - feature: observation.state
+      index: 0
+      taxonomy_type: proprio.joint_position
+      actuator: joint
+      quantity: position
+      representation: continuous
+      unit: rad
+      command: none
+      device: left
+    - feature: observation.effort
+      index: 6
+      taxonomy_type: proprio.joint_torque
+      actuator: gripper
+      quantity: effort
+      representation: continuous
+      unit: Nm
+      command: none
+      device: left
+requirements:
+  id: numeric-core-v1
+policy:
+  id: default-decisions-v1
+execution:
+  tier: standard
+```
+
+Adapt these fields and indices to the recording's actual layout. A selector that
+matches no input is an error. An optional `name` asserts the expected source
+channel name and rejects a mismatch. An optional `source_identity` restricts the
+selector to one dataset root/file URI as resolved by the adapter; omitting it
+applies the selector to matching fields throughout the run.
+
+```bash
+kalanos grade ./recording --profile acquisition.yaml --report report.json
+kalanos benchmark ./recording --profile acquisition.yaml --sample 10 --out benchmark.json
+```
+
+Both commands share bundle loading, mapping precedence, binding resolution and
+configuration identities. Benchmark also accepts `--map`, `--map-file`,
+`--no-sidecar` and `--tier`. Its JSON records the resolved configuration for each
+dataset. Metadata-tier benchmarking does not inject payload defects.
+
+Whole-feature mappings remain compatibility defaults. They cannot erase explicit
+channel semantics or make a partly recognized vector fully mapped. Such conflicts
+are recorded on each affected channel's binding. A gripper's effort channel stays
+effort; a name alone does not turn it into a gripper-position channel. Typed views
+retain source fields, original indices and values. They are not additional physical
+sensors.
+
+Existing `kalanos-map.yaml` sidecars remain supported permanently and are never
+rewritten or automatically migrated. `--no-sidecar` disables only automatic
+sidecar discovery. Explicit map files and bundle bindings still apply.
+
+### Requirements, evidence and execution
+
+The default `numeric-core-v1` scope does not require calibrated units, capture
+timing or video quality. To require visual inspection, set
+`requirements.id: vision-imitation-v1`. Its required `video_quality` capability is
+currently unavailable, so it contributes an **unknown** reason. Merely discovering
+a camera or choosing the full tier cannot establish a vision-training pass.
+
+A binding assertion and validated evidence are separate. Per-property validation
+records must match the property value and the resolved source scope. Changing a
+channel's interpretation invalidates its existing validation records; replacement
+evidence must be supplied explicitly. Capability-specific evidence applies only
+to that capability. These records are accountable attestations, not automatic
+verification of the referenced external document.
+
+JSON exposes bindings under `episodes[].streams[].channels[].channel.binding`.
+When channels were not graded, inspect `streams[].declared_channels[].binding`.
+Bindings record origins, conflicts, active and invalidated validation records, and
+prerequisite readiness for numeric inspection, derivatives, limits and noise.
+Prerequisite readiness is not a detector result or calibration approval. Existing
+SNR thresholds and statistical-blocking rules are unchanged by this binding work.
+Registered jerk/chatter calculations now abstain when derivative prerequisites
+lack the required scoped binding evidence. Generic numeric inspection continues.
+
+`execution.tier` changes what is attempted; it does not reduce requirements.
+`execution.limits` supports `max_bytes` and `max_files` for remote source budgets.
+These caps can tighten the environment/API limits, and the effective budgets are
+included in the execution identity. Unsupported budget keys are rejected. Local
+files retain the existing unrestricted-source behavior. No sampling or caching
+capability is implied by the full tier.
+
+An explicit Python `policy=` wins over a bundle policy. Otherwise `policy.path`
+loads relative to the bundle file, followed by the configured/default policy when
+no path is supplied. A relative policy path in an in-memory bundle is rejected.
+
+See [the R07-02 implementation contract](docs/R07-02.md) for the validation shape,
+test matrix, migration considerations and remaining release boundaries.
+
 ---
 
 ## Contributing

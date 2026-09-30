@@ -80,45 +80,6 @@ logger = logging.getLogger(__name__)
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-# A channel the dataset names as a gripper inside a wider vector (ALOHA's
-# `left_gripper` in `observation.state`) grades as a gripper: it holds open or
-# closed for long stretches and then snaps, which the stuck-sensor and noise
-# checks would otherwise read as faults.
-_GRIPPER_WORD = "gripper"
-_GRIPPER_TYPES = {
-    "action": "action.gripper_command",
-    "proprio": "proprio.gripper_width",
-}
-
-
-def channel_taxonomy(stream_type: str, channel_name: str) -> str:
-    """The taxonomy type a channel grades under: its stream's, or a gripper's.
-
-    Parameters
-    ----------
-    stream_type : str
-        The stream's taxonomy type.
-    channel_name : str
-        The channel's name, as the dataset declares it.
-
-    Returns
-    -------
-    str
-        `action.gripper_command` for a gripper channel of an action stream,
-        `proprio.gripper_width` for one of a state stream, and the stream's own
-        type for every other channel, a gripper's torque channel included.
-    """
-
-    if _GRIPPER_WORD not in channel_name.lower() or _GRIPPER_WORD in stream_type:
-        return stream_type
-    # A gripper's motor current is a torque reading, not its position: it keeps
-    # its stream's torque type and checks.
-    if "torque" in stream_type:
-        return stream_type
-    family = "action" if stream_type.startswith("action.") else "proprio"
-    return _GRIPPER_TYPES[family]
-
-
 def grade_stream(
     stream: Stream,
     *,
@@ -210,9 +171,11 @@ def grade_stream(
                 graded, score, channel_findings = score_metrics(
                     results,
                     level=Level.CHANNEL,
-                    taxonomy_type=channel_taxonomy(stream.taxonomy_type, channel.name),
+                    taxonomy_type=ctx.taxonomy_type,
                     policy=policy,
-                    location=location.model_copy(update={"channel": channel.name}),
+                    location=location.model_copy(
+                        update={"channel": channel.name, "stream": ctx.taxonomy_type}
+                    ),
                 )
                 graded_channels.append(
                     GradedChannel(channel=channel, score=score, metrics=graded)
@@ -233,6 +196,8 @@ def grade_stream(
             score=stream_score,
             metrics=stream_metrics,
             channels=graded_channels,
+            source_field=stream.source_field,
+            declared_channels=stream.channels if not graded_channels else [],
             evaluation=evaluation,
         ),
         findings,
