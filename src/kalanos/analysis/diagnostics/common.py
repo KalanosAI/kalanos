@@ -76,9 +76,22 @@ def ordered(stream):
     return rows, positions, ticks, factor
 
 
-def axis(stream):
-    """Return finite relative seconds, preserving native tick subtraction."""
+def _rational(value):
+    """Preserve integer ticks and the recorded decimal value of float inputs.
+
+    No epsilon or rounding is applied: a distinct recorded future timestamp
+    remains distinct. Decimal scale/rate declarations do not introduce another
+    binary float multiplication or origin-subtraction error.
+    """
+    return Fraction(str(value))
+
+
+def axis(stream, *, exact=False):
+    """Return relative seconds, optionally rational for causal grid comparisons."""
     rows, positions, ticks, factor = ordered(stream)
+    if exact:
+        origin, scale = _rational(ticks[0]), _rational(factor)
+        return rows, positions, [(_rational(t) - origin) * scale for t in ticks]
     return rows, positions, [(t - ticks[0]) * factor for t in ticks]
 
 
@@ -94,7 +107,7 @@ def scope_of(stream):
     return next(iter(scopes)) if len(scopes) == 1 else str(stream.source_path)
 
 
-def paired_axes(left, right, relation):
+def paired_axes(left, right, relation, *, exact=False):
     """Apply only the declared right-to-left transform, recording no inferred sync."""
     if scope_of(left) != relation.left_scope or scope_of(right) != relation.right_scope:
         raise Unavailable("clock relation source scope does not match")
@@ -106,6 +119,27 @@ def paired_axes(left, right, relation):
         )
     lr, lp, lt, lf = ordered(left)
     rr, rp, rt, rf = ordered(right)
+    if exact:
+        left_origin, right_origin = _rational(lt[0]), _rational(rt[0])
+        left_scale, right_scale = _rational(lf), _rational(rf)
+        drift = _rational(relation.drift_ppm) / 1_000_000
+        shift = (
+            right_origin * right_scale
+            - left_origin * left_scale
+            + (right_origin * right_scale - _rational(relation.anchor_s)) * drift
+            + _rational(relation.offset_s)
+        )
+        return (
+            (lr, lp, [(_rational(t) - left_origin) * left_scale for t in lt]),
+            (
+                rr,
+                rp,
+                [
+                    (_rational(t) - right_origin) * right_scale * (1 + drift) + shift
+                    for t in rt
+                ],
+            ),
+        )
     # Same-scale integer epochs are differenced exactly before conversion.
     delta = (
         (rt[0] - lt[0]) * lf

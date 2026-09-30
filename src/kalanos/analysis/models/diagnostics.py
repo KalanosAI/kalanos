@@ -1,6 +1,7 @@
 """Strict configuration and evidence for optional 0.7.0 diagnostics."""
 
 import json
+from collections import Counter
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -295,8 +296,10 @@ class DiagnosticResult(StrictModel):
             if any(type(m.get(k)) is not int or m[k] < 0 for k in keys):
                 raise ValueError("window counts must be nonnegative integers")
             counts = m.get("counts", {})
-            if set(counts) != {"pass", "blocked", "review", "unknown"} or any(
-                type(v) is not int or v < 0 for v in counts.values()
+            if (
+                not isinstance(counts, dict)
+                or set(counts) != {"pass", "blocked", "review", "unknown"}
+                or any(type(v) is not int or v < 0 for v in counts.values())
             ):
                 raise ValueError("window decision counts must partition the candidates")
             if (
@@ -306,6 +309,32 @@ class DiagnosticResult(StrictModel):
                 or counts["unknown"] < m["budget_unexamined"]
             ):
                 raise ValueError("window counts do not reconcile")
+            records = self.evidence.get("windows")
+            if not isinstance(records, list) or len(records) != m["examined_windows"]:
+                raise ValueError("window records do not reconcile with examined count")
+            starts, recorded_counts = set(), Counter()
+            for record in records:
+                if (
+                    not isinstance(record, dict)
+                    or not isinstance(record.get("status"), str)
+                    or record["status"] not in counts
+                ):
+                    raise ValueError("window record has an invalid status")
+                bounds = [
+                    record.get(k)
+                    for k in ("grid_start", "anchor_grid_index", "grid_end_exclusive")
+                ]
+                if any(type(v) is not int or v < 0 for v in bounds) or not (
+                    bounds[0] <= bounds[1] < bounds[2]
+                ):
+                    raise ValueError("window record has invalid grid bounds")
+                if bounds[0] in starts:
+                    raise ValueError("duplicate window record address")
+                starts.add(bounds[0])
+                recorded_counts[record["status"]] += 1
+            recorded_counts["unknown"] += m["budget_unexamined"]
+            if any(recorded_counts[k] != v for k, v in counts.items()):
+                raise ValueError("window counts do not reconcile with window records")
         if self.kind == "vision" and "examined_frames" in m:
             keys = ("examined_frames", "selected_frames", "declared_frames")
             if any(type(m.get(k)) is not int or m[k] < 0 for k in keys):

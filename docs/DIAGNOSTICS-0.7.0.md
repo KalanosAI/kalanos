@@ -23,7 +23,10 @@ kalanos compare previous.json audit.json --report comparison.json
 
 `numeric` installs NumPy for motion/cohort analysis; `video` also installs PyAV.
 Missing optional dependencies produce unavailable evidence, never a successful
-check. The metadata tier records requested payload diagnostics as skipped.
+check. They make an episode unknown when the affected capability is required,
+unless a blocking finding takes precedence. Requesting a report-only diagnostic
+alone does not add that capability to requirements.
+The metadata tier records requested payload diagnostics as skipped.
 Defaults remain the existing numeric audit when no diagnostic plan is supplied.
 
 The four existing responsibilities remain separate:
@@ -200,17 +203,33 @@ gap. History includes the anchor step; prediction begins at the next step.
 Nearest or causal-previous matching is explicit. The supported padding behavior
 is `reject`; interpolation is `none`. No mask or interpolation is manufactured.
 
+Window matching uses rational arithmetic for native timestamps, declared clock
+scales/transforms, the grid rate, sample age and gap limits. Float inputs retain
+their recorded decimal values; no tolerance is added to causal comparisons. This
+avoids a converted 300,000,000 ns sample falling just after a 0.3 s grid step due
+to multiplication roundoff, while keeping a genuinely future sample ineligible
+for previous matching. JSON evidence still serializes relative times as numbers.
+
 The grid remains within an episode. Each candidate records grid bounds, consumed
 source rows and pass/blocked/review/unknown reasons. Null/nonfinite required
 payloads, unmatchable samples and source gaps violate the window contract.
 Consequential source findings propagate to intersecting windows; whole-episode
-findings apply to the corresponding subject throughout. Required video frames
+findings apply to the corresponding subject throughout. Subject matching includes
+the consumed channel: a fault on an unselected vector index does not propagate,
+while whole-vector selection still includes findings on every consumed channel.
+Required video frames
 not actually decoded remain unknown even when timestamps exist.
 
 `max_windows` and `max_probes` bound work. Unevaluated candidates remain in the
 unknown denominator. Counts partition every candidate; zero candidates is not a
 claim of useful training volume. Window passes are input-contract observations,
 not an export selection or a claim that overlapping samples are independent.
+
+When loading results, window records must be complete for the examined count,
+carry unique grid-start addresses and valid bounds/statuses, and reconcile with
+the summary. Unknown counts include both examined unknown windows and explicitly
+unexamined candidates. Contradictory reports are rejected rather than silently
+repairing or trusting a summary.
 
 Declare minimums separately in requirements:
 
