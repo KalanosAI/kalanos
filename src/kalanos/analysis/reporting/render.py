@@ -11,11 +11,14 @@ from collections import Counter
 import yaml
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
 
+from kalanos.analysis.coverage import coverage_lines
+
 # Internal
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import Finding, ScoreResult
 from kalanos.analysis.reporting.registry import reporter
+from kalanos.analysis.reporting.summary import finding_groups
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -223,7 +226,9 @@ def render_html(report: Report) -> str:
     template = _TEMPLATE_ENVIRONMENT.get_template("report.html.j2")
     return template.render(
         report=report,
+        coverage_lines=coverage_lines(report.coverage),
         episode_findings=_episode_finding_counts(report.findings),
         stream_findings=_stream_finding_counts(report.findings),
         findings_preview=_FINDINGS_PREVIEW,
+        finding_groups=finding_groups(report),
     )

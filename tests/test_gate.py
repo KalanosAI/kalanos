@@ -15,6 +15,7 @@ from typing import cast
 import h5py
 import numpy as np
 import pytest
+from calibration_helpers import grade_with_test_calibration
 
 # Internal
 from kalanos.analysis.models.policy import GatePolicy
@@ -136,7 +137,7 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     gate = report.gate
 
     assert gate is not None
@@ -290,7 +291,7 @@ def test_a_blocking_finding_on_every_episode_is_reported_as_a_trait_and_still_bl
             group = cast(h5py.Group, store[f"data/demo_{index}"])
             group.create_dataset("unused_dim", data=stuck)
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     gate = report.gate
 
     assert gate is not None
@@ -340,7 +341,7 @@ def test_a_channel_that_freezes_partway_is_still_a_stuck_sensor(tmp_path):
         group = cast(h5py.Group, store["data/demo_3"])
         group.create_dataset("unused_dim", data=stuck)
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     assert report.gate is not None
     assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [
@@ -354,7 +355,7 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     r = report.readiness
 
     assert r is not None and r.passing_quality is not None
@@ -403,7 +404,7 @@ def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2})
 
-    report = grade(path, policy=load_policy(Path("legacy_0_5")))
+    report = grade_with_test_calibration(path, policy=load_policy(Path("legacy_0_5")))
 
     assert report.gate is None
     assert report.eligibility_counts is not None
@@ -419,7 +420,7 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     text = render_terminal(report, width=120)
 

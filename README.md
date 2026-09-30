@@ -2,7 +2,7 @@
 
 **Grade your robot data before you train on it.**
 
-One command gives the dataset a **readiness score** out of 100, decides every episode (**pass**, **blocked**, **review** or **unknown**) under a named scope, and scores every recording, with the exact episode, stream and channel behind every problem. When the evidence isn't there, it says so instead of guessing. It runs on your machine, needs no labels, and reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
+One command gives the dataset a **readiness score** out of 100, decides every episode (**pass**, **blocked**, **review** or **unknown**) under a named scope, and scores every recording, with the exact episode, stream and channel behind every problem. When the evidence isn't there, it says so instead of guessing. Diagnostics run on your machine without labels; statistical blocking needs accepted validation evidence. It reads LeRobot, HDF5, MCAP, CSV, JSON and the home-grown formats real robots actually log.
 
 ```bash
 pip install kalanos
@@ -128,7 +128,7 @@ Every metric answers one of four questions, and none of them needs labels:
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
-**A few bad episodes can't hide in an average.** An episode with a critical finding is **blocking**, and blocking episodes count as zero:
+**A few bad episodes can't hide in an average.** A finding with an authorized **block** consequence makes its episode blocking. Critical statistical findings without matching calibration require **review**. Blocking episodes count as zero:
 
 ```text
 Readiness = sum of passing episodes' quality scores / number of evaluated episodes
@@ -137,38 +137,30 @@ Readiness = sum of passing episodes' quality scores / number of evaluated episod
 
 So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of the dataset you can train on, times how clean it is. The report names every blocked episode with its reasons, and the mean quality of the rest. Readiness is only defined when every episode is either `pass` or `blocked`: an episode that needs `review`, or is `unknown` because a required check couldn't run, makes it `undefined` with the reasons listed, rather than a number that pretends the evidence is in.
 
-Findings shared by every episode of a task, or by nearly every episode of the dataset, are reported as **traits** so you see the pattern, but they still block: the report can't tell a recording convention from corruption in every episode, so it doesn't guess. A scoped policy rule can exempt such a finding explicitly. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` grades with no dataset gate and no letter cap, reproducing 0.5's numbers, while every episode still carries its eligibility.
+Findings shared by every episode of a task, or by nearly every episode of the dataset, are reported as **traits** so you see the pattern, and any authorized blocking consequence remains in force: the report can't tell a recording convention from corruption in every episode, so it doesn't guess. A scoped policy rule can exempt such a finding explicitly. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` grades with no dataset gate and no letter cap, reproducing 0.5's numbers, while every episode still carries its eligibility.
 
 Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them and they drive no decision. Since 0.7.0 every episode carries one `eligibility` (`pass`, `blocked`, `review`, `unknown`) under a named scope; see `docs/DECISIONS.md`.
 
-### What will my data score? Worked examples
+### How findings affect readiness
 
-Each row is a 50-episode, 50 Hz arm dataset in HDF5 with one problem dialled in, scored by Kalanos 0.7.0. Everything else is clean, including a realistic 0.25% clock wobble. Its timestamps are an ordinary `timestamp` dataset, so their origin is *unknown*: nothing in the file says they were stamped at capture. That is the situation for almost every public robotics dataset, and it decides how the timing rows read.
+Severity, coverage and the decision are separate. A diagnostic can be computed,
+reported and critical while its consequence remains review.
 
-| What's wrong | Readiness | Episodes passing | Blocking | What the report shows |
-|---|---|---|---|---|
-| Nothing (clean control) | **100** | 50/50 | 0 | — |
-| 3% of samples dropped in 5 episodes | **100** | 50/50 | 0 | `recorded_drop_estimate` on the 5 episodes |
-| 8% of samples dropped in 5 episodes (10%) | **100** | 50/50 | 0 | `recorded_drop_estimate` on the 5 episodes |
-| 8% of samples dropped in 20 episodes (40%) | **98** | 50/50 | 0 | `recorded_drop_estimate` on the 20 episodes |
-| Control glitches (sudden command jumps) in 4 episodes (8%) | **92** | 46/50 | 4 | Spike findings on the 4 episodes; 100 after excluding them |
-| Clock declared 50 Hz, actually 45 Hz (10% slow) | **100** | 50/50 | 0 | `recorded_hz` 45 |
-| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **100** | 50/50 | 0 | `recorded_hz` 35 on every episode |
-| Clock jitter of 5% of the sampling period, every episode | **100** | 50/50 | 0 | `recorded_dt_spread_ms` |
-| 5% jitter **and** 8% of samples dropped in 10 episodes | **99** | 50/50 | 0 | Spread everywhere; drop estimate on the 10 |
-| 5% repeated timestamps in 10 episodes | **100** | 50/50 | 0 | `monotonic_violations` on the 10, with source rows |
+| Situation | Report behavior | Eligibility/readiness impact |
+| --- | --- | --- |
+| Required numeric checks complete without findings | Counts each computed channel check | Can pass within the named numeric scope |
+| A spike rule fires without matching accepted calibration | Critical measurement, localized evidence, review consequence | Episode needs review; readiness is undefined |
+| The same rule has matching accepted validation | Manifest identity and matching context accompany the finding | May block; blocked episodes count as zero |
+| Required camera analysis has no implementation | Camera streams remain in required coverage as unavailable | Unknown; numeric results cannot cover the gap |
+| Metadata tier skips numeric payloads | Declared numeric subjects remain counted as skipped | Unknown under numeric-core |
+| Timestamps have unknown or generated origin | Recorded rate/spread/gap estimates; acquisition checks abstain | No timing certification; other checks can still affect the result |
+| A metric or payload raises an unexpected exception | Error coverage and an operational error record | Unknown; CLI exits 2 even with a permissive gate |
 
-How to read it:
-
-- **Timing is reported, not graded, unless capture evidence exists.** The drop estimate, recorded rate and interval spread describe the recorded timeline. They cannot tell a lost sensor frame from an exporter that skipped a row, or a slow clock from a declared rate that was simply wrong, so they are report-only. The capture checks (`drop_rate`, `effective_hz`, `dt_jitter_ms`) grade and can block only when an adapter records producer evidence that the timestamps are capture times. No built-in reader promotes a timestamp to capture on its own; an adapter with an authoritative capture contract can (see [docs/ADAPTERS.md](docs/ADAPTERS.md)).
-- **Read the timing findings before trusting a timing-sensitive dataset.** A readiness of 100 here says the integrity checks found nothing; it is not a claim that the clock was good. The report names every episode with a drop estimate, and the recorded rate beside the rate you expected.
-- **Glitches** make the episodes they hit blocking, through the spike and noise checks. Readiness falls with the share of blocking episodes: 4 of 50 is 92.
-- **A problem in every episode blocks every episode.** A blocking finding shared by all 50 episodes is listed as a dataset trait so you see it's systemic, but it still blocks all 50: readiness 0. Excluding episodes can't fix it; the remedy is fixing the recording, or, if it's a known convention rather than a defect, a policy rule that exempts that finding under a named scope.
-- **Repeated and backwards timestamps** are measured in source order, never hidden by sorting, and listed with the source rows they occur on. They don't change readiness yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
-
-All of these thresholds are candidates, tested on synthetic and real datasets and open to revision against labelled failures.
-
-Checks that can't observe something say so rather than score it: without evidence that timestamps are capture times (including converted datasets whose timestamps were generated from frame numbers, which is most LeRobot hub data), the capture timing checks report *not observable* instead of a perfect score, while the recorded-timeline checks still describe what the timestamps show. The noise check needs at least ~45 Hz to tell sensor noise from motion.
+A rule affecting every episode does not become harmless through prevalence.
+Calibration authorizes a particular detector, thresholds, bindings and operating
+scope; it is not a universal approval. The default policy ships without accepted
+statistical calibration manifests. Existing SNR ratios remain diagnostic inputs;
+R07-03's noise-floor and applicability changes are deferred.
 
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
@@ -190,7 +182,7 @@ Readiness reflects the checks that applied to your data and the policy you grade
 - **Catch bad sessions while the robot is still set up.** Grade each teleop session as it lands, and redo the bad ones before the operator, rig and scene are gone.
 - **Accept or reject vendor data with evidence.** Grade a delivery before you sign off, and send the vendor the HTML report showing exactly which episodes failed and why.
 - **Point human review where it's needed.** Reviewers look at the recordings that passed the automated gate, not at every file.
-- **Keep quality from drifting.** Grade every dataset update in CI and fail the build when the grade drops.
+- **Keep quality from drifting.** Grade every dataset update in CI and gate on blocked, review or unknown episode decisions.
 
 ---
 
@@ -213,7 +205,7 @@ The dataset is pinned to one commit and streamed. Anything listing more than 20 
 ```bash
 kalanos grade data/                                   # exit 1 if any episode is blocked or unknown
 kalanos grade data/ --fail-on blocked,review,unknown  # a training gate: review must be resolved too
-kalanos grade data/ --fail-on blocked                 # exploratory: only objective blockers fail
+kalanos grade data/ --fail-on blocked                 # exploratory: only authorized blockers fail
 kalanos grade data/ --json | jq '.eligibility_counts, .readiness'
 ```
 
@@ -279,7 +271,7 @@ An adapter whose extra isn't installed shows as unavailable under `kalanos adapt
 | A JSON dict keyed by `"AUTOLab+5d05c5aa+2023-07-07-10h-00m-27s"` | Parses the key for source, hash and timestamp; handles per-camera nesting and irregular timing |
 | A flat JSON metadata blob (`fps`, `codec`, `duration_sec`) | Reports it as skipped, with the reason |
 
-Field names are matched against a built-in data dictionary covering the naming, units, shapes and plausible ranges used by DROID, LeRobot, MuJoCo, ROS 2 and others. Recognised signals get physics-aware checks; unrecognised ones still get the universal checks, so a mystery column that's flatlined still fails loudly.
+Field names are matched against a built-in data dictionary covering the naming, units, shapes and plausible ranges used by DROID, LeRobot, MuJoCo, ROS 2 and others. Recognised signals get physics-aware checks; unrecognised ones still get the universal checks, so a mystery column that is flatlined still produces evidence.
 
 Need a format that isn't here? `kalanos new adapter <name>` scaffolds a publishable plugin. See [docs/ADAPTERS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/ADAPTERS.md).
 
@@ -433,7 +425,7 @@ When channels were not graded, inspect `streams[].declared_channels[].binding`.
 Bindings record origins, conflicts, active and invalidated validation records, and
 prerequisite readiness for numeric inspection, derivatives, limits and noise.
 Prerequisite readiness is not a detector result or calibration approval. Existing
-SNR thresholds and statistical-blocking rules are unchanged by this binding work.
+SNR thresholds are unchanged by the binding work. Statistical blocking now requires the calibration matching described below.
 Registered jerk/chatter calculations now abstain when derivative prerequisites
 lack the required scoped binding evidence. Generic numeric inspection continues.
 
@@ -538,6 +530,90 @@ uv run pytest
 </details>
 
 ---
+
+## Coverage, inspection and comparison (R07-05–R07-07)
+
+`coverage` and each episode's ledger distinguish `computed`, `not_applicable`,
+`unavailable`, `skipped`, `error` and `not_required`. Computed report-only metrics
+count as evaluated. Eligible counts include unavailable, skipped and errored
+subjects, but exclude genuinely inapplicable subjects and optional capabilities.
+For example, 700 computed torque channel-episodes out of 700 eligible torque
+channel-episodes is complete torque coverage even when their values are report-only.
+Unknown bindings retain uncertainty rather than silently shrinking that denominator.
+
+Semantic mapping, capture-origin evidence, visual analysis and behavioral diversity
+have separate counts. Capture-origin evidence alone does not establish a usable
+clock. Visual frame totals and training-window coverage remain unknown where no
+runner measured them. Counts describe loaded subjects; failed episodes and refused
+sources remain explicit. Coverage is not a new readiness percentage.
+
+Flatline and spike measurements carry zero-based, half-open source-row intervals.
+Spikes also name the wider filter-support interval. Null/nonfinite values break
+flatline adjacency. Spectrum and SNR measurements retain whole-episode support.
+These intervals are evidence locations, not instructions to delete samples.
+
+```bash
+kalanos profiles list
+kalanos profiles show vision-imitation-v1
+kalanos profiles validate acquisition.yaml
+kalanos inspect report.json --episode 'recording::episode_000000'
+kalanos grade ./recording --hash-source --report new.json
+kalanos compare old.json new.json --report comparison.json
+kalanos grade ./recording --fail-on blocked,review,unknown --report report.json
+```
+
+`profiles validate` checks configuration structure and referenced policy files;
+only grading verifies bindings against actual data. `compare` aligns exact recorded
+subject identities, lists identity and measurement changes, and refuses a numeric
+readiness comparison when identities are missing or incompatible. Exit 1 means
+incomparable reports; exit 2 means invalid inputs or an operational failure.
+Identified differences are possible causes, not proof of causality. Use
+`--hash-source` on each grade run (Python: `hash_source=True`) to record a complete
+local byte identity. This performs two full reads, rejects symlinks and
+nonlocal roots, and withholds the report if the before/after byte identities differ.
+It reads all local files even at metadata execution tier. Write report outputs
+outside the hashed input directory to avoid changing the next run’s identity. Without it,
+reports can receive an incomparable result with useful recorded differences.
+Historical schema-6 reports remain historical; comparison never manufactures
+schema-7 decisions for them.
+
+```python
+from kalanos import compare, load_report
+
+report = load_report("report.json")
+difference = compare("old.json", "new.json")
+print(difference.comparable, difference.reasons)
+```
+
+## Calibration enforcement
+
+Statistical blocking requires a structured, accepted manifest in the selected
+policy's `calibration_manifests` list. Matching covers the detector implementation
+and numerical runtime, metric thresholds/limits, effective bindings, requirements,
+execution, dictionary, adapter identity and decision-policy scope. The report
+records the exact expected context and any mismatch on each candidate finding.
+Changing these inputs invalidates old authorization. R07-03 changes will therefore
+require fresh validation of affected detectors.
+
+The initial promotion gate requires at least 600 independent valid episodes and
+100 real fault episodes, an exact one-sided 95% false-block upper bound at most
+0.5%, and a recall lower bound at least 90%. Session separation, real-fault evidence,
+combined-policy validation and accountable acceptance must be declared. Evidence
+must be representative of the named operating scope. These are acceptance
+requirements, not claimed performance of this release.
+
+The manifest records an external validation report reference and digest. Kalanos
+checks the declared evidence and matching identities; it does not authenticate the
+reviewer or independently relabel the corpus. Synthetic benchmark results and the
+legacy `calibrated_metrics` name list never grant approval. `enforce_calibration:
+false` is rejected. Missing, revoked, expired, mismatched or insufficient evidence
+leaves the candidate at review. See [the combined implementation contract](docs/R07-05-07.md)
+for manifest fields, test cases and release checks.
+
+The default `--fail-on blocked,unknown` permits review. Use
+`--fail-on blocked,review,unknown` before unattended training. Quality measurements
+can still change without authorizing a block; readiness is undefined while review
+or required unknown evidence remains.
 
 ## License
 

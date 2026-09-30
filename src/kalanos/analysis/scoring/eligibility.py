@@ -155,27 +155,57 @@ def _requirement_reasons(
                         ),
                     )
                 )
-    for capability in requirements.required_capabilities:
-        # Prerequisite readiness is never evidence that a future detector ran.
-        # Only numeric inspection is implemented by this slice.
-        channels = [c.channel for s in episode.streams for c in s.channels]
-        available = (
-            capability == "numeric"
-            and bool(channels)
-            and all(
-                c.binding is not None
-                and c.binding.capabilities.get("numeric")
-                and c.binding.capabilities["numeric"].ready
-                for c in channels
+    if episode.coverage is not None:
+        if any(r.error for r in episode.coverage.metrics):
+            reasons.append(
+                EligibilityReason(
+                    id="analysis_error",
+                    kind=ReasonKind.REQUIREMENT,
+                    status=EligibilityStatus.UNKNOWN,
+                    detail="analysis encountered an operational error",
+                )
             )
-        )
-        if not available:
+        rows = {r.key: r for r in episode.coverage.capabilities}
+        keys = set(requirements.required_capabilities)
+        if requirements.require_numeric_payloads:
+            keys.add("numeric")
+        for capability in sorted(keys):
+            row = rows.get(capability)
+            if row is None or row.eligible == 0 or row.computed != row.eligible:
+                reasons.append(
+                    EligibilityReason(
+                        id=f"capability:{capability}",
+                        kind=ReasonKind.REQUIREMENT,
+                        status=EligibilityStatus.UNKNOWN,
+                        detail=(
+                            f"required capability {capability!r} "
+                            "was not fully evaluated"
+                        ),
+                    )
+                )
+        metrics = {r.key: r for r in episode.coverage.metrics}
+        for key in requirements.required_metrics:
+            row = metrics.get(key)
+            if row is None or row.eligible == 0 or row.computed != row.eligible:
+                reasons.append(
+                    EligibilityReason(
+                        id=f"metric:{key}",
+                        kind=ReasonKind.REQUIREMENT,
+                        status=EligibilityStatus.UNKNOWN,
+                        detail=(
+                            f"required metric {key!r} was not fully evaluated "
+                            "on eligible subjects"
+                        ),
+                    )
+                )
+    else:
+        for capability in requirements.required_capabilities:
             reasons.append(
                 EligibilityReason(
                     id=f"capability:{capability}",
                     kind=ReasonKind.REQUIREMENT,
                     status=EligibilityStatus.UNKNOWN,
-                    detail=f"required capability {capability!r} was not evaluated",
+                    detail=f"required capability {capability!r} has no coverage record",
                 )
             )
     return reasons

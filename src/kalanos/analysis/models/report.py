@@ -29,6 +29,8 @@ from kalanos.analysis.models.binding import (
     BindingConflict,
     EvaluationScope,
 )
+from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
+from kalanos.analysis.models.coverage import CoverageRow
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -179,6 +181,9 @@ class GradedStream(BaseModel):
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     channels: list[GradedChannel] = Field(default_factory=list)
+    kind: str | None = None
+    source_path: str | None = None
+    coverage: list[CoverageRow] = Field(default_factory=list)
     source_field: str | None = None
     declared_channels: list[Channel] = Field(default_factory=list)
     clock: Clock = Clock.UNKNOWN
@@ -233,6 +238,7 @@ class GradedEpisode(BaseModel):
     streams: list[GradedStream] = Field(default_factory=list)
     tasks: list[str] | None = None
     eligibility: EpisodeEligibility | None = None
+    coverage: AnalysisCoverage | None = None
 
 
 class FailingEpisode(BaseModel):
@@ -440,7 +446,9 @@ class Report(BaseModel):
     `eligibility_counts` and `readiness`.
     """
 
+    operational_errors: list[dict[str, str]] = Field(default_factory=list)
     schema_version: str = CURRENT_SCHEMA_VERSION
+    coverage: AnalysisCoverage | None = None
     root: AnyPath
     score: ScoreResult
     episodes: list[GradedEpisode] = Field(default_factory=list)
@@ -471,6 +479,16 @@ class Report(BaseModel):
         episodes; and the counts partition the episodes plus the failed ones.
         """
 
+        if self.coverage is not None:
+            from kalanos.analysis.coverage import report_coverage
+
+            if self.inventory is None or any(e.coverage is None for e in self.episodes):
+                raise ValueError("coverage requires episode ledgers and inventory")
+            if self.coverage != report_coverage(self.episodes, self.inventory):
+                raise ValueError("report coverage does not reconcile with episodes")
+        ids = [f.id for f in self.findings if f.id is not None]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate finding ids")
         for episode in self.episodes:
             if episode.eligibility is None:
                 raise ValueError(f"episode {episode.id!r} has no eligibility")

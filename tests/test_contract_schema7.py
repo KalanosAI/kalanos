@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 import pytest
 import yaml
+from calibration_helpers import grade_with_test_calibration
 from typer.testing import CliRunner
 from upath import UPath
 
@@ -164,7 +165,7 @@ def test_t04_a_report_refuses_a_blocked_episode_marked_train_ready(tmp_path):
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 4, glitched={1})
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     blocked = next(e for e in report.episodes if e.score.train_ready is False)
     assert blocked.eligibility is not None
     assert blocked.eligibility.status == EligibilityStatus.BLOCKED
@@ -186,7 +187,7 @@ def test_t04_every_surface_reads_the_same_decision(tmp_path):
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 10, glitched={2, 5})
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     blocked = {
         e.id
@@ -221,7 +222,7 @@ def test_t05_a_blocking_finding_never_disappears_as_its_prevalence_grows(
     glitched = set(range(int(n * share)))
     path = tmp_path / "arm.hdf5"
     _write_arm(path, n, glitched=glitched)
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     assert report.eligibility_counts is not None
     assert report.eligibility_counts.blocked == len(glitched)
     if share == 1.0:
@@ -508,10 +509,10 @@ def test_t14_exit_codes_follow_the_truth_table(tmp_path):
     _write_arm(dirty, 4, glitched={1})
 
     assert runner.invoke(app, ["grade", str(clean)]).exit_code == 0
-    assert runner.invoke(app, ["grade", str(dirty)]).exit_code == 1
-    # `review` alone does not fail a blocked dataset...
+    assert runner.invoke(app, ["grade", str(dirty)]).exit_code == 0
+    # Uncalibrated statistical faults now require review; opt in to that gate.
     assert (
-        runner.invoke(app, ["grade", str(dirty), "--fail-on", "review"]).exit_code == 0
+        runner.invoke(app, ["grade", str(dirty), "--fail-on", "review"]).exit_code == 1
     )
     # ...and an unknown status is a configuration error, before any grading.
     result = runner.invoke(app, ["grade", str(dirty), "--fail-on", "pass"])

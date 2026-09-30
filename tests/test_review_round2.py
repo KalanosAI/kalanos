@@ -19,6 +19,7 @@ import numpy as np
 import polars as pl
 import pytest
 import yaml
+from calibration_helpers import grade_with_test_calibration
 from typer.testing import CliRunner
 from upath import UPath
 
@@ -229,7 +230,7 @@ def test_f4_all_pass_without_a_letter_gate_is_train_ready(tmp_path):
 def test_f4_a_forged_dataset_train_ready_is_refused(tmp_path):
     path = tmp_path / "dirty.hdf5"
     _write_arm(path, 3, glitched={1})
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     assert report.score.train_ready is False
     payload = report.model_dump(mode="json")
     payload["score"]["train_ready"] = True

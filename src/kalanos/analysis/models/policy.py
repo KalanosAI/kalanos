@@ -15,7 +15,9 @@ from enum import Enum
 from typing import Literal
 
 # External
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from kalanos.analysis.models.calibration import CalibrationManifest
 
 # Internal
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
@@ -101,6 +103,8 @@ class MetricPolicy(BaseModel):
         for a threshold detector, which `Policy.enforce_calibration` may
         downgrade to review when no calibration manifest covers it.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     report_only: bool = False
     consequence: Consequence | None = None
@@ -296,18 +300,19 @@ class Policy(BaseModel):
         below `D`'s minimum is `F`, which carries no minimum of its own.
     gate : GatePolicy or None
         The dataset gate, or `None` to grade the dataset by its mean alone.
-    enforce_calibration : bool
-        When `True`, a `statistical` block with no accepted calibration
-        manifest in `calibrated_metrics` resolves to review. `False` in the
-        0.7 contract release so verdicts do not change before R07-03 declares
-        each metric's route and evidence; R07-07 flips it.
-    calibrated_metrics : dict[str, str]
-        Metric key mapped to the accepted calibration manifest identity that
-        authorises it to block statistically.
+    enforce_calibration : Literal[True]
+        Statistical promotion is always enforced. False is a configuration error.
+    calibration_manifests : list[CalibrationManifest]
+        Accepted validation records matched against the actual run context.
+    calibrated_metrics : dict[str, float | str]
+        Legacy name-list field, retained for loading only. Grants no authority.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     schema_version: int
-    enforce_calibration: bool = False
+    enforce_calibration: Literal[True] = True
+    calibration_manifests: list[CalibrationManifest] = Field(default_factory=list)
     calibrated_metrics: dict[str, float | str] = Field(default_factory=dict)
     metrics: dict[str, MetricPolicy]
     family_weights: dict[str, float] = Field(default_factory=dict)
@@ -316,6 +321,13 @@ class Policy(BaseModel):
     fail_penalty_cap: float | None = Field(default=None, ge=0)
     letters: dict[str, float]
     gate: GatePolicy | None = None
+
+    @model_validator(mode="after")
+    def _unique_manifests(self):
+        ids = [m.id for m in self.calibration_manifests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate calibration manifest id")
+        return self
 
     @model_validator(mode="after")
     def _every_metric_key_is_one_family_dot_one_name(self) -> "Policy":

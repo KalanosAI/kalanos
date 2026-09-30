@@ -20,8 +20,11 @@ from typing import Any, Protocol, runtime_checkable
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kalanos.analysis.models.coverage import Availability
+
 # Internal
 from kalanos.analysis.models.domain import Channel, Episode, Payload, Stream
+from kalanos.analysis.models.support import TemporalSupport
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -88,6 +91,8 @@ class MetricResult(BaseModel):
     unit: str | None
     status: MetricStatus
     evidence: dict[str, Any] = Field(default_factory=dict)
+    availability: Availability | None = None
+    support: TemporalSupport = Field(default_factory=TemporalSupport)
 
 
 class Requires(BaseModel):

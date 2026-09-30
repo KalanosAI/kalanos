@@ -463,6 +463,7 @@ class RequirementsSection(BaseModel):
     require_numeric_payloads: bool = True
     min_pass_episodes: int | None = Field(default=None, ge=0)
     required_capabilities: list[str] = Field(default_factory=list)
+    required_metrics: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

@@ -402,6 +402,54 @@ def test_the_installed_cli_grades_a_recording_to_html(installed_kalanos):
     assert report_path.read_text(encoding="utf-8").strip()
 
 
+def test_installed_coverage_comparison_and_profiles(installed_kalanos):
+    """The combined workflows operate from the installed wheel, outside checkout."""
+    import json
+
+    wheel = installed_kalanos
+    checked = subprocess.run(
+        [
+            str(wheel.python),
+            "-c",
+            """
+import json, sys
+from pathlib import Path
+from kalanos import grade, compare, load_report
+report = grade(sys.argv[1], hash_source=True)
+assert report.coverage.metrics
+Path('audit.json').write_text(report.model_dump_json())
+assert compare(load_report('audit.json'), report).comparable
+print(json.dumps({'verified': True}))
+""",
+            str(CSV_FIXTURE),
+        ],
+        cwd=wheel.working_directory,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert json.loads(checked.stdout)["verified"]
+    compared = subprocess.run(
+        [str(wheel.console_script), "compare", "audit.json", "audit.json"],
+        cwd=wheel.working_directory,
+        capture_output=True,
+        text=True,
+    )
+    assert compared.returncode == 0, compared.stderr
+    assert json.loads(compared.stdout)["comparable"]
+    profiles = subprocess.run(
+        [str(wheel.console_script), "profiles", "show", "vision-imitation-v1"],
+        cwd=wheel.working_directory,
+        capture_output=True,
+        text=True,
+    )
+    assert profiles.returncode == 0, profiles.stderr
+    assert (
+        "video_quality"
+        in json.loads(profiles.stdout)["requirements"]["required_capabilities"]
+    )
+
+
 @pytest.mark.parametrize("kind", ["adapter", "metric"])
 def test_a_scaffolded_plugin_installs_and_is_listed(
     installed_kalanos, scaffolded_plugins, kind

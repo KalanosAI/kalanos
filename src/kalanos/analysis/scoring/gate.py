@@ -17,6 +17,8 @@ import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 
+from kalanos.analysis.coverage import state_of
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import (
     Consequence,
     EligibilityStatus,
@@ -198,6 +200,8 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
     for episode in episodes:
         graded = 0
         for name, result in _results(episode):
+            if state_of(result) == Availability.NOT_APPLICABLE:
+                continue
             total[name] += 1
             if result.status in _GRADED:
                 graded += 1

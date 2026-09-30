@@ -1,0 +1,88 @@
+# Requirements profiles
+
+A bundle keeps binding, requirements, policy and execution separate. Existing
+`kalanos-map.yaml`, `--map-file` and `--map` inputs remain supported under the
+existing precedence; this patch does not deprecate or migrate sidecars.
+
+```bash
+kalanos profiles list
+kalanos profiles show numeric-core-v1
+kalanos profiles show vision-imitation-v1
+kalanos profiles validate acquisition.yaml
+```
+
+Validation checks YAML/model structure and any referenced decision policy. It does
+not load a dataset or certify a binding. Unknown capability or metric names cannot
+produce a pass: their required evidence will be unavailable at grading time.
+
+## Numeric data with required acquisition timing
+
+Save as `acquisition.yaml`:
+
+```yaml
+schema_version: 1
+requirements:
+  id: numeric-with-capture-v1
+  required_families: [integrity]
+  require_numeric_payloads: true
+  required_capabilities: [numeric, acquisition_timing]
+  required_metrics: [integrity.missing_pct]
+execution:
+  tier: standard
+```
+
+```bash
+kalanos grade ./recording --profile acquisition.yaml --report audit.json
+```
+
+Capture origin alone is insufficient: all streams must compute the acquisition
+metrics. Built-in generic readers do not assert producer capture provenance, so
+this requirement is expected to remain unknown unless an adapter has justified
+producer evidence and usable timestamps. Metadata tier keeps the same requirements
+and therefore leaves skipped numeric evaluation unknown.
+
+To require torque measurement as well, add `motion.p99_torque` to
+`required_metrics`. An episode must contain eligible torque subjects and evaluate
+all of them. The value may remain report-only; this requirement does not define a
+safe torque limit or authorize statistical blocking.
+
+## Vision requirements
+
+```yaml
+schema_version: 1
+requirements:
+  id: vision-imitation-v1
+execution:
+  tier: full
+```
+
+This preset requires video quality. There is no visual quality runner in this
+patch, including at full tier, so it remains unknown. Camera metadata and numeric
+analysis do not satisfy that requirement. Choosing a weaker profile changes the
+question asked and must not be described as completing the original audit.
+
+## A selected decision policy
+
+```yaml
+schema_version: 1
+requirements:
+  id: numeric-core-v1
+policy:
+  id: reviewed-numeric-policy-v1
+  path: policies/reviewed-numeric.yaml
+execution:
+  tier: standard
+```
+
+The policy path resolves relative to the bundle. Use a complete policy with its
+`calibration_manifests` list; see the [combined contract](R07-05-07.md). Missing or
+invalid files fail with exit 2. Do not add a test manifest to a production policy.
+Run a diagnostic grade first to obtain exact candidate calibration contexts, then
+validate the final implementation and scope before recording acceptance.
+
+The default gate fails `blocked,unknown`. For unattended training:
+
+```bash
+kalanos grade ./recording --profile acquisition.yaml \
+  --fail-on blocked,review,unknown --report audit.json
+```

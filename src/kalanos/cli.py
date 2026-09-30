@@ -10,6 +10,7 @@ second command reuses the pipeline rather than reimplementing part of it.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +25,8 @@ from upath import UPath
 
 # Internal
 from kalanos import api
+from kalanos.analysis.coverage import coverage_lines
+from kalanos.analysis.models.binding import Bundle, RequirementsSection
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import KalanosError
@@ -34,6 +37,7 @@ from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
+from kalanos.assets.bundle import load_bundle, load_bundle_policy
 from kalanos.assets.mapping import parse_map_argument
 from kalanos.benchmark import (
     DEFAULT_SAMPLE,
@@ -188,6 +192,13 @@ def grade(
             ),
         ),
     ] = None,
+    hash_source: Annotated[
+        bool,
+        typer.Option(
+            "--hash-source",
+            help="Hash local source bytes before and after analysis for comparison.",
+        ),
+    ] = False,
     fail_on: Annotated[
         str,
         typer.Option(
@@ -284,6 +295,7 @@ def grade(
             sidecar=not no_sidecar,
             bundle=profile,
             tier=tier,
+            hash_source=hash_source,
         )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
@@ -313,6 +325,13 @@ def grade(
     # Step 4: the decision gate, from the one place decisions live. An
     # incomplete audit fails the default gate; operational errors already
     # left with exit 2 above, so this never masks one.
+    if result.operational_errors:
+        print(
+            "kalanos: analysis encountered operational errors; "
+            "inspect the saved report",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
     for warning in gate_warnings(result, gate_on):
         print(f"kalanos: {warning}", file=sys.stderr)
     if failing_statuses(result, gate_on):
@@ -440,6 +459,15 @@ def inspect(
             for item in loaded.contradictions:
                 console.print(f"  {item.episode_id}")
         console.print("not recorded in this schema: " + "; ".join(loaded.unknown))
+        if episode is not None:
+            item = next(
+                (e for e in loaded.data.get("episodes", []) if e.get("id") == episode),
+                None,
+            )
+            if item is None:
+                print(f"kalanos: no episode {episode!r}", file=sys.stderr)
+                raise typer.Exit(code=2)
+            console.print(json.dumps(item), markup=False)
         return
 
     scope = loaded.scope
@@ -464,6 +492,32 @@ def inspect(
         )
     if loaded.sufficiency is not None:
         console.print(f"sufficiency {loaded.sufficiency.status.value}")
+    selected = (
+        next((e for e in loaded.episodes if e.id == episode), None) if episode else None
+    )
+    if episode and selected is None:
+        print(f"kalanos: no episode {episode!r}", file=sys.stderr)
+        raise typer.Exit(code=2)
+    for line in coverage_lines(selected.coverage if selected else loaded.coverage):
+        console.print(line, markup=False)
+    for finding in loaded.findings:
+        if episode is None or finding.episode_id == episode:
+            console.print(
+                json.dumps(
+                    {
+                        "id": finding.id,
+                        "episode": finding.episode_id,
+                        "metric": finding.metric_id,
+                        "source_path": finding.source_path,
+                        "source_field": finding.source_field,
+                        "channel": finding.channel,
+                        "consequence": finding.consequence.value,
+                        "support": finding.support.model_dump(mode="json"),
+                        "calibration": finding.calibration,
+                    }
+                ),
+                markup=False,
+            )
     table = _table("EPISODE", "STATUS", "REASONS")
     for item in loaded.episodes:
         if episode is not None and item.id != episode:
@@ -783,6 +837,60 @@ def main(
     """
 
     configure_logging(verbosity if verbosity is not None else get_settings().verbosity)
+
+
+@app.command(
+    "compare", help="Compare saved reports without inventing missing identities."
+)
+def compare_command(
+    old: Annotated[Path, typer.Argument()],
+    new: Annotated[Path, typer.Argument()],
+    report: Annotated[Path | None, typer.Option("--report")] = None,
+) -> None:
+    try:
+        result = api.compare(old, new)
+        text = result.model_dump_json(indent=2)
+        if report:
+            if report.resolve() in (old.resolve(), new.resolve()):
+                raise ValueError("comparison output must not overwrite an input report")
+            report.write_text(text, encoding="utf-8")
+        print(text)
+    except (OSError, ValueError) as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+    if not result.comparable:
+        raise typer.Exit(code=1)
+
+
+profiles_app = typer.Typer(help="Inspect and validate requirements bundles.")
+app.add_typer(profiles_app, name="profiles")
+
+
+@profiles_app.command("list")
+def profiles_list() -> None:
+    print("numeric-core-v1\nvision-imitation-v1")
+
+
+@profiles_app.command("show")
+def profiles_show(name: str) -> None:
+    if name not in ("numeric-core-v1", "vision-imitation-v1"):
+        print(f"kalanos: unknown profile {name!r}", file=sys.stderr)
+        raise typer.Exit(code=2)
+    print(Bundle(requirements=RequirementsSection(id=name)).model_dump_json(indent=2))
+
+
+@profiles_app.command("validate")
+def profiles_validate(path: Path) -> None:
+    try:
+        bundle = load_bundle(UPath(path))
+        load_bundle_policy(bundle, UPath(path))
+        print(
+            "Configuration structure is valid; "
+            "dataset bindings and coverage require a grade run."
+        )
+    except (OSError, ValueError, KalanosError) as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
 
 
 if __name__ == "__main__":

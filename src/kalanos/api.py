@@ -17,11 +17,17 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis import pipeline
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+from kalanos.analysis.compare import compare_reports as compare
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.models.binding import Bundle
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SourceLimits
-from kalanos.analysis.models.errors import NothingToGrade
+from kalanos.analysis.models.errors import NothingToGrade, SourceUnavailable
+from kalanos.analysis.models.legacy import load_any as load_report
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import (
     ExecutionTier,
@@ -31,15 +37,14 @@ from kalanos.analysis.models.provenance import (
     SourceEvidence,
 )
 from kalanos.analysis.models.report import Report
+from kalanos.analysis.source_identity import hash_local_source
 from kalanos.assets.bundle import (
     prepare_configuration,
 )
 from kalanos.core.settings import get_settings
 
 
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
-# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
-# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+__all__ = ["grade", "compare", "load_report"]
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,7 @@ def grade(
     sidecar: bool = True,
     bundle: str | os.PathLike[str] | UPath | Bundle | None = None,
     tier: ExecutionTier | None = None,
+    hash_source: bool = False,
 ) -> Report:
     """Grade a recording, or every recording under a folder.
 
@@ -105,6 +111,9 @@ def grade(
     tier : ExecutionTier or None
         Overrides the bundle's execution tier. A tier never changes the
         requirements: skipping a required capability makes episodes unknown.
+    hash_source : bool
+        Hash all local source bytes before and after analysis; reject changing
+        sources. Off by default. Symlinks and nonlocal roots are refused.
     sidecar : bool
         Whether to read a `kalanos-map.yaml` in the graded root,
         or beside it when the root is a file.
@@ -192,6 +201,8 @@ def grade(
         bundle=config.bundle_id,
     )
 
+    source_before = hash_local_source(root) if hash_source else None
+
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,
     # so an empty report means the path itself held nothing.
     report = pipeline.run(
@@ -205,4 +216,10 @@ def grade(
     )
     if not (report.episodes or report.skipped or report.unresolved):
         raise NothingToGrade(f"{root} contains nothing to grade")
+    if hash_source:
+        source_after = hash_local_source(root)
+        if source_before != source_after:
+            raise SourceUnavailable("source changed during analysis; report withheld")
+        source_after.revision = source.revision
+        report.run.source = source_after
     return report
