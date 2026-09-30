@@ -31,7 +31,7 @@ from kalanos.analysis.models.eligibility import (
     worst_status,
 )
 from kalanos.analysis.models.provenance import Inventory
-from kalanos.analysis.models.report import GradedEpisode
+from kalanos.analysis.models.report import GradedEpisode, PayloadStatus
 from kalanos.analysis.models.scoring import Finding
 
 
@@ -109,6 +109,29 @@ def _requirement_reasons(
                     detail=f"required family {family!r} graded no result",
                 )
             )
+    if requirements.require_numeric_payloads:
+        for stream in episode.streams:
+            status = stream.evaluation.payload
+            if status in (
+                PayloadStatus.MISSING_INPUT,
+                PayloadStatus.SKIPPED,
+                PayloadStatus.ERROR,
+            ):
+                reasons.append(
+                    EligibilityReason(
+                        id=f"payload:{stream.taxonomy_type}",
+                        kind=ReasonKind.REQUIREMENT,
+                        status=EligibilityStatus.UNKNOWN,
+                        detail=(
+                            f"stream {stream.taxonomy_type!r} payload {status.value}"
+                            + (
+                                f": {stream.evaluation.reason}"
+                                if stream.evaluation.reason
+                                else ""
+                            )
+                        ),
+                    )
+                )
     if requirements.require_resolved_bindings:
         for stream in episode.streams:
             if stream.taxonomy_type.startswith(UNMAPPED_TAXONOMY_PREFIX):
@@ -191,7 +214,9 @@ def counts_of(
     tally = {status: 0 for status in EligibilityStatus}
     for decision in decisions:
         tally[decision.status] += 1
-    tally[EligibilityStatus.UNKNOWN] += len(inventory.failed)
+    # Failed and unresolved episodes are known to exist and could not be
+    # decided: unknown, so they stay in the denominator.
+    tally[EligibilityStatus.UNKNOWN] += len(inventory.failed) + inventory.unresolved
     total = sum(tally.values())
     share = (
         tally[EligibilityStatus.PASS] / total if total and inventory.complete else None
@@ -246,6 +271,22 @@ def readiness_of(
     )
 
 
+def dataset_train_ready(counts: EligibilityCounts) -> bool | None:
+    """The dataset-level compatibility boolean, from the counts alone.
+
+    `False` when any episode is blocked; `True` only when the inventory is
+    complete, non-empty and every episode passed; `None` otherwise. It never
+    consults the optional letter gate, and it counts failed and unresolved
+    episodes because they are in `counts`.
+    """
+
+    if counts.blocked:
+        return False
+    if counts.inventory_complete and counts.total and counts.pass_count == counts.total:
+        return True
+    return None
+
+
 def sufficiency_of(
     requirements: RequirementsSection, counts: EligibilityCounts
 ) -> Sufficiency:
@@ -297,6 +338,7 @@ def sufficiency_of(
 
 __all__ = [
     "counts_of",
+    "dataset_train_ready",
     "decide_all",
     "eligibility_of",
     "finding_key",

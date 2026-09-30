@@ -373,16 +373,9 @@ def apply_gate(
             len(everywhere),
         ),
     )
-    # Dataset-level train_ready is compatibility only: true when every
-    # episode passed, false when any is blocked, null otherwise.
-    statuses = {d.status for d in decisions.values()}
-    if not statuses or statuses == {EligibilityStatus.PASS}:
-        dataset_ready: bool | None = True if statuses else None
-    elif EligibilityStatus.BLOCKED in statuses:
-        dataset_ready = False
-    else:
-        dataset_ready = None
-    gated = score.model_copy(update={"grade": grade, "train_ready": dataset_ready})
+    # Dataset-level train_ready is not the gate's to decide: assembly sets it
+    # from the counts and the inventory, gate or no gate.
+    gated = score.model_copy(update={"grade": grade})
     return gated, gate
 
 

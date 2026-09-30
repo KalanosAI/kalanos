@@ -313,6 +313,8 @@ def run(
     by_feature = {override.feature: override for override in overrides}
     matched: set[str] = set()
     seen: set[str] = set()
+    unresolved_episodes = 0
+    inventory_notes: list[str] = []
 
     for candidate in candidates:
         # Step 2: a candidate a directory adapter already claimed was
@@ -361,6 +363,22 @@ def run(
             unresolved.append(exc.as_unresolved())
             continue
         datasets.append(info)
+        # A declared count the adapter could not deliver is an inventory gap:
+        # those episodes exist somewhere and have no identities here, so they
+        # are counted as unresolved rather than silently dropped from the
+        # denominator. More loaded than declared is noted, not a gap.
+        if info.episode_count is not None:
+            if info.episode_count > len(episodes):
+                unresolved_episodes += info.episode_count - len(episodes)
+                inventory_notes.append(
+                    f"{candidate.path}: declared {info.episode_count} episodes, "
+                    f"loaded {len(episodes)}"
+                )
+            elif info.episode_count < len(episodes):
+                inventory_notes.append(
+                    f"{candidate.path}: declared {info.episode_count} episodes, "
+                    f"loaded {len(episodes)} (more than declared)"
+                )
 
         # Step 6: an adapter's name for a recording is local to the file it read,
         # so re-mint it against the walked root to keep it unique across the run.
@@ -400,14 +418,21 @@ def run(
             for item in unresolved
             if hasattr(item, "reason")
         ],
-        # Enumeration completed: everything discovery found was attempted.
-        complete=True,
+        unresolved=unresolved_episodes,
+        # Finishing the walk proves nothing about episodes a source declared
+        # but never yielded; only a reconciled declared count does.
+        complete=unresolved_episodes == 0,
+        notes=inventory_notes,
     )
     if run_info is not None:
         run_info = run_info.model_copy(
             update={
                 "finished_at": datetime.now(timezone.utc),
-                "completion": RunCompletion.COMPLETE,
+                "completion": (
+                    RunCompletion.COMPLETE
+                    if inventory.complete
+                    else RunCompletion.PARTIAL
+                ),
             }
         )
     return assemble_report(

@@ -17,6 +17,9 @@ and a path is a real filesystem path.
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from enum import Enum
+
 # External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -107,6 +110,37 @@ class GradedChannel(BaseModel):
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
 
 
+class PayloadStatus(str, Enum):
+    """Whether a stream's channel payload was actually examined.
+
+    A required capability's outcome must be explicit: a stream that was never
+    read cannot pass by having another stream in the same family pass.
+    """
+
+    # fmt: off
+    COMPUTED      = "computed"       # Payload fetched; channels graded
+    NOT_REQUIRED  = "not_required"   # No channels to grade (video, text)
+    MISSING_INPUT = "missing_input"  # Channels declared but no payload to read
+    SKIPPED       = "skipped"        # Execution tier did not read payloads
+    ERROR         = "error"          # Fetching or grading the payload raised
+    # fmt: on
+
+
+class StreamEvaluation(BaseModel):
+    """What was done with a stream's payload, and why when it was not read.
+
+    Attributes
+    ----------
+    payload : PayloadStatus
+    reason : str or None
+    n_channels_graded : int
+    """
+
+    payload: PayloadStatus = PayloadStatus.COMPUTED
+    reason: str | None = None
+    n_channels_graded: int = 0
+
+
 class GradedStream(BaseModel):
     """One Stream with its own rolled-up score.
 
@@ -127,6 +161,9 @@ class GradedStream(BaseModel):
         and regraded against the policy, via `scoring.resolve_status`.
     channels : list[GradedChannel]
         The graded channels within this stream.
+    evaluation : StreamEvaluation
+        Whether the payload was read. Requirements decide eligibility from
+        this, not from whether some other stream produced a result.
     """
 
     taxonomy_type: str
@@ -136,6 +173,7 @@ class GradedStream(BaseModel):
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     channels: list[GradedChannel] = Field(default_factory=list)
+    evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
 
 
 class GradedEpisode(BaseModel):
@@ -444,13 +482,36 @@ class Report(BaseModel):
                     "gate.failing_episodes is not the set of blocked episodes"
                 )
         if self.eligibility_counts is not None:
+            counts = self.eligibility_counts
             failed = len(self.inventory.failed) if self.inventory else 0
-            if self.eligibility_counts.total != len(self.episodes) + failed:
+            gap = self.inventory.unresolved if self.inventory else 0
+            if counts.total != len(self.episodes) + failed + gap:
                 raise ValueError(
                     "eligibility_counts.total does not cover the inventory"
                 )
-            if self.eligibility_counts.blocked != len(blocked):
+            if counts.blocked != len(blocked):
                 raise ValueError(
                     "eligibility_counts.blocked disagrees with the episodes"
+                )
+            if self.inventory is not None and (
+                counts.inventory_complete != self.inventory.complete
+            ):
+                raise ValueError(
+                    "eligibility_counts and inventory disagree on completeness"
+                )
+            # The dataset compatibility boolean is a function of the counts.
+            expected_ready = (
+                False
+                if counts.blocked
+                else True
+                if counts.inventory_complete
+                and counts.total
+                and counts.pass_count == counts.total
+                else None
+            )
+            if self.score.train_ready != expected_ready:
+                raise ValueError(
+                    f"dataset train_ready={self.score.train_ready} contradicts the "
+                    f"eligibility counts (expected {expected_ready})"
                 )
         return self

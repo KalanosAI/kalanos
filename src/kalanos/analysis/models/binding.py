@@ -293,12 +293,18 @@ def resolve_feature_types(
     for feature, group in by_feature.items():
         ordered = sorted(group, key=lambda a: _rank(a.origin))
         winner = ordered[0]
-        peers = [a for a in ordered if a.origin == winner.origin]
-        if len({a.taxonomy_type for a in peers}) > 1:
-            listed = ", ".join(sorted({a.taxonomy_type for a in peers}))
-            raise SamePriorityConflict(
-                f"{feature}: conflicting {winner.origin.value} assertions ({listed})"
-            )
+        # Disagreement within *any* origin group is a configuration error,
+        # even one a higher-priority assertion would have outranked: a
+        # contradiction is not resolved by being hidden.
+        by_origin: dict[BindingOrigin, set[str]] = {}
+        for a in ordered:
+            by_origin.setdefault(a.origin, set()).add(a.taxonomy_type)
+        for origin, asserted in by_origin.items():
+            if len(asserted) > 1:
+                raise SamePriorityConflict(
+                    f"{feature}: conflicting {origin.value} assertions "
+                    f"({', '.join(sorted(asserted))})"
+                )
         displaced = [
             a
             for a in ordered
@@ -365,6 +371,12 @@ class RequirementsSection(BaseModel):
         episode for it to be decidable; otherwise the episode is `unknown`.
     require_resolved_bindings : bool
         Whether an episode with any unmapped stream is `unknown`.
+    require_numeric_payloads : bool
+        Whether every stream that declares channels must have had its
+        payload read and graded. `True` under numeric-core: a stream with a
+        missing, skipped or errored payload makes the episode `unknown`,
+        however well another stream scored. Streams without channels
+        (video, text) are not required by this.
     min_pass_episodes : int or None
         A dataset-level sufficiency constraint, evaluated in 0.7.
     """
@@ -374,6 +386,7 @@ class RequirementsSection(BaseModel):
     id: str = DEFAULT_REQUIREMENTS_ID
     required_families: list[str] = Field(default_factory=lambda: ["integrity"])
     require_resolved_bindings: bool = False
+    require_numeric_payloads: bool = True
     min_pass_episodes: int | None = Field(default=None, ge=0)
 
 

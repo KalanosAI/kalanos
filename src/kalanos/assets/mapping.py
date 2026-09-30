@@ -21,6 +21,7 @@ from kalanos.analysis.models.mapping import (
     MappingOverride,
     OverrideOrigin,
 )
+from kalanos.assets.yaml_strict import safe_load_strict
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -63,7 +64,7 @@ def load_mapping_file(path: UPath, *, origin: OverrideOrigin) -> list[MappingOve
         raise MappingOverrideError(f"no mapping file at {path}") from exc
 
     try:
-        payload = yaml.safe_load(raw_yaml)
+        payload = safe_load_strict(raw_yaml)
     except yaml.YAMLError as exc:
         raise MappingOverrideError(f"{path} is not valid YAML: {exc}") from exc
 

@@ -29,3 +29,10 @@ class MappingOverrideError(KalanosError):
 
     It is malformed, names an unknown taxonomy type, or matched no stream.
     """
+
+
+class ConfigurationError(KalanosError):
+    """A bundle, policy or mapping input is malformed, missing, or contradictory.
+
+    Always a user-facing exit 2: the run never started.
+    """

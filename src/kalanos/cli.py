@@ -271,7 +271,9 @@ def grade(
     # Step 1: grade. The reason is printed, not logged: it explains a non-zero exit,
     # and must reach the user even at a verbosity that silences ERROR records.
     try:
-        mapping = dict(parse_map_argument(text) for text in map_ or [])
+        # Pairs, not a dict: two `--map` flags for one feature must reach the
+        # resolver so a contradiction is refused instead of last-one-wins.
+        mapping = [parse_map_argument(text) for text in map_ or []]
         result = api.grade(
             path,
             limits=limits,

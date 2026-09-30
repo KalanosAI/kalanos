@@ -40,18 +40,26 @@ from kalanos.analysis.models.metrics import (
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
-from kalanos.analysis.models.provenance import Inventory, Producer, RunInfo
+from kalanos.analysis.models.provenance import (
+    ExecutionTier,
+    Inventory,
+    Producer,
+    RunInfo,
+)
 from kalanos.analysis.models.report import (
     AnalysedEpisode,
     GradedChannel,
     GradedEpisode,
     GradedStream,
+    PayloadStatus,
     Report,
+    StreamEvaluation,
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
 from kalanos.analysis.scoring.eligibility import (
     counts_of,
+    dataset_train_ready,
     decide_all,
     readiness_of,
     sufficiency_of,
@@ -112,7 +120,12 @@ def channel_taxonomy(stream_type: str, channel_name: str) -> str:
 
 
 def grade_stream(
-    stream: Stream, *, policy: Policy, is_regular: bool, episode_id: str
+    stream: Stream,
+    *,
+    policy: Policy,
+    is_regular: bool,
+    episode_id: str,
+    tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -157,19 +170,34 @@ def grade_stream(
     )
     findings.extend(stream_findings)
 
-    # Step 2: fetch the payload only when there is a channel to grade with it.
-    # A video stream carries no channels, so it is never fetched here.
+    # Step 2: fetch the payload only when there is a channel to grade with it,
+    # and only when the execution tier reads payloads at all. Whatever
+    # happens is recorded on the stream so a requirement can see it; a
+    # warning in a log is not evidence.
     graded_channels = []
+    evaluation = StreamEvaluation(payload=PayloadStatus.NOT_REQUIRED)
     if stream.channels:
-        if stream.payload is None:
+        if tier == ExecutionTier.METADATA:
+            evaluation = StreamEvaluation(
+                payload=PayloadStatus.SKIPPED,
+                reason="metadata tier does not read numeric payloads",
+            )
+        elif stream.payload is None:
             logger.warning(
                 "%s: stream %r has %d channel(s) but no payload",
                 stream.source_path,
                 stream.taxonomy_type,
                 len(stream.channels),
             )
+            evaluation = StreamEvaluation(
+                payload=PayloadStatus.MISSING_INPUT,
+                reason=f"{len(stream.channels)} channel(s) declared but no payload",
+            )
         else:
             frame = stream.payload.fetch()
+            evaluation = StreamEvaluation(
+                payload=PayloadStatus.COMPUTED, n_channels_graded=len(stream.channels)
+            )
             for channel in stream.channels:
                 ctx = ChannelContext(
                     channel=channel, values=frame[channel.name], stream=stream_ctx
@@ -201,13 +229,19 @@ def grade_stream(
             score=stream_score,
             metrics=stream_metrics,
             channels=graded_channels,
+            evaluation=evaluation,
         ),
         findings,
     )
 
 
 def grade_episode(
-    episode: Episode, *, adapter: str, adapter_confidence: float, policy: Policy
+    episode: Episode,
+    *,
+    adapter: str,
+    adapter_confidence: float,
+    policy: Policy,
+    tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -237,7 +271,11 @@ def grade_episode(
     findings: list[Finding] = []
     for stream in episode.streams:
         graded_stream, stream_findings = grade_stream(
-            stream, policy=policy, is_regular=stream.is_regular, episode_id=episode.id
+            stream,
+            policy=policy,
+            is_regular=stream.is_regular,
+            episode_id=episode.id,
+            tier=tier,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -347,6 +385,7 @@ def assemble_report(
         alongside every skipped and unresolved file with its reason or evidence.
     """
 
+    tier = scope.tier if scope is not None else ExecutionTier.STANDARD
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
     for item in analysed:
@@ -355,6 +394,7 @@ def assemble_report(
             adapter=item.adapter,
             adapter_confidence=item.adapter_confidence,
             policy=item.policy,
+            tier=tier,
         )
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
@@ -398,6 +438,11 @@ def assemble_report(
         decisions=decisions,
         readiness_score=readiness.score,
         passing_quality=readiness.passing_quality,
+    )
+    # The dataset compatibility boolean derives from the counts and the
+    # inventory, whether or not the policy has a letter gate.
+    dataset_score = dataset_score.model_copy(
+        update={"train_ready": dataset_train_ready(counts)}
     )
 
     return Report(

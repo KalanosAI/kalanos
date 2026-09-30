@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any
 
 # External
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -145,8 +145,10 @@ class RunInfo(BaseModel):
         The execution tier attempted.
     source : SourceEvidence
         What was read and how it was identified.
-    requirements, policy, binding, dictionary : ConfigIdentity or None
-        The four configuration identities, when each was resolved.
+    requirements, policy, binding, dictionary, execution : ConfigIdentity or None
+        The configuration identities, when each was resolved. `binding` is
+        the *effective* mapping after precedence; `bundle` is the declared
+        bundle file, when one was given.
     sampling : dict[str, Any]
         Any sampling specification (seeds, strides) that affected results.
     """
@@ -161,6 +163,8 @@ class RunInfo(BaseModel):
     policy: ConfigIdentity | None = None
     binding: ConfigIdentity | None = None
     dictionary: ConfigIdentity | None = None
+    execution: ConfigIdentity | None = None
+    bundle: ConfigIdentity | None = None
     sampling: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -190,14 +194,33 @@ class Inventory(BaseModel):
         Episodes that reached grading.
     failed : list[FailedEpisode]
         Episodes that did not, with reasons.
+    unresolved : int
+        Episodes the source declared but the run never enumerated: the gap
+        between a declared count and what was loaded or failed. They have no
+        identities, so none are invented; they are counted as unknown.
     complete : bool
-        Whether `loaded + failed` is believed to cover the whole source.
+        Whether `loaded + failed` covers everything the source declared.
+        `False` whenever `unresolved > 0`. A run that finished its walk has
+        not thereby proved the inventory complete.
+    notes : list[str]
+        Anything odd about the accounting, e.g. more episodes loaded than
+        declared.
     """
 
     expected: int | None = None
     loaded: int = 0
     failed: list[FailedEpisode] = Field(default_factory=list)
+    unresolved: int = Field(default=0, ge=0)
     complete: bool = True
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _gap_means_incomplete(self) -> "Inventory":
+        """An unresolved gap and a complete inventory cannot both be claimed."""
+
+        if self.unresolved and self.complete:
+            raise ValueError("inventory with unresolved episodes cannot be complete")
+        return self
 
 
 def content_digest(value: Any) -> str:
