@@ -25,6 +25,8 @@ from helpers import FIXTURES_DIR
 
 PUBLIC_SURFACE = {
     "grade",
+    "compare",
+    "load_report",
     "load_policy",
     "load_dictionary",
     "Policy",

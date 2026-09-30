@@ -23,7 +23,7 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 | `episodes[].streams[].evaluation` | `payload` (`computed`, `not_required`, `missing_input`, `skipped`, `error`), `reason`, `n_channels_declared`, `n_channels_graded`. Under `numeric-core` a stream with channels whose payload is `missing_input`, `skipped` or `error` makes the episode `unknown` — one stream's pass never covers another stream that was not read. |
 | `findings[].consequence` | `block`, `review` or `report_only`. |
 | `findings[].route` | `contract` or `statistical` when `consequence` is `block`. |
-| `findings[].support` | `kind` (`whole_episode` or `intervals`), `index_space`, `intervals[]` with zero-based half-open `start`/`end_exclusive` and optional wider `support_start`/`support_end_exclusive`. Metrics that measure the whole episode carry `whole_episode`; no interval is ever invented. Existing metrics emit `whole_episode` until R07-05 localises them. |
+| `findings[].support` | `kind` (`whole_episode` or `intervals`), `index_space`, `intervals[]` with zero-based half-open `start`/`end_exclusive` and optional wider `support_start`/`support_end_exclusive`. Metrics that measure the whole episode carry `whole_episode`; no interval is ever invented. R07-05 localises flatline and spike evidence in source rows; SNR/spectral results retain `whole_episode`. |
 
 ## Changed semantics
 
@@ -47,13 +47,13 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 ## Domain model additions (not serialised in the report yet)
 
 - `Stream.clock_info: ClockInfo` — `origin` (`capture`, `receive`, `publish`, `log`, `presentation`, `generated`, `simulation`, `unknown`), `origin_evidence` (`producer`, `adapter`, `inferred`, `none`), native unit/dtype, transforms. `ClockInfo.from_legacy(Clock.RECONSTRUCTED)` yields inferred generation, never certified capture. R07-04 populates it from adapters and exposes `clock`, `clock_info` and `source_order` on each graded stream. `tick_period_s` optionally expresses an adapter-generated grid. Legacy capture labels migrate with inferred evidence; they do not supply a producer declaration. Native ticks remain in `Stream.native_timestamps` during analysis and are omitted from the report JSON.
-- `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. R07-04 makes the LeRobot adapters fill it before sorting.
+- `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. R07-04 preserves LeRobot sample order; no sample timestamp sort remains.
 - `ChannelBinding` — `actuator`, `quantity`, `representation`, `unit`, `command`, `device`, `origin`, `status`, `validations[]`. R07-02 routes metrics through typed views built from these.
 
 ## Policy additions
 
 - `MetricPolicy.consequence` (`block`/`review`/`report_only`, default block for critical) and `MetricPolicy.route` (`contract`/`statistical`, default statistical).
-- `Policy.enforce_calibration` (default `false`) and `Policy.calibrated_metrics`. When on, a statistical block with no manifest resolves to review.
+- `Policy.enforce_calibration` is now `true` and cannot be disabled. `calibration_manifests` contains structured accepted evidence; `calibrated_metrics` remains readable for migration but grants no authority. Unmatched statistical blockers resolve to review.
 
 ## Bundle file (`--profile`)
 
@@ -89,4 +89,13 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 
 - `tests/legacy_reports/lerobot_v3_tiny-6.5.0.json` — produced by the release branch at `18cf9b6` before this change; real branch output.
 - `tests/legacy_reports/aloha_static_towel-048fef2-6.4.0-trimmed.json` — four episodes from the 048fef2 towel report (original SHA-256 `8001d3ce…`), two of them carrying the `train_ready: true` + gate-failing contradiction. Dataset-level fields are the original 50-episode values and intentionally do not reconcile with the four episodes; the fixture tests loading, not arithmetic.
-- A schema 6.3 fixture is not in the repository yet: the 43e0cb1 reports were not available when this change was prepared. Add one from the original files before R07-06 ships `compare`.
+- `tests/legacy_reports/aloha_static_towel-43e0cb1-6.3.0-trimmed.json` — first episode from the supplied schema-6.3 report. See the adjacent README for source digest and trimming boundaries.
+
+## R07-05–R07-07 additions
+
+- Top-level and episode `coverage` ledgers; stream `coverage` rows. See `docs/R07-05-07.md` for denominators. Earlier schema-7 files may omit these and must show missing coverage, not zero coverage. `gate.coverage` remains a legacy grading summary.
+- Metric `availability` is independent of graded `status`; `support` propagates to findings.
+- Finding `id`, `source_path`, `source_field`, `source_index`, `subject_level`, `evidence_strength` and `calibration` make subjects and promotion decisions inspectable. IDs identify a metric at a source subject; they are not waveform hashes.
+- `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
+- `producer.metrics` and `producer.adapters` identify built-in code and numerical runtime. Third-party implementation identity remains unknown and cannot authorize statistical promotion.
+- Additive fields stay under the ongoing schema-7 development version. Historical files are not rewritten.

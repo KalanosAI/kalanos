@@ -2033,7 +2033,10 @@ def test_findings_beyond_the_preview_go_behind_a_disclosure():
     preview = html[: html.index("2 more findings")]
 
     assert preview.count('<tr class="sev-') == 8
-    assert "timing.metric_9" not in preview
+    assert (
+        "timing.metric_9"
+        not in preview.split('<section class="findings-section">', 1)[1]
+    )
     assert "timing.metric_9" in html
 
 

@@ -17,6 +17,8 @@ from typing import cast
 # External
 import polars as pl
 
+from kalanos.analysis.localization import finite, source_values, support_for
+
 # Internal
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
@@ -165,7 +167,7 @@ def missing_pct(ctx: ChannelContext) -> MetricResult:
 
 @metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_A_PAIR)
 def flatline_pct(ctx: ChannelContext) -> MetricResult:
-    """Share of consecutive non-null samples that did not change.
+    """Share of adjacent finite source-order samples that did not change.
 
     Parameters
     ----------
@@ -178,53 +180,72 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
         `not_applicable` when:
         - the dtype is not numeric
         - the channel takes exactly two values (a switch or flag)
-        - fewer than two non-null values survive
+        - no adjacent finite pair survives
         `report_only` otherwise, with the longest unchanged run in `evidence`.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is nothing to flatline")
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="flatline"))
+        return not_applicable(_SWITCH_REASON.format(what="flatline"), inapplicable=True)
 
-    values = ctx.values.to_list()
-    timestamps = ctx.stream.timestamps.to_list()
-    valid_indices = [index for index, value in enumerate(values) if value is not None]
-    if len(valid_indices) < 2:
-        return not_applicable("fewer than two non-null values survive")
-
-    n_pairs = 0
-    n_unchanged = 0
-    run_length = 1
-    run_start = valid_indices[0]
-    longest_run = 1
-    longest_run_start = valid_indices[0]
-    longest_run_end = valid_indices[0]
-
-    for previous_index, index in zip(valid_indices, valid_indices[1:], strict=False):
-        n_pairs += 1
-        if values[index] == values[previous_index]:
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    series, indices, timestamps = ordered
+    values = series.to_list()
+    n_pairs = n_unchanged = 0
+    ranges = []
+    run_start = None
+    for i in range(1, len(values)):
+        valid = finite(values[i - 1]) and finite(values[i])
+        if valid:
+            n_pairs += 1
+        if valid and values[i] == values[i - 1]:
             n_unchanged += 1
-            run_length += 1
-        else:
-            run_length = 1
-            run_start = index
-        if run_length > longest_run:
-            longest_run = run_length
-            longest_run_start = run_start
-            longest_run_end = index
-
+            if run_start is None:
+                run_start = i - 1
+        elif run_start is not None:
+            ranges.append((run_start, i))
+            run_start = None
+    if run_start is not None:
+        ranges.append((run_start, len(values)))
+    if not n_pairs:
+        return not_applicable("fewer than two adjacent finite values survive")
+    longest = max(ranges, key=lambda r: r[1] - r[0], default=(0, 1))
+    lo, hi = longest
+    ts = timestamps[lo:hi]
+    stream = ctx.stream.stream
+    info = stream.clock_info
+    known_seconds = stream.native_timestamps is None or (
+        info is not None
+        and (
+            info.tick_period_s is not None
+            or info.native_unit in ("s", "ms", "us", "ns")
+        )
+    )
+    duration = (
+        ts[-1] - ts[0]
+        if known_seconds
+        and ts
+        and all(finite(t) for t in ts)
+        and all(b > a for a, b in zip(ts, ts[1:], strict=False))
+        else None
+    )
     return MetricResult(
         value=100.0 * n_unchanged / n_pairs,
         unit="%",
         status=MetricStatus.REPORT_ONLY,
+        support=support_for(indices, ranges),
         evidence={
-            "longest_run": longest_run,
-            "longest_run_s": timestamps[longest_run_end]
-            - timestamps[longest_run_start],
-            # Never changed at all in this episode: an unused joint or a
-            # disconnected sensor, which the data alone cannot tell apart.
+            "longest_run": hi - lo,
+            "longest_run_s": duration,
             "never_changed": n_unchanged == n_pairs,
+            "n_pairs": n_pairs,
+            "n_unchanged": n_unchanged,
+            "n_samples": ctx.n_samples,
+            "longest_run_start": indices[lo],
+            "longest_run_end_exclusive": indices[hi - 1] + 1,
         },
     )
 
@@ -251,9 +272,15 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
             "channel is not numeric; there is no spread to measure a spike against"
         )
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="a spike check"))
+        return not_applicable(
+            _SWITCH_REASON.format(what="a spike check"), inapplicable=True
+        )
 
-    values = ctx.values.cast(pl.Float64)
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    ordered_values, indices, _ = ordered
+    values = ordered_values.cast(pl.Float64)
     window_sum = values.rolling_sum(window_size=_SPIKE_WINDOW, center=True)
     window_sq_sum = (values**2).rolling_sum(window_size=_SPIKE_WINDOW, center=True)
 
@@ -274,13 +301,18 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
 
     deviation = (values - other_mean).abs()
     is_spike = scored & (deviation > 6 * other_std)
+    positions = [i for i, flag in enumerate(is_spike.to_list()) if flag]
 
     return MetricResult(
-        value=100.0 * int(is_spike.sum()) / n_scored,
+        value=100.0 * len(positions) / n_scored,
+        support=support_for(
+            indices, [(i, i + 1) for i in positions], window=_SPIKE_WINDOW // 2
+        ),
         unit="%",
         status=MetricStatus.REPORT_ONLY,
         evidence={
             "n_scored": n_scored,
+            "sample_indices": [indices[i] for i in positions],
             "window_samples": _SPIKE_WINDOW,
             "window_is_undecided": True,
         },
@@ -383,7 +415,9 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is no signal to measure")
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="a signal-to-noise ratio"))
+        return not_applicable(
+            _SWITCH_REASON.format(what="a signal-to-noise ratio"), inapplicable=True
+        )
 
     rate_hz = _sampling_rate(ctx)
     if rate_hz is None:

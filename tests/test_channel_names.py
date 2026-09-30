@@ -14,6 +14,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import polars as pl
+from calibration_helpers import grade_with_test_calibration
 from upath import UPath
 
 # Internal
@@ -142,7 +143,7 @@ def test_a_glitching_gripper_still_fails_its_episode(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_with_gripper(path, 20, glitched={4})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     assert report.gate is not None
     assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [

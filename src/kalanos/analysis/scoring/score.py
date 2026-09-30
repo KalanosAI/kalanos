@@ -18,6 +18,7 @@ import math
 import statistics
 from collections.abc import Sequence
 
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 
 # Internal
@@ -251,11 +252,7 @@ def consequence_for(
     if consequence != Consequence.BLOCK:
         return consequence, None
     route = metric_policy.route or BlockingRoute.STATISTICAL
-    if (
-        route == BlockingRoute.STATISTICAL
-        and policy.enforce_calibration
-        and key not in policy.calibrated_metrics
-    ):
+    if route == BlockingRoute.STATISTICAL:
         return Consequence.REVIEW, None
     return Consequence.BLOCK, route
 
@@ -309,6 +306,14 @@ def _finding_for(
         severity, metric_policy=metric_policy, policy=policy, key=key
     )
     return Finding(
+        subject_level=Level.CHANNEL
+        if location.channel is not None
+        else Level.STREAM
+        if location.stream is not None
+        else Level.EPISODE,
+        evidence_strength="deterministic"
+        if route == BlockingRoute.CONTRACT
+        else "heuristic",
         metric_id=f"{family}.{metric_name}",
         family=family,
         severity=severity,
@@ -316,6 +321,10 @@ def _finding_for(
         unit=result.unit,
         points=points,
         episode_id=location.episode_id,
+        source_index=location.source_index,
+        source_field=location.source_field,
+        source_path=location.source_path,
+        support=result.support,
         stream=location.stream,
         instance=location.instance,
         channel=location.channel,
@@ -371,8 +380,10 @@ def _resolve(
     """
 
     # Step 1: nothing to grade — pass the not_applicable verdict through untouched.
-    if result.status == MetricStatus.NOT_APPLICABLE:
-        return result, None
+    if result.status == MetricStatus.NOT_APPLICABLE or (
+        result.availability is not None and result.availability != Availability.COMPUTED
+    ):
+        return result.model_copy(update={"status": MetricStatus.NOT_APPLICABLE}), None
 
     evidence = dict(result.evidence)
 

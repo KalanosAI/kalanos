@@ -18,6 +18,10 @@ from typing import cast
 # External
 from upath import UPath
 
+from kalanos.analysis.calibration import apply_calibration
+from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
+from kalanos.analysis.identities import adapter_versions, detector_versions
+
 # Internal
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -44,6 +48,7 @@ from kalanos.analysis.models.provenance import (
     ExecutionTier,
     Inventory,
     Producer,
+    RunCompletion,
     RunInfo,
 )
 from kalanos.analysis.models.report import (
@@ -114,13 +119,20 @@ def grade_stream(
     findings: list[Finding] = []
     location = FindingLocation(
         episode_id=episode_id,
+        source_path=str(stream.source_path),
+        source_field=stream.source_field,
         stream=stream.taxonomy_type,
         instance=stream.instance,
     )
 
     # Step 1: grade the stream's own metrics — the ones that read its clock
     # or its payload as a whole. These run whether or not the stream carries a payload.
-    stream_ctx = StreamContext(stream=stream, is_regular=is_regular)
+    stream_ctx = StreamContext(
+        stream=stream.model_copy(update={"payload": None})
+        if tier == ExecutionTier.METADATA
+        else stream,
+        is_regular=is_regular,
+    )
     stream_results = run_stream_metrics(stream_ctx)
     stream_metrics, own_score, stream_findings = score_metrics(
         stream_results,
@@ -157,30 +169,49 @@ def grade_stream(
                 n_channels_declared=len(stream.channels),
             )
         else:
-            frame = stream.payload.fetch()
-            evaluation = StreamEvaluation(
-                payload=PayloadStatus.COMPUTED,
-                n_channels_declared=len(stream.channels),
-                n_channels_graded=len(stream.channels),
-            )
-            for channel in stream.channels:
-                ctx = ChannelContext(
-                    channel=channel, values=frame[channel.name], stream=stream_ctx
+            try:
+                frame = stream.payload.fetch()
+                if frame.height != len(stream.timestamps):
+                    raise ValueError("payload rows do not align with timestamps")
+                absent = [
+                    c.name for c in stream.channels if c.name not in frame.columns
+                ]
+                if absent:
+                    raise ValueError(f"payload is missing declared channels: {absent}")
+            except Exception as exc:
+                evaluation = StreamEvaluation(
+                    payload=PayloadStatus.ERROR,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    n_channels_declared=len(stream.channels),
                 )
-                results = run_channel_metrics(ctx)
-                graded, score, channel_findings = score_metrics(
-                    results,
-                    level=Level.CHANNEL,
-                    taxonomy_type=ctx.taxonomy_type,
-                    policy=policy,
-                    location=location.model_copy(
-                        update={"channel": channel.name, "stream": ctx.taxonomy_type}
-                    ),
+            else:
+                evaluation = StreamEvaluation(
+                    payload=PayloadStatus.COMPUTED,
+                    n_channels_declared=len(stream.channels),
+                    n_channels_graded=len(stream.channels),
                 )
-                graded_channels.append(
-                    GradedChannel(channel=channel, score=score, metrics=graded)
-                )
-                findings.extend(channel_findings)
+                for channel in stream.channels:
+                    ctx = ChannelContext(
+                        channel=channel, values=frame[channel.name], stream=stream_ctx
+                    )
+                    results = run_channel_metrics(ctx)
+                    graded, score, channel_findings = score_metrics(
+                        results,
+                        level=Level.CHANNEL,
+                        taxonomy_type=ctx.taxonomy_type,
+                        policy=policy,
+                        location=location.model_copy(
+                            update={
+                                "channel": channel.name,
+                                "stream": ctx.taxonomy_type,
+                                "source_index": channel.source_index,
+                            }
+                        ),
+                    )
+                    graded_channels.append(
+                        GradedChannel(channel=channel, score=score, metrics=graded)
+                    )
+                    findings.extend(channel_findings)
 
     # Step 3: fold the stream's own score in alongside its channels' —
     # one more equal-weight contributor, the same rule every other level uses.
@@ -190,6 +221,9 @@ def grade_stream(
     return (
         GradedStream(
             taxonomy_type=stream.taxonomy_type,
+            kind=stream.kind.value,
+            source_path=str(stream.source_path),
+            coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
             instance=stream.instance,
             attribution=stream.attribution,
             mapping_source=stream.mapping_source,
@@ -378,6 +412,24 @@ def assemble_report(
         requirements_id=requirements.id, policy_id="default-decisions-v1"
     )
     inventory = inventory or Inventory(loaded=len(graded_episodes))
+    producer = producer or Producer(version="unknown")
+    producer = producer.model_copy(
+        update={
+            "metrics": detector_versions(),
+            "adapters": adapter_versions(item.adapter for item in analysed),
+        }
+    )
+    graded_episodes = [
+        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
+        for e in graded_episodes
+    ]
+    findings = apply_calibration(
+        findings,
+        {item.episode.id: item.policy for item in analysed},
+        run,
+        scope,
+        producer,
+    )
     decisions = decide_all(
         graded_episodes, findings, requirements=requirements, policy_id=scope.policy_id
     )
@@ -417,8 +469,24 @@ def assemble_report(
         update={"train_ready": dataset_train_ready(counts)}
     )
 
+    errors = []
+    for episode in graded_episodes:
+        if episode.coverage:
+            for row in episode.coverage.metrics:
+                if row.error:
+                    errors.append(
+                        {
+                            "episode_id": episode.id,
+                            "metric": row.key,
+                            "reason": "; ".join(row.reasons),
+                        }
+                    )
+    if errors and run is not None:
+        run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
     return Report(
+        operational_errors=errors,
         root=root,
+        coverage=report_coverage(graded_episodes, inventory),
         score=dataset_score,
         episodes=graded_episodes,
         findings=sort_findings(findings),

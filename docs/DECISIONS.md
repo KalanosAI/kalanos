@@ -33,7 +33,7 @@ A metric's bands assign a **severity** (`warning`, `critical`): an assessment of
 A `block` names its **route**:
 
 - `contract` — a declared invariant was violated with direct evidence (unreadable required payload, impossible shape, forbidden non-finite values). No calibration needed.
-- `statistical` — a threshold detector fired. It may block only when an accepted calibration manifest covers the metric's scope; otherwise it resolves to `review`. `Policy.enforce_calibration` turns this on; it is off in 0.7.0 so no verdict changes before each metric's route is declared.
+- `statistical` — a threshold detector fired. It may block only when an accepted calibration manifest covers the metric's scope; otherwise it resolves to `review`. R07-07 enforces this by default and refuses disabling it. The legacy `calibrated_metrics` list is not authorization; accepted structured manifests must match the actual detector, thresholds, bindings and scope.
 
 ### Prevalence exempts nothing
 

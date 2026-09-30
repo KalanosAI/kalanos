@@ -36,7 +36,7 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
-from kalanos.api import grade
+from kalanos.api import compare, grade, load_report
 from kalanos.assets.dictionary import load_dictionary
 from kalanos.assets.policy import load_policy
 
@@ -70,6 +70,8 @@ __all__ = [
     "SourceUnavailable",
     "UnresolvedSource",
     "grade",
+    "compare",
+    "load_report",
     "load_dictionary",
     "load_policy",
 ]

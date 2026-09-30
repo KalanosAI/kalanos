@@ -21,10 +21,13 @@ from rich.table import Table
 from rich.text import Text
 from upath import UPath
 
+from kalanos.analysis.coverage import coverage_lines
+
 # Internal
 from kalanos.analysis.models.metrics import MetricStatus
 from kalanos.analysis.models.report import GradedEpisode, Report
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+from kalanos.analysis.reporting.summary import finding_groups
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -603,6 +606,11 @@ def render_terminal(
         )
     )
 
+    if report.sufficiency:
+        console.print(f"Sufficiency: {report.sufficiency.status.value}")
+    for line in coverage_lines(report.coverage):
+        console.print(line)
+
     # Step 2: the dataset-level row and every episode row share one table,
     # so rich measures every cell's visible width together and pads them
     # to the same columns, whether or not a given cell carries a style.
@@ -710,6 +718,12 @@ def render_terminal(
     # Step 3: report.findings arrives already sorted worst-first via sort_findings,
     # so the card only slices it and never re-sorts.
     console.print(_eyebrow("FINDINGS"))
+    for group in finding_groups(report):
+        console.print(
+            f"{group['metric']} / {group['role']}: {group['count']} findings in "
+            f"{group['episode_count']} episodes; {group['consequence']}; "
+            f"adapter={group['adapter']}; tasks={group['tasks']}"
+        )
     findings = report.findings[:_MAX_FINDINGS]
     if findings:
         # Severity and address are one assembled Text, not separate columns,
@@ -720,8 +734,31 @@ def render_terminal(
                 _severity_cell(finding), " ", _finding_location(finding)
             )
             console.print(address, no_wrap=True, overflow="ellipsis")
-            detail = Text(text=f"    {_finding_detail(finding)}", style=_RULE)
+            detail = Text(
+                text=(
+                    f"    {_finding_detail(finding)}; "
+                    f"consequence={finding.consequence.value}; "
+                    f"support={finding.support.kind.value}"
+                ),
+                style=_RULE,
+            )
             console.print(detail, no_wrap=True, overflow="ellipsis")
+            if finding.support.intervals:
+                intervals = ", ".join(
+                    f"[{i.start}, {i.end_exclusive})"
+                    + (
+                        f" support [{i.support_start}, {i.support_end_exclusive})"
+                        if i.support_start is not None
+                        else ""
+                    )
+                    for i in finding.support.intervals[:3]
+                )
+                more = len(finding.support.intervals) - 3
+                suffix = f"; {more} more in JSON/inspect" if more > 0 else ""
+                console.print(
+                    Text(f"    source rows: {intervals}{suffix}", style=_RULE)
+                )
+
     else:
         console.print(Text(text="  no findings", style=_GOOD))
 
