@@ -22,6 +22,7 @@ class Comparison(BaseModel):
         "Identity changes are possible causes, not proven causal attribution."
     )
     readiness_delta: float | None = None
+    diagnostic_changes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _source(report):
@@ -129,6 +130,34 @@ def compare_reports(old, new):
             reasons.append("inventory incomplete or unrecorded")
         if report.run and report.run.completion.value != "complete":
             reasons.append("run did not complete")
+    diagnostic_changes = []
+    if old.diagnostics or new.diagnostics:
+        for name in ("plan_digest", "implementation_digest"):
+            left = getattr(old.diagnostics, name, None)
+            right = getattr(new.diagnostics, name, None)
+            if left != right or not left or not right:
+                changes.append("diagnostics." + name)
+                reasons.append("diagnostic " + name + " differs or is missing")
+        left = (
+            {(r.episode_id, r.kind, r.id): r for r in old.diagnostics.results}
+            if old.diagnostics
+            else {}
+        )
+        right = (
+            {(r.episode_id, r.kind, r.id): r for r in new.diagnostics.results}
+            if new.diagnostics
+            else {}
+        )
+        for address in sorted(left.keys() | right.keys(), key=str):
+            a, b = left.get(address), right.get(address)
+            if a != b:
+                diagnostic_changes.append(
+                    {
+                        "address": list(address),
+                        "old": a.model_dump(mode="json") if a else None,
+                        "new": b.model_dump(mode="json") if b else None,
+                    }
+                )
     before = {e.id: e for e in old.episodes}
     after = {e.id: e for e in new.episodes}
     if len(before) != len(old.episodes) or len(after) != len(new.episodes):
@@ -186,4 +215,5 @@ def compare_reports(old, new):
         episode_changes=episode_changes,
         metric_changes=metric_changes,
         readiness_delta=delta,
+        diagnostic_changes=diagnostic_changes,
     )

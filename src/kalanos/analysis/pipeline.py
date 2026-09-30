@@ -513,4 +513,5 @@ def run(
         run=run_info,
         inventory=inventory,
         binding_conflicts=config.conflicts if config else (),
+        diagnostics_plan=config.bundle.diagnostics if config else None,
     )

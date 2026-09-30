@@ -500,6 +500,14 @@ def inspect(
         raise typer.Exit(code=2)
     for line in coverage_lines(selected.coverage if selected else loaded.coverage):
         console.print(line, markup=False)
+    if loaded.diagnostics:
+        from kalanos.analysis.diagnostics.runner import diagnostic_lines
+
+        for line in diagnostic_lines(loaded.diagnostics):
+            console.print(line, markup=False)
+        for diagnostic in loaded.diagnostics.results:
+            if episode is None or diagnostic.episode_id == episode:
+                console.print(diagnostic.model_dump_json(indent=2), markup=False)
     for finding in loaded.findings:
         if episode is None or finding.episode_id == episode:
             console.print(
@@ -889,6 +897,24 @@ def profiles_validate(path: Path) -> None:
             "dataset bindings and coverage require a grade run."
         )
     except (OSError, ValueError, KalanosError) as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+
+
+diagnostics_app = typer.Typer(
+    help="Inspect explicit diagnostic plans and validation evidence."
+)
+app.add_typer(diagnostics_app, name="diagnostics")
+
+
+@diagnostics_app.command("summarize-study")
+def summarize_study_command(path: Path) -> None:
+    """Summarize labelled JSON observations as an unaccepted validation draft."""
+    from kalanos.analysis.diagnostics.validation import summarize_study
+
+    try:
+        print(json.dumps(summarize_study(json.loads(path.read_text())), indent=2))
+    except (OSError, ValueError, TypeError) as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
 

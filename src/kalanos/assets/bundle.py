@@ -328,7 +328,15 @@ def resolve_run_configuration(
     execution_id = ConfigIdentity(
         id=f"tier-{effective_tier.value}",
         digest=content_digest(
-            {"tier": effective_tier.value, "limits": bundle.execution.limits}
+            {
+                "tier": effective_tier.value,
+                "limits": bundle.execution.limits,
+                **(
+                    {"diagnostics": bundle.diagnostics.model_dump(mode="json")}
+                    if bundle.diagnostics
+                    else {}
+                ),
+            }
         ),
         origin="resolved",
     )
@@ -403,6 +411,9 @@ def prepare_configuration(
     if policy is None and loaded is not None:
         policy = load_bundle_policy(loaded, bundle_path)
     policy = policy or load_policy(settings.policy_path)
+    from kalanos.analysis.diagnostics.runner import validate_review_plan
+
+    validate_review_plan(loaded.diagnostics if loaded else None, policy)
     config = resolve_run_configuration(
         root,
         dictionary=dictionary,
@@ -440,7 +451,19 @@ def prepare_configuration(
             id=f"tier-{config.scope.tier.value}",
             origin="resolved",
             digest=content_digest(
-                {"tier": config.scope.tier.value, "limits": effective}
+                {
+                    "tier": config.scope.tier.value,
+                    "limits": effective,
+                    **(
+                        {
+                            "diagnostics": config.bundle.diagnostics.model_dump(
+                                mode="json"
+                            )
+                        }
+                        if config.bundle.diagnostics
+                        else {}
+                    ),
+                }
             ),
         ),
     )

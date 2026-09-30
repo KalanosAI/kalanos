@@ -146,6 +146,35 @@ def episode_coverage(episode, requirements):
         )
         for s in episode.streams
     )
+    diagnostic_results = episode.diagnostics
+    metrics += [
+        row(f"diagnostics.{r.kind}.{r.id}", "episode", [(r.availability, r.reason)])
+        for r in diagnostic_results
+    ]
+    by_kind = {
+        kind: [r for r in diagnostic_results if r.kind == kind]
+        for kind in ("timing", "tracking", "motion", "vision", "windows")
+    }
+
+    def done(kind):
+        return bool(by_kind[kind]) and all(
+            r.availability == Availability.COMPUTED for r in by_kind[kind]
+        )
+
+    camera_count = sum(s.kind in ("video", "image") for s in episode.streams)
+    sampled_vision = done("vision") and len(by_kind["vision"]) == camera_count
+    full_vision = sampled_vision and all(
+        r.measurements.get("examined_frames") == r.measurements.get("declared_frames")
+        for r in by_kind["vision"]
+    )
+    diagnostic_capabilities = {
+        "cross_stream_timing": done("timing"),
+        "action_consistency": done("tracking"),
+        "motion_shape": done("motion"),
+        "sampled_video_quality": sampled_vision,
+        "video_quality": full_vision,
+        "training_windows": done("windows"),
+    }
     keys = set(requirements.required_capabilities) | {
         "numeric",
         "acquisition_timing",
@@ -157,9 +186,11 @@ def episode_coverage(episode, requirements):
         required = key in requirements.required_capabilities or (
             key == "numeric" and requirements.require_numeric_payloads
         )
-        computed = {"numeric": numeric_ok, "acquisition_timing": acquisition_ok}.get(
-            key, False
-        )
+        computed = {
+            "numeric": numeric_ok,
+            "acquisition_timing": acquisition_ok,
+            **diagnostic_capabilities,
+        }.get(key, False)
         state = (
             Availability.COMPUTED
             if computed and required
@@ -236,7 +267,33 @@ def episode_coverage(episode, requirements):
             ],
         ),
     ]
-    return Coverage(metrics=metrics, capabilities=capabilities, dimensions=dimensions)
+    if by_kind["vision"]:
+        dimensions = [r for r in dimensions if r.key != "visual_quality"] + [
+            row(
+                "visual_quality",
+                "camera_stream_episode",
+                [(r.availability, r.reason) for r in by_kind["vision"]],
+            )
+        ]
+    return Coverage(
+        metrics=metrics,
+        capabilities=capabilities,
+        dimensions=dimensions,
+        decoded_frames_examined=sum(
+            r.measurements.get("examined_frames", 0) for r in by_kind["vision"]
+        ),
+        eligible_visual_frames=sum(
+            r.measurements["declared_frames"] for r in by_kind["vision"]
+        )
+        if by_kind["vision"]
+        and all("declared_frames" in r.measurements for r in by_kind["vision"])
+        else None,
+        training_windows_examined=sum(
+            r.measurements.get("examined_windows", 0) for r in by_kind["windows"]
+        )
+        if by_kind["windows"]
+        else None,
+    )
 
 
 def report_coverage(episodes, inventory):
@@ -248,6 +305,28 @@ def report_coverage(episodes, inventory):
         inventory_complete=inventory.complete,
         unassessed_episodes=len(inventory.failed) + inventory.unresolved,
         refused_sources=len(inventory.refused_sources),
+        decoded_frames_examined=sum(c.decoded_frames_examined for c in coverages),
+        eligible_visual_frames=sum(
+            c.eligible_visual_frames
+            for c in coverages
+            if c.eligible_visual_frames is not None
+        )
+        if any(c.eligible_visual_frames is not None for c in coverages)
+        and all(
+            c.eligible_visual_frames is not None
+            or not any(
+                r.key == "visual_quality"
+                and r.eligible + r.not_required + r.not_applicable
+                for r in c.dimensions
+            )
+            for c in coverages
+        )
+        else None,
+        training_windows_examined=sum(
+            c.training_windows_examined or 0 for c in coverages
+        )
+        if any(c.training_windows_examined is not None for c in coverages)
+        else None,
     )
 
 
@@ -263,7 +342,7 @@ def coverage_lines(coverage):
                 f"{r.unavailable} unavailable, {r.skipped} skipped, {r.error} errors"
             )
     for r in coverage.dimensions:
-        if r.key == "visual_quality":
+        if r.key == "visual_quality" and not coverage.decoded_frames_examined:
             n = r.eligible + r.not_required + r.not_applicable
             lines.append(
                 f"Visual quality not evaluated: 0 of {n} discovered "
@@ -275,6 +354,19 @@ def coverage_lines(coverage):
                 f"{r.key}: {r.computed}/{r.eligible} {r.unit} computed; "
                 f"{r.not_required} not required"
             )
+    if coverage.decoded_frames_examined:
+        visual_total = coverage.eligible_visual_frames
+        lines.append(
+            f"Visual frames examined: {coverage.decoded_frames_examined}; "
+            "declared eligible frames: "
+            f"{visual_total if visual_total is not None else 'unknown'}; "
+            "sampled evidence only unless every frame was evaluated."
+        )
+    if coverage.training_windows_examined is not None:
+        lines.append(
+            f"Training windows examined: {coverage.training_windows_examined}; "
+            "overlapping windows are not independent demonstrations."
+        )
     lines.append(
         f"Coverage counts loaded subjects only; {coverage.unassessed_episodes} "
         f"known episodes unassessed, {coverage.refused_sources} refused sources; "

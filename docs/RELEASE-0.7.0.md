@@ -78,16 +78,23 @@ calibration manifests must match the new identities; do not copy hashes or set
 acceptance flags merely to restore blocking. Synthetic fixtures exercise the
 promotion mechanism only and must never be packaged as accepted real validation.
 
-## Planned 0.7.1: work items 4 and 5
+## Deeper diagnostics included in 0.7.0
 
-The following are deferred, not implemented in 0.7.0:
+Optional timing pairs, command response, bounded sampled vision, dimensionless
+motion, training windows, cohort summaries and draft validation tooling now ship
+in this release. See [the diagnostic contract](DIAGNOSTICS-0.7.0.md) and
+[capability matrix](CAPABILITIES.md). This expands the stable 0.7.0 implementation;
+package, citation and lockfile versions remain 0.7.0.
 
-- Deeper diagnostics: cross-stream clock alignment/latency, visual quality,
-  action/state consistency, and training-window/behavioral diversity coverage.
-- Review and selection/export: recorded review decisions, reproducible eligible
-  selections, export manifests and an end-to-end pilot in a training data reader.
+These measurements have explicit input prerequisites and coverage. New diagnostic
+review thresholds are in decision policy and cannot authorize automatic blocks.
+Production detector validation, generic robot-model kinematics and automatic
+repairs are not supplied. Revalidate calibration after implementation identities
+change.
 
-Each diagnostic needs an explicit applicability and coverage contract, support in
-source coordinates, and evidence/calibration before it can affect blocking.
-The reader pilot should demonstrate that rejected and unknown samples cannot
-silently re-enter through window construction, and preserve source/version IDs.
+## Planned 0.7.1: review, selection and export
+
+Recorded review decisions, reproducible eligible selections, export manifests
+and an end-to-end training-reader pilot remain separate work. The reader pilot
+must show rejected/unknown samples cannot silently re-enter through window
+construction and must preserve source/version identities.

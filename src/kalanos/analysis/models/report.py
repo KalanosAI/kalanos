@@ -23,7 +23,6 @@ from enum import Enum
 # External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Internal
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
     BindingConflict,
@@ -31,6 +30,9 @@ from kalanos.analysis.models.binding import (
 )
 from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
 from kalanos.analysis.models.coverage import CoverageRow
+
+# Internal
+from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -185,6 +187,7 @@ class GradedStream(BaseModel):
     source_path: str | None = None
     coverage: list[CoverageRow] = Field(default_factory=list)
     source_field: str | None = None
+    source_identity: str | None = None
     declared_channels: list[Channel] = Field(default_factory=list)
     clock: Clock = Clock.UNKNOWN
     clock_info: ClockInfo | None = None
@@ -239,6 +242,7 @@ class GradedEpisode(BaseModel):
     tasks: list[str] | None = None
     eligibility: EpisodeEligibility | None = None
     coverage: AnalysisCoverage | None = None
+    diagnostics: list[DiagnosticResult] = Field(default_factory=list)
 
 
 class FailingEpisode(BaseModel):
@@ -446,6 +450,7 @@ class Report(BaseModel):
     `eligibility_counts` and `readiness`.
     """
 
+    diagnostics: DiagnosticsReport | None = None
     operational_errors: list[dict[str, str]] = Field(default_factory=list)
     schema_version: str = CURRENT_SCHEMA_VERSION
     coverage: AnalysisCoverage | None = None
@@ -486,6 +491,25 @@ class Report(BaseModel):
                 raise ValueError("coverage requires episode ledgers and inventory")
             if self.coverage != report_coverage(self.episodes, self.inventory):
                 raise ValueError("report coverage does not reconcile with episodes")
+        if self.diagnostics is not None:
+            from kalanos.analysis.models.provenance import content_digest
+
+            if self.diagnostics.plan_digest != content_digest(
+                self.diagnostics.plan.model_dump(mode="json")
+            ):
+                raise ValueError(
+                    "diagnostic plan digest disagrees with its configuration"
+                )
+            recorded = [r for r in self.diagnostics.results if r.episode_id is not None]
+            if recorded != [r for e in self.episodes for r in e.diagnostics]:
+                raise ValueError("diagnostic report does not reconcile with episodes")
+            keys = [(r.episode_id, r.kind, r.id) for r in self.diagnostics.results]
+            if len(keys) != len(set(keys)):
+                raise ValueError("duplicate diagnostic result addresses")
+        elif any(e.diagnostics for e in self.episodes):
+            raise ValueError(
+                "episode diagnostics require an identified diagnostic report"
+            )
         ids = [f.id for f in self.findings if f.id is not None]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate finding ids")

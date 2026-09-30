@@ -22,6 +22,7 @@ from rich.text import Text
 from upath import UPath
 
 from kalanos.analysis.coverage import coverage_lines
+from kalanos.analysis.diagnostics.runner import diagnostic_lines
 
 # Internal
 from kalanos.analysis.models.metrics import MetricStatus
@@ -608,7 +609,7 @@ def render_terminal(
 
     if report.sufficiency:
         console.print(f"Sufficiency: {report.sufficiency.status.value}")
-    for line in coverage_lines(report.coverage):
+    for line in coverage_lines(report.coverage) + diagnostic_lines(report.diagnostics):
         console.print(line)
 
     # Step 2: the dataset-level row and every episode row share one table,
