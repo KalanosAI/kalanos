@@ -32,6 +32,12 @@ The decision-integrity release. Report schema 7.0.0.
 - Inventory: an adapter that refuses part-way keeps the episodes it yielded and the count it declared; the gap is `unresolved`; a refused source is listed in `inventory.refused_sources` rather than counted as one failed episode; a refused directory is not re-offered file by file; `run.completion` is `partial`.
 - Metadata tier is enforced at the storage boundary for LeRobot v2/v3: parquet schema read, index/clock columns projected, numeric vectors never materialised (`kalanos.analysis.execution` carries the tier to adapters). `StreamEvaluation.n_channels_declared` added.
 
+### Contract corrections (branch review round 4)
+
+- CLI: an incomplete inventory fails the default `--fail-on blocked,unknown` gate (exit 1) — a refused source alone, passing episodes beside a refused source, and undelivered declared episodes. `--fail-on blocked` permits it with a stderr warning. Operational errors remain exit 2.
+- Episode ids are stable across partial and complete runs: containers always qualify `source::episode`; only an adapter that names the episode after the file keeps the short form. A single-episode LeRobot export changes id from `root` to `root::episode_000000`.
+- A directory an adapter selected is owned on every read path, including zero-yield; its manifest and data files are no longer offered to other adapters.
+
 ### Configuration
 
 - `--profile bundle.yaml`: one file, four sections with separate identities (`binding`, `requirements`, `policy`, `execution`).

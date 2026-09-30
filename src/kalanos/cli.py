@@ -208,7 +208,9 @@ def grade(
     0
         The audit completed and no episode carries a status in `fail_on`.
     1
-        The audit completed and at least one episode carries such a status.
+        The audit completed and at least one episode carries such a status,
+        or the inventory is incomplete (a refused source, or declared
+        episodes that never loaded) and `unknown` is in `fail_on`.
         CI gate failure is not source corruption: `review` and `unknown` say
         the data needs a decision or more evidence.
     2
@@ -308,7 +310,11 @@ def grade(
         width = shutil.get_terminal_size().columns if is_terminal else None
         print(render_terminal(result, color=is_terminal, width=width))
 
-    # Step 4: the decision gate, from the one place decisions live.
+    # Step 4: the decision gate, from the one place decisions live. An
+    # incomplete audit fails the default gate; operational errors already
+    # left with exit 2 above, so this never masks one.
+    for warning in gate_warnings(result, gate_on):
+        print(f"kalanos: {warning}", file=sys.stderr)
     if failing_statuses(result, gate_on):
         raise typer.Exit(code=1)
 
@@ -339,12 +345,21 @@ def parse_fail_on(text: str) -> set[EligibilityStatus]:
 
 
 def failing_statuses(report: Report, gate_on: set[EligibilityStatus]) -> int:
-    """How many episodes carry a status the gate fails on."""
+    """How many gate conditions the report trips; 0 means the gate passes.
+
+    Episode statuses count one each. An incomplete inventory — a refused
+    source, or a declared count the adapter did not deliver — is unresolved
+    evidence about episodes that have no identities, so it counts once
+    under `unknown` without inventing an episode count. Under the default
+    `blocked,unknown` an incomplete audit therefore fails, even when every
+    loaded episode passed or none loaded at all. `--fail-on blocked`
+    (exploratory) does not fail on it; `gate_warnings` names it instead.
+    """
 
     counts = report.eligibility_counts
     if counts is None:
         return 0
-    return sum(
+    tripped = sum(
         {
             EligibilityStatus.BLOCKED: counts.blocked,
             EligibilityStatus.REVIEW: counts.review,
@@ -352,6 +367,36 @@ def failing_statuses(report: Report, gate_on: set[EligibilityStatus]) -> int:
         }[status]
         for status in gate_on
     )
+    if EligibilityStatus.UNKNOWN in gate_on and not counts.inventory_complete:
+        tripped += 1
+    return tripped
+
+
+def gate_warnings(report: Report, gate_on: set[EligibilityStatus]) -> list[str]:
+    """What the gate let through that a reader should still hear about."""
+
+    counts, inventory = report.eligibility_counts, report.inventory
+    warnings = []
+    if (
+        counts is not None
+        and not counts.inventory_complete
+        and EligibilityStatus.UNKNOWN not in gate_on
+    ):
+        refused = len(inventory.refused_sources) if inventory else 0
+        gap = inventory.unresolved if inventory else 0
+        warnings.append(
+            "audit incomplete and not gated: "
+            + ", ".join(
+                part
+                for part in (
+                    f"{refused} source(s) refused" if refused else "",
+                    f"{gap} declared episode(s) not loaded" if gap else "",
+                )
+                if part
+            )
+            + " (add 'unknown' to --fail-on to fail on this)"
+        )
+    return warnings
 
 
 @app.command(help="Summarise a saved report: scope, decisions, readiness, reasons.")

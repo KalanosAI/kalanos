@@ -80,7 +80,7 @@ Default scope is `numeric-core-v1`: readable numeric input under an explicit mis
 
 ## CLI gate
 
-`--fail-on` (default `blocked,unknown`) names the statuses that make `kalanos grade` exit 1. A training gate adds `review`; `blocked` alone is exploratory. Exit 2 is reserved for invalid configuration and operational failures and takes precedence.
+`--fail-on` (default `blocked,unknown`) names the statuses that make `kalanos grade` exit 1. An incomplete inventory — a refused source, or declared episodes that never loaded — counts under `unknown` without inventing an episode count, so the default gate fails an incomplete audit even when every loaded episode passed, or when none loaded at all. A training gate adds `review`. `blocked` alone is exploratory: it permits a partial audit, and prints a warning on stderr naming the refused sources and the undelivered episodes. Exit 2 is reserved for invalid configuration and operational failures and takes precedence.
 
 ## Reading older reports
 
