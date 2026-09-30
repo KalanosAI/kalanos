@@ -133,11 +133,14 @@ class StreamEvaluation(BaseModel):
     ----------
     payload : PayloadStatus
     reason : str or None
+    n_channels_declared : int
+        Channels the source declares, whether or not they were graded.
     n_channels_graded : int
     """
 
     payload: PayloadStatus = PayloadStatus.COMPUTED
     reason: str | None = None
+    n_channels_declared: int = 0
     n_channels_graded: int = 0
 
 

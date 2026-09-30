@@ -19,11 +19,11 @@ from typing import Any
 import polars as pl
 from upath import UPath
 
-# Internal
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    declared_series_streams,
     describe_from_info,
     episode_clock,
     feature_plan,
@@ -34,6 +34,9 @@ from kalanos.analysis.adapters.lerobot.common import (
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
+
+# Internal
+from kalanos.analysis.execution import reads_numeric_payloads
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.domain import (
@@ -279,6 +282,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # So only the current chunk is ever needed, and a one-entry cache is enough.
         cached_path: UPath | None = None
         cached_frame: pl.DataFrame | None = None
+        cached_schema: list[str] = []
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -290,9 +294,24 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     chunk_index=row["data/chunk_index"],
                     file_index=row["data/file_index"],
                 )
+                materialise = reads_numeric_payloads()
                 if data_path != cached_path:
                     with data_path.open("rb") as handle:
-                        cached_frame = pl.read_parquet(handle)
+                        # A metadata-tier run projects the index and clock
+                        # columns only: the numeric feature vectors never leave
+                        # the file. The schema still says which columns exist.
+                        cached_schema = list(pl.read_parquet_schema(handle))
+                    with data_path.open("rb") as handle:
+                        cached_frame = pl.read_parquet(
+                            handle,
+                            columns=None
+                            if materialise
+                            else [
+                                c
+                                for c in ("episode_index", TIME_COLUMN, "frame_index")
+                                if c in cached_schema
+                            ],
+                        )
                     cached_path = data_path
                 assert cached_frame is not None
                 frame = cached_frame
@@ -305,16 +324,28 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
                 is_regular = sampling_is_regular(timestamps)
 
-                streams = series_streams(
-                    episode_frame,
-                    plan,
-                    timestamps,
-                    data_path,
-                    path=path,
-                    episode_label=row["episode_index"],
-                    clock=clock,
-                    timestamp_dtype=timestamp_dtype,
-                    is_regular=is_regular,
+                streams = (
+                    series_streams(
+                        episode_frame,
+                        plan,
+                        timestamps,
+                        data_path,
+                        path=path,
+                        episode_label=row["episode_index"],
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
+                        is_regular=is_regular,
+                    )
+                    if materialise
+                    else declared_series_streams(
+                        plan,
+                        cached_schema,
+                        timestamps,
+                        data_path,
+                        clock=clock,
+                        timestamp_dtype=timestamp_dtype,
+                        is_regular=is_regular,
+                    )
                 )
                 streams.extend(
                     _video_stream(

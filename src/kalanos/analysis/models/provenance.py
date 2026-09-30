@@ -198,6 +198,11 @@ class Inventory(BaseModel):
         Episodes the source declared but the run never enumerated: the gap
         between a declared count and what was loaded or failed. They have no
         identities, so none are invented; they are counted as unknown.
+    refused_sources : list[str]
+        Sources an adapter refused, before or during enumeration. A refused
+        source is not one failed episode: without a declared count the
+        number of episodes it holds is unknown, so the inventory is
+        incomplete rather than short by one.
     complete : bool
         Whether `loaded + failed` covers everything the source declared.
         `False` whenever `unresolved > 0`. A run that finished its walk has
@@ -211,15 +216,18 @@ class Inventory(BaseModel):
     loaded: int = 0
     failed: list[FailedEpisode] = Field(default_factory=list)
     unresolved: int = Field(default=0, ge=0)
+    refused_sources: list[str] = Field(default_factory=list)
     complete: bool = True
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _gap_means_incomplete(self) -> "Inventory":
-        """An unresolved gap and a complete inventory cannot both be claimed."""
+        """A gap or a refused source, and a complete inventory, cannot both hold."""
 
-        if self.unresolved and self.complete:
-            raise ValueError("inventory with unresolved episodes cannot be complete")
+        if (self.unresolved or self.refused_sources) and self.complete:
+            raise ValueError(
+                "inventory with unresolved episodes or refused sources is not complete"
+            )
         return self
 
 

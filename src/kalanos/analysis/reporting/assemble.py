@@ -181,6 +181,7 @@ def grade_stream(
             evaluation = StreamEvaluation(
                 payload=PayloadStatus.SKIPPED,
                 reason="metadata tier does not read numeric payloads",
+                n_channels_declared=len(stream.channels),
             )
         elif stream.payload is None:
             logger.warning(
@@ -192,11 +193,14 @@ def grade_stream(
             evaluation = StreamEvaluation(
                 payload=PayloadStatus.MISSING_INPUT,
                 reason=f"{len(stream.channels)} channel(s) declared but no payload",
+                n_channels_declared=len(stream.channels),
             )
         else:
             frame = stream.payload.fetch()
             evaluation = StreamEvaluation(
-                payload=PayloadStatus.COMPUTED, n_channels_graded=len(stream.channels)
+                payload=PayloadStatus.COMPUTED,
+                n_channels_declared=len(stream.channels),
+                n_channels_graded=len(stream.channels),
             )
             for channel in stream.channels:
                 ctx = ChannelContext(

@@ -26,6 +26,7 @@ from upath import UPath
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
 from kalanos.analysis.discovery.walk import walk_folder
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.discovery import (
     SkippedSource,
@@ -38,7 +39,7 @@ from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import (
-    FailedEpisode,
+    ExecutionTier,
     Inventory,
     Producer,
     RunCompletion,
@@ -314,6 +315,7 @@ def run(
     matched: set[str] = set()
     seen: set[str] = set()
     unresolved_episodes = 0
+    refused_sources: list[str] = []
     inventory_notes: list[str] = []
 
     for candidate in candidates:
@@ -353,17 +355,37 @@ def run(
 
         episode_policy = with_declared_limits(policy, info)
 
-        # Step 5: read the path's episodes. Only a refusal the adapter raised
-        # about the input file is caught here — anything else, a ValidationError
-        # from our own models included, is a bug and propagates.
-        try:
-            episodes = list(selection.adapter.episodes(candidate.path))
-        except AdapterRefusal as exc:
-            logger.warning("%s: unresolved: %s", exc.path, exc.reason)
-            unresolved.append(exc.as_unresolved())
-            continue
+        # Step 5: read the path's episodes one at a time, keeping every episode
+        # the adapter yielded before it refused. Only a refusal the adapter
+        # raised about the input file is caught here — anything else, a
+        # ValidationError from our own models included, is a bug and propagates.
+        # The source's declaration is retained either way, so a refusal
+        # part-way through is reconciled against it like a clean read.
+        episodes: list[Episode] = []
+        refusal: AdapterRefusal | None = None
+        with use_tier(config.scope.tier if config else ExecutionTier.STANDARD):
+            try:
+                for episode in selection.adapter.episodes(candidate.path):
+                    episodes.append(episode)
+            except AdapterRefusal as exc:
+                refusal = exc
         datasets.append(info)
-        # A declared count the adapter could not deliver is an inventory gap:
+        if refusal is not None:
+            logger.warning(
+                "%s: unresolved after %d episode(s): %s",
+                refusal.path,
+                len(episodes),
+                refusal.reason,
+            )
+            unresolved.append(refusal.as_unresolved())
+            # A refused source is not one failed episode: the episodes it did
+            # not yield are a gap of unknown size unless it declared a count.
+            refused_sources.append(str(candidate.path))
+            if candidate.path.is_dir():
+                # Its contents have been accounted for as this source; offering
+                # them again file by file would count them twice.
+                claimed.append(candidate.path)
+        # A declared count the adapter did not deliver is an inventory gap:
         # those episodes exist somewhere and have no identities here, so they
         # are counted as unresolved rather than silently dropped from the
         # denominator. More loaded than declared is noted, not a gap.
@@ -373,12 +395,15 @@ def run(
                 inventory_notes.append(
                     f"{candidate.path}: declared {info.episode_count} episodes, "
                     f"loaded {len(episodes)}"
+                    + (" before the adapter refused" if refusal else "")
                 )
             elif info.episode_count < len(episodes):
                 inventory_notes.append(
                     f"{candidate.path}: declared {info.episode_count} episodes, "
                     f"loaded {len(episodes)} (more than declared)"
                 )
+        if not episodes:
+            continue
 
         # Step 6: an adapter's name for a recording is local to the file it read,
         # so re-mint it against the walked root to keep it unique across the run.
@@ -413,15 +438,15 @@ def run(
     inventory = Inventory(
         expected=expected,
         loaded=len(analysed),
-        failed=[
-            FailedEpisode(id=str(item.path), reason=item.reason)
-            for item in unresolved
-            if hasattr(item, "reason")
-        ],
+        # `failed` is for episodes with identities. A refused source is not
+        # one episode; it is listed as a source, and whatever it declared but
+        # did not yield is in `unresolved`.
+        failed=[],
         unresolved=unresolved_episodes,
+        refused_sources=refused_sources,
         # Finishing the walk proves nothing about episodes a source declared
-        # but never yielded; only a reconciled declared count does.
-        complete=unresolved_episodes == 0,
+        # but never yielded, and a refused source may hold any number of them.
+        complete=unresolved_episodes == 0 and not refused_sources,
         notes=inventory_notes,
     )
     if run_info is not None:
