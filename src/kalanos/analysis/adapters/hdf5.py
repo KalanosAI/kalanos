@@ -4,11 +4,11 @@ Treating `shape[0]` as the time axis is this adapter's assumption, not a format
 guarantee.
 
 An episode is timed from its own time dataset when it records one — a 1-D
-`timestamps`, `time`, `t` (or similar) dataset that runs forward, as robomimic and
+`timestamps`, `time`, `t` (or similar) dataset, as robomimic and
 Isaac Lab demos often carry. It is read in seconds (its unit inferred from its step
 size), judged regular or not from its own gaps, and not graded as a channel. An
 episode without one falls back to a timebase synthesised from the declared rate,
-which never claims regular sampling.
+whose regular grid does not certify capture timing.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -17,6 +17,7 @@ which never claims regular sampling.
 
 # Built-in
 import logging
+import math
 from collections import Counter, deque
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
@@ -29,7 +30,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.entry_points import MissingDependency
-from kalanos.analysis.inference.regularity import entity_split_gaps, regularity
+from kalanos.analysis.inference.regularity import regularity
 from kalanos.analysis.inference.roles import roles
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.inference.timestamp import infer_unit
@@ -39,9 +40,12 @@ from kalanos.analysis.models.domain import (
     UNMAPPED_TAXONOMY_PREFIX,
     Channel,
     Clock,
+    ClockInfo,
+    ClockOrigin,
     Episode,
     FramePayload,
     Kind,
+    OriginEvidence,
     Stream,
     TimestampDtype,
 )
@@ -112,13 +116,8 @@ _MAX_CHANNEL_RANK = 2
 
 # An episode's own time dataset, when it records one (robomimic and Isaac Lab
 # demos often do): matched on the dataset's last path segment. It becomes the
-# episode's timebase instead of a channel, so timing metrics grade the capture.
+# episode's recorded timebase; the name alone establishes no capture origin.
 _TIME_DATASET_NAMES = frozenset({"t", "ts", "time", "times", "timestamp", "timestamps"})
-
-# Share of consecutive steps that must be non-decreasing for a time-named
-# dataset to be trusted as a clock. Repeated timestamps (a dropped step) still
-# count as non-decreasing; a column that runs backwards does not.
-_MIN_MONOTONIC_FRACTION = 0.95
 
 # Episode-group attributes that hold the instruction the episode was recorded under,
 # tried in order; the first present wins.
@@ -337,7 +336,7 @@ def _timestamp_dtype(dataset: h5py.Dataset) -> TimestampDtype:
 
 def _recorded_timebase(
     entries: list[tuple[str, h5py.Dataset]], length: int, source_path: UPath
-) -> tuple[str, pl.Series, bool, TimestampDtype] | None:
+) -> tuple[str, pl.Series, bool, TimestampDtype, pl.Series, ClockInfo] | None:
     """Find the episode's own time dataset and read it as a timebase in seconds.
 
     Parameters
@@ -366,30 +365,37 @@ def _recorded_timebase(
             dataset.ndim == 1 or (dataset.ndim == 2 and dataset.shape[1] == 1)
         ):
             continue
-        values = [float(value) for value in dataset[()].reshape(-1)]
-        steps = list(zip(values, values[1:], strict=False))
-        if not steps:
-            continue
-        monotonic = sum(1 for a, b in steps if b >= a) / len(steps)
-        if monotonic < _MIN_MONOTONIC_FRACTION:
-            logger.debug(
-                "%s: %r is time-named but only %.0f%% non-decreasing; not a clock",
-                source_path,
-                key,
-                100 * monotonic,
-            )
-            continue
+        native = pl.Series(dataset[()].reshape(-1))
+        values = native.to_list()
+        steps = [
+            (a, b)
+            for a, b in zip(values, values[1:], strict=False)
+            if a is not None and b is not None and math.isfinite(a) and math.isfinite(b)
+        ]
         positive_gaps = sorted(b - a for a, b in steps if b > a)
-        if not positive_gaps:
-            continue
-        unit = infer_unit(positive_gaps[len(positive_gaps) // 2])
-        if unit not in _SECONDS_PER_UNIT:
-            continue
-        seconds = pl.Series(
-            [value * _SECONDS_PER_UNIT[unit] for value in values], dtype=pl.Float64
+        unit = (
+            infer_unit(positive_gaps[len(positive_gaps) // 2])
+            if positive_gaps
+            else "unknown"
         )
-        is_regular = regularity(entity_split_gaps([seconds.to_list()])).is_regular
-        return key, seconds, is_regular, _timestamp_dtype(dataset)
+        factor = _SECONDS_PER_UNIT.get(unit, 1.0)
+        seconds = native.cast(pl.Float64) * factor
+        is_regular = (
+            len(steps) == len(values) - 1
+            and all(b >= a for a, b in steps)
+            and regularity([(b - a) * factor for a, b in steps]).is_regular
+        )
+        info = ClockInfo(
+            source_field=dataset.name,
+            native_unit=unit,
+            native_dtype=str(dataset.dtype),
+            transforms=[]
+            if unit == "unknown"
+            else [f"inferred {unit}->s (factor {factor})"],
+        )
+        # A damaged named clock remains evidence. Never replace it with a clean
+        # synthetic axis because its rows run backwards or contain invalid ticks.
+        return key, seconds, is_regular, _timestamp_dtype(dataset), native, info
     return None
 
 
@@ -428,14 +434,25 @@ def _episode_streams(
     [(length, _)] = Counter(dataset.shape[0] for _, dataset in entries).most_common(1)
     recorded = _recorded_timebase(entries, length, source_path)
     if recorded is not None:
-        time_key, timestamps, is_regular, timestamp_dtype = recorded
+        time_key, timestamps, is_regular, timestamp_dtype, native, clock_info = recorded
         clock = Clock.UNKNOWN
     else:
-        time_key, is_regular = None, False
+        time_key, is_regular = None, length >= 2
         clock, timestamp_dtype = Clock.RECONSTRUCTED, TimestampDtype.FLOAT64
         timestamps = pl.Series(
             [index / rate_hz for index in range(length)], dtype=pl.Float64
         )
+        native = pl.Series(range(length), dtype=pl.Int64)
+        clock_info = ClockInfo(
+            origin=ClockOrigin.GENERATED,
+            origin_evidence=OriginEvidence.ADAPTER,
+            native_unit="frame",
+            native_dtype="int64",
+            tick_period_s=1.0 / rate_hz,
+            epoch="episode-relative",
+            transforms=[f"sample_index / {rate_hz} -> s"],
+        )
+    clock_info.domain = f"{source_path}#{group.name}"
 
     streams = []
     for key, dataset in entries:
@@ -460,6 +477,11 @@ def _episode_streams(
                 clock=clock,
                 timestamp_dtype=timestamp_dtype,
                 is_regular=is_regular,
+            ).model_copy(
+                update={
+                    "clock_info": clock_info.model_copy(deep=True),
+                    "native_timestamps": native,
+                }
             )
         )
     return streams

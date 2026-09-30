@@ -33,8 +33,11 @@ from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
     Attribution,
     Channel,
+    Clock,
+    ClockInfo,
     Episode,
     MappingSource,
+    SourceOrder,
 )
 from kalanos.analysis.models.eligibility import (
     EligibilityCounts,
@@ -178,6 +181,9 @@ class GradedStream(BaseModel):
     channels: list[GradedChannel] = Field(default_factory=list)
     source_field: str | None = None
     declared_channels: list[Channel] = Field(default_factory=list)
+    clock: Clock = Clock.UNKNOWN
+    clock_info: ClockInfo | None = None
+    source_order: SourceOrder = Field(default_factory=SourceOrder)
     evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
 
 

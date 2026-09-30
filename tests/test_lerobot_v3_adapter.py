@@ -271,8 +271,8 @@ def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock():
             assert stream.clock is Clock.RECONSTRUCTED
 
 
-def test_a_skipped_frame_index_or_a_missing_rate_leaves_the_clock_unknown():
-    """Without every frame and a declared rate, the stamps cannot be shown derived."""
+def test_a_skipped_frame_does_not_erase_inferred_generation():
+    """Generation inference survives a missing row, but needs a declared rate."""
 
     def frame(indices):
         return pl.DataFrame(
@@ -286,5 +286,5 @@ def test_a_skipped_frame_index_or_a_missing_rate_leaves_the_clock_unknown():
     dtype = TimestampDtype.FLOAT32
 
     assert episode_clock(whole, 30.0, dtype) is Clock.RECONSTRUCTED
-    assert episode_clock(skipped, 30.0, dtype) is Clock.UNKNOWN
+    assert episode_clock(skipped, 30.0, dtype) is Clock.RECONSTRUCTED
     assert episode_clock(whole, None, dtype) is Clock.UNKNOWN

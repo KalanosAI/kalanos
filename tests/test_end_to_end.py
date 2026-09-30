@@ -245,9 +245,8 @@ def test_rate_metrics_are_not_applicable_on_the_irregular_json_fixture(corpus_re
     assert capture_statuses
     assert all(status == MetricStatus.NOT_APPLICABLE for status in capture_statuses)
     assert csv_statuses
-    # The CSV's jittery and dropped-sample instances keep a measured rate; its
-    # exactly-evenly-stamped instances report timing as not observable instead.
-    assert MetricStatus.REPORT_ONLY in csv_statuses
+    # Neither jitter nor a gap supplies evidence of capture origin.
+    assert all(status == MetricStatus.NOT_APPLICABLE for status in csv_statuses)
 
 
 def test_a_folder_with_one_gradeable_file_and_one_unclaimed_file(tmp_path):
@@ -284,43 +283,37 @@ def test_the_csv_fixture_yields_one_instance_per_id(single_file_report):
     assert sorted(reported) == sorted(_csv_ids())
 
 
-def test_drop_rate_is_graded_for_the_csv_fixture(single_file_report):
-    """Verify drop_rate discriminates rather than merely being marked graded.
-
-    `armC`'s burst of dropped samples must actually surface as `critical`;
-    a metric stuck reporting `good` everywhere would pass a weaker check
-    that only looked for the absence of `report_only`.
-    """
-
-    statuses = [
-        result.status
-        for name, result in _iter_metric_results(single_file_report)
-        if name == "drop_rate"
+def test_csv_gaps_are_reported_without_claiming_acquisition_drop_rate(
+    single_file_report,
+):
+    acquisition = [
+        r for name, r in _iter_metric_results(single_file_report) if name == "drop_rate"
     ]
+    recorded = [
+        r
+        for name, r in _iter_metric_results(single_file_report)
+        if name == "recorded_drop_estimate"
+    ]
+    assert acquisition and all(
+        r.status == MetricStatus.NOT_APPLICABLE for r in acquisition
+    )
+    assert any(r.value is not None and r.value > 0.05 for r in recorded)
+    assert all(
+        r.status in (MetricStatus.REPORT_ONLY, MetricStatus.NOT_APPLICABLE)
+        for r in recorded
+    )
 
-    assert statuses
-    assert MetricStatus.REPORT_ONLY not in statuses
-    assert MetricStatus.CRITICAL in statuses
 
-
-def test_dt_jitter_is_report_only_for_the_csv_fixture(single_file_report):
-    """Verify dt_jitter_ms is never graded, per the policy.
-
-    It is report-only where the clock measured something, and not applicable on
-    the instances stamped on an exactly even clock, where there is nothing to see.
-    """
-
+def test_csv_jitter_requires_capture_evidence(single_file_report):
     results = [
-        result
-        for name, result in _iter_metric_results(single_file_report)
+        r
+        for name, r in _iter_metric_results(single_file_report)
         if name == "dt_jitter_ms"
     ]
-
-    assert any(result.status == MetricStatus.REPORT_ONLY for result in results)
+    assert results
     for result in results:
-        assert result.status in (MetricStatus.REPORT_ONLY, MetricStatus.NOT_APPLICABLE)
-        if result.status == MetricStatus.NOT_APPLICABLE:
-            assert "floating-point precision" in result.evidence["reason"]
+        assert result.status == MetricStatus.NOT_APPLICABLE
+        assert "producer" in result.evidence["reason"]
 
 
 def test_grading_a_single_file_reports_that_file_alone(single_file_report):

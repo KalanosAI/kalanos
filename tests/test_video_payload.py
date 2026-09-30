@@ -94,7 +94,8 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
     )
 
     assert graded.metrics["stub_frame_metric"].status == MetricStatus.NOT_APPLICABLE
-    assert graded.metrics["effective_hz"].value is not None
+    assert graded.metrics["effective_hz"].value is None
+    assert graded.metrics["recorded_hz"].value is not None
 
 
 def test_fetch_decodes_the_fixture():
