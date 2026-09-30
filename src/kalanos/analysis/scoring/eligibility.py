@@ -134,17 +134,50 @@ def _requirement_reasons(
                 )
     if requirements.require_resolved_bindings:
         for stream in episode.streams:
-            if stream.taxonomy_type.startswith(UNMAPPED_TAXONOMY_PREFIX):
+            unresolved = [
+                c.name
+                for c in [
+                    *(g.channel for g in stream.channels),
+                    *stream.declared_channels,
+                ]
+                if c.binding is None
+                or c.binding.taxonomy_type.startswith(UNMAPPED_TAXONOMY_PREFIX)
+            ]
+            if stream.taxonomy_type.startswith(UNMAPPED_TAXONOMY_PREFIX) or unresolved:
                 reasons.append(
                     EligibilityReason(
                         id=f"binding:{stream.taxonomy_type}",
                         kind=ReasonKind.BINDING,
                         status=EligibilityStatus.UNKNOWN,
                         detail=(
-                            f"stream {stream.taxonomy_type!r} has no resolved binding"
+                            f"stream {stream.taxonomy_type!r} has unresolved "
+                            f"bindings: {unresolved}"
                         ),
                     )
                 )
+    for capability in requirements.required_capabilities:
+        # Prerequisite readiness is never evidence that a future detector ran.
+        # Only numeric inspection is implemented by this slice.
+        channels = [c.channel for s in episode.streams for c in s.channels]
+        available = (
+            capability == "numeric"
+            and bool(channels)
+            and all(
+                c.binding is not None
+                and c.binding.capabilities.get("numeric")
+                and c.binding.capabilities["numeric"].ready
+                for c in channels
+            )
+        )
+        if not available:
+            reasons.append(
+                EligibilityReason(
+                    id=f"capability:{capability}",
+                    kind=ReasonKind.REQUIREMENT,
+                    status=EligibilityStatus.UNKNOWN,
+                    detail=f"required capability {capability!r} was not evaluated",
+                )
+            )
     return reasons
 
 

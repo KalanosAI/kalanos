@@ -118,7 +118,9 @@ def metric(
         func: Callable[[CtxT], MetricResult],
     ) -> Callable[[CtxT], MetricResult]:
         if level is Level.EPISODE and (
-            resolved_requires.regular_sampling or resolved_requires.min_samples
+            resolved_requires.regular_sampling
+            or resolved_requires.min_samples
+            or resolved_requires.capabilities
         ):
             raise ValueError(
                 f"{func.__name__} is registered at Level.EPISODE with a "
@@ -190,6 +192,15 @@ def _unmet_node_reason(
         return "sampling is not regular"
     if ctx.n_samples < requires.min_samples:
         return f"fewer than {requires.min_samples} samples"
+    channels = [ctx.channel] if isinstance(ctx, ChannelContext) else ctx.stream.channels
+    for capability in requires.capabilities:
+        if not channels or any(
+            c.binding is None
+            or capability not in c.binding.capabilities
+            or not c.binding.capabilities[capability].ready
+            for c in channels
+        ):
+            return f"binding prerequisites for {capability!r} are unavailable"
     return None
 
 

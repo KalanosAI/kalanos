@@ -183,7 +183,7 @@ def resolve_taxonomy(
     if names:
         name_roles = roles(names, dictionary)
         resolved = {role.taxonomy_type for role in name_roles if role.taxonomy_type}
-        if len(resolved) == 1:
+        if len(resolved) == 1 and all(r.taxonomy_type for r in name_roles):
             [taxonomy_type] = resolved
             return taxonomy_type, MappingSource.DECLARED_NAMES
 
@@ -258,7 +258,15 @@ def channels_for(
         channel_names = [f"{feature}_{i}" for i in range(width)]
 
     axis_by_name = {role.column: role.axis for role in roles(channel_names, dictionary)}
-    return [Channel(name=name, axis=axis_by_name[name]) for name in channel_names]
+    return [
+        Channel(
+            name=name,
+            axis=axis_by_name[name],
+            source_index=i,
+            declared_name=names[i] if len(names) == width else None,
+        )
+        for i, name in enumerate(channel_names)
+    ]
 
 
 def taxonomy_and_channels(

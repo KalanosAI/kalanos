@@ -13,7 +13,7 @@ rewritten.
 
 # Built-in
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # External
 import yaml
@@ -34,6 +34,7 @@ from kalanos.analysis.models.binding import (
     resolve_feature_types,
 )
 from kalanos.analysis.models.dictionary import Dictionary
+from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.errors import ConfigurationError, MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.policy import Policy
@@ -42,6 +43,7 @@ from kalanos.analysis.models.provenance import (
     ExecutionTier,
     content_digest,
 )
+from kalanos.assets.dictionary import load_dictionary, use_dictionary
 from kalanos.assets.mapping import (
     check_taxonomy_types,
     load_mapping_file,
@@ -49,6 +51,7 @@ from kalanos.assets.mapping import (
 )
 from kalanos.assets.policy import load_policy
 from kalanos.assets.yaml_strict import safe_load_strict
+from kalanos.core.settings import get_settings
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -96,6 +99,7 @@ class RunConfiguration:
     execution_id: ConfigIdentity | None = None
     bundle_id: ConfigIdentity | None = None
     bundle: Bundle = field(default_factory=Bundle)
+    limits: SourceLimits = field(default_factory=SourceLimits)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -231,6 +235,10 @@ def resolve_run_configuration(
     """
 
     bundle = bundle or Bundle()
+    if bundle.schema_version != BUNDLE_SCHEMA_VERSION:
+        raise MappingOverrideError(
+            f"unsupported bundle schema_version {bundle.schema_version}"
+        )
     assertions: list[FeatureAssertion] = []
 
     if sidecar:
@@ -267,6 +275,18 @@ def resolve_run_configuration(
         for feature, winner in resolved.types.items()
     ]
     check_taxonomy_types(overrides, dictionary)
+    if bundle.binding is not None:
+        check_taxonomy_types(
+            [
+                MappingOverride(
+                    feature=c.feature,
+                    taxonomy_type=c.taxonomy_type,
+                    origin=OverrideOrigin.BUNDLE,
+                )
+                for c in bundle.binding.channels
+            ],
+            dictionary,
+        )
 
     effective_tier = tier or bundle.execution.tier
     requirements = bundle.requirements
@@ -352,11 +372,87 @@ def overrides_for(config: RunConfiguration) -> Sequence[MappingOverride]:
     return config.overrides
 
 
+def prepare_configuration(
+    root: UPath,
+    *,
+    policy: Policy | None = None,
+    dictionary: Dictionary | None = None,
+    bundle: Bundle | UPath | str | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    mapping_file: UPath | None = None,
+    sidecar: bool = True,
+    tier: ExecutionTier | None = None,
+    limits: SourceLimits | None = None,
+) -> tuple[Policy, Dictionary, RunConfiguration]:
+    """Load grade/benchmark inputs identically; explicit policy wins over bundle."""
+
+    settings = get_settings()
+    explicit_policy = policy is not None
+    dictionary = dictionary or load_dictionary(settings.dictionary_path)
+    use_dictionary(dictionary)
+    bundle_path = (
+        None if bundle is None or isinstance(bundle, Bundle) else UPath(bundle)
+    )
+    loaded = (
+        bundle
+        if isinstance(bundle, Bundle)
+        else load_bundle(bundle_path)
+        if bundle_path is not None
+        else None
+    )
+    if policy is None and loaded is not None:
+        policy = load_bundle_policy(loaded, bundle_path)
+    policy = policy or load_policy(settings.policy_path)
+    config = resolve_run_configuration(
+        root,
+        dictionary=dictionary,
+        policy_digest=content_digest(policy.model_dump(mode="json")),
+        bundle=loaded,
+        bundle_path=bundle_path,
+        mapping=mapping,
+        mapping_file=mapping_file,
+        sidecar=sidecar,
+        tier=tier,
+    )
+    if explicit_policy:
+        config = replace(
+            config,
+            policy_id=config.policy_id.model_copy(
+                update={"id": "explicit-policy", "origin": "argument"}
+            ),
+            scope=config.scope.model_copy(update={"policy_id": "explicit-policy"}),
+        )
+    base_limits = limits or SourceLimits(
+        max_bytes=settings.remote_max_bytes, max_files=settings.remote_max_files
+    )
+    effective = {}
+    for name in ("max_bytes", "max_files"):
+        candidates = [
+            getattr(base_limits, name),
+            config.bundle.execution.limits.get(name),
+        ]
+        caps = [v for v in candidates if v is not None]
+        effective[name] = min(caps) if caps else None
+    config = replace(
+        config,
+        limits=SourceLimits(**effective),
+        execution_id=ConfigIdentity(
+            id=f"tier-{config.scope.tier.value}",
+            origin="resolved",
+            digest=content_digest(
+                {"tier": config.scope.tier.value, "limits": effective}
+            ),
+        ),
+    )
+    return policy, dictionary, config
+
+
 __all__ = [
     "RunConfiguration",
     "load_bundle",
     "load_bundle_policy",
     "overrides_for",
+    "prepare_configuration",
     "resolve_policy_path",
     "resolve_run_configuration",
 ]

@@ -13,22 +13,32 @@ and counts where a metric that graded good before now grades warning or critical
 import importlib.metadata
 import logging
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
 # External
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from pydantic import BaseModel, Field
+from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
+from kalanos.analysis.bindings import (
+    binding_records,
+    check_matched,
+    identity_from_records,
+    resolve_episodes,
+)
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics.registry import registered_metrics
+from kalanos.analysis.models.binding import Bundle, EvaluationScope
+from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.domain import Episode, FramePayload, Stream
-from kalanos.analysis.models.errors import NothingToGrade
+from kalanos.analysis.models.errors import MappingOverrideError, NothingToGrade
 from kalanos.analysis.models.metrics import (
     ChannelContext,
     Level,
@@ -37,11 +47,11 @@ from kalanos.analysis.models.metrics import (
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import ConfigIdentity, ExecutionTier
 from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.pipeline import with_declared_limits
 from kalanos.analysis.reporting.assemble import grade_episode, grade_stream
-from kalanos.assets.dictionary import load_dictionary, use_dictionary
-from kalanos.assets.policy import load_policy
+from kalanos.assets.bundle import prepare_configuration
 from kalanos.core.settings import get_settings
 from kalanos.testing.injectors import (
     Defect,
@@ -182,6 +192,9 @@ class DatasetBenchmark(BaseModel):
     benign: list[BenignRate]
     detection: list[DetectionRate]
     not_injected: dict[Defect, str] = Field(default_factory=dict)
+    scope: EvaluationScope | None = None
+    configuration: dict[str, ConfigIdentity | None] = Field(default_factory=dict)
+    policy_version: int | None = None
 
 
 class Benchmark(BaseModel):
@@ -439,7 +452,12 @@ def _benign_rows(tallies: dict[str, _MetricTally]) -> list[BenignRate]:
 
 
 def benchmark_episodes(
-    episodes: Iterable[Episode], *, policy: Policy, n_episodes: int | None, sample: int
+    episodes: Iterable[Episode],
+    *,
+    policy: Policy,
+    n_episodes: int | None,
+    sample: int,
+    tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> _Rates:
     """Grade every episode clean, and inject defects into an evenly spaced sample.
 
@@ -461,12 +479,20 @@ def benchmark_episodes(
     for position, episode in enumerate(episodes):
         seen += 1
         clean, _ = grade_episode(
-            episode, adapter="benchmark", adapter_confidence=1.0, policy=policy
+            episode,
+            adapter="benchmark",
+            adapter_confidence=1.0,
+            policy=policy,
+            tier=tier,
         )
         _tally_clean(clean, tallies)
         if seen % _PROGRESS_EVERY == 0:
             logger.info("graded %d/%s episode(s) clean", seen, expected)
-        if position % stride == 0 and sampled < sample:
+        if (
+            position % stride == 0
+            and sampled < sample
+            and tier != ExecutionTier.METADATA
+        ):
             sampled += 1
             logger.info(
                 "%s: injecting defects (sample %d/%d)", episode.id, sampled, planned
@@ -488,7 +514,11 @@ def benchmark_episodes(
         if cell.eligible
     ]
     not_injected = {
-        defect: injections.errors.get(defect, "no stream it applies to")
+        defect: (
+            "metadata tier does not inject payload defects"
+            if tier == ExecutionTier.METADATA
+            else injections.errors.get(defect, "no stream it applies to")
+        )
         for defect in Defect
         if defect not in injections.ran
     }
@@ -501,7 +531,18 @@ def benchmark_episodes(
     )
 
 
-def benchmark_dataset(path: str, *, policy: Policy, sample: int) -> DatasetBenchmark:
+def benchmark_dataset(
+    path: str,
+    *,
+    policy: Policy | None = None,
+    sample: int,
+    dictionary: Dictionary | None = None,
+    bundle: Bundle | UPath | str | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    mapping_file: UPath | None = None,
+    sidecar: bool = True,
+    tier: ExecutionTier | None = None,
+) -> DatasetBenchmark:
     """Benchmark one dataset, read whole by the adapter that bids highest on it.
 
     Raises
@@ -527,6 +568,17 @@ def benchmark_dataset(path: str, *, policy: Policy, sample: int) -> DatasetBench
         ),
     )
 
+    policy, dictionary, config = prepare_configuration(
+        root,
+        policy=policy,
+        dictionary=dictionary,
+        bundle=bundle,
+        mapping=mapping,
+        mapping_file=mapping_file,
+        sidecar=sidecar,
+        tier=tier,
+    )
+    enforce_limits(source, config.limits)
     # Step 2: one adapter reads the whole root.
     selection = select_adapter(root, discover_adapters().adapters)
     if selection is None:
@@ -545,13 +597,40 @@ def benchmark_dataset(path: str, *, policy: Policy, sample: int) -> DatasetBench
     )
     episode_policy = with_declared_limits(policy, info)
 
-    # Step 4: grade and inject.
-    rates = benchmark_episodes(
-        episodes=selection.adapter.episodes(root),
-        policy=episode_policy,
-        n_episodes=info.episode_count,
-        sample=sample,
-    )
+    # Step 4: resolve the same bindings as grade, without buffering payloads.
+    channels = config.bundle.binding.channels if config.bundle.binding else []
+    matched_channels: set[tuple[str | None, str, int | None]] = set()
+    seen_features: set[str] = set()
+    records: dict[str, dict] = {}
+
+    def bound_episodes():
+        for raw in selection.adapter.episodes(root):
+            seen_features.update(
+                s.source_field for s in raw.streams if s.source_field is not None
+            )
+            [bound] = resolve_episodes(
+                [raw],
+                dictionary=dictionary,
+                channels=channels,
+                overrides=config.overrides,
+                source_identity=str(root),
+                matched=matched_channels,
+            )
+            records.update(binding_records([bound]))
+            yield bound
+
+    with use_tier(config.scope.tier):
+        rates = benchmark_episodes(
+            episodes=bound_episodes(),
+            policy=episode_policy,
+            n_episodes=info.episode_count,
+            sample=sample,
+            tier=config.scope.tier,
+        )
+    check_matched(channels, matched_channels)
+    unmatched = [o.feature for o in config.overrides if o.feature not in seen_features]
+    if unmatched:
+        raise MappingOverrideError(f"mapping override matched no stream: {unmatched}")
     return DatasetBenchmark(
         uri=source.uri,
         repo_id=source.repo_id,
@@ -562,11 +641,32 @@ def benchmark_dataset(path: str, *, policy: Policy, sample: int) -> DatasetBench
         benign=rates.benign,
         detection=rates.detection,
         not_injected=rates.not_injected,
+        scope=config.scope.model_copy(
+            update={"binding_id": identity_from_records(records, config.binding_id).id}
+        ),
+        configuration={
+            "binding": identity_from_records(records, config.binding_id),
+            "requirements": config.requirements_id,
+            "policy": config.policy_id,
+            "dictionary": config.dictionary_id,
+            "execution": config.execution_id,
+            "bundle": config.bundle_id,
+        },
+        policy_version=policy.schema_version,
     )
 
 
 def run_benchmark(
-    paths: Sequence[str] = REFERENCE_DATASETS, *, sample: int = DEFAULT_SAMPLE
+    paths: Sequence[str] = REFERENCE_DATASETS,
+    *,
+    sample: int = DEFAULT_SAMPLE,
+    policy: Policy | None = None,
+    dictionary: Dictionary | None = None,
+    bundle: Bundle | UPath | str | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    mapping_file: UPath | None = None,
+    sidecar: bool = True,
+    tier: ExecutionTier | None = None,
 ) -> Benchmark:
     """Benchmark each dataset under the configured policy and dictionary.
 
@@ -576,22 +676,31 @@ def run_benchmark(
         How many episodes per dataset to inject defects into.
     """
 
-    settings = get_settings()
-    policy = load_policy(settings.policy_path)
-    use_dictionary(load_dictionary(settings.dictionary_path))
-
+    datasets = [
+        benchmark_dataset(
+            path,
+            policy=policy,
+            sample=sample,
+            dictionary=dictionary,
+            bundle=bundle,
+            mapping=mapping,
+            mapping_file=mapping_file,
+            sidecar=sidecar,
+            tier=tier,
+        )
+        for path in paths
+    ]
+    versions = {d.policy_version for d in datasets}
     return Benchmark(
         kalanos_version=importlib.metadata.version("kalanos"),
-        policy_version=policy.schema_version,
+        policy_version=next(iter(versions)) if len(versions) == 1 else None,
         injection={
             "spike_std": _SPIKE_STD,
             "noise_std": _NOISE_STD,
             "drift_std": _DRIFT_STD,
             "saturation_abs_quantile": _SATURATION_ABS_QUANTILE,
         },
-        datasets=[
-            benchmark_dataset(path, policy=policy, sample=sample) for path in paths
-        ],
+        datasets=datasets,
     )
 
 

@@ -176,6 +176,8 @@ class GradedStream(BaseModel):
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     channels: list[GradedChannel] = Field(default_factory=list)
+    source_field: str | None = None
+    declared_channels: list[Channel] = Field(default_factory=list)
     evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
 
 

@@ -18,12 +18,13 @@ mappings but never change requirements, policy or tier.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
 from collections.abc import Iterable, Sequence
 from enum import Enum
 from typing import Any
 
 # External
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Internal
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
@@ -154,10 +155,31 @@ class Validation(BaseModel):
         The dataset/session/revision the validation applies to.
     """
 
-    property: str
-    validator: str
-    evidence: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    property: str = Field(min_length=1)
+    validator: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
     scope: str | None = None
+    value: Any = None
+    capability: str | None = None
+
+
+class PropertyConflict(BaseModel):
+    """A displaced channel assertion; conflicts never disappear into a hash."""
+
+    property: str
+    retained: Any
+    displaced: Any
+    origin: BindingOrigin
+    reason: str
+
+
+class CapabilityCheck(BaseModel):
+    """Prerequisite readiness, not a claim that a detector ran or passed."""
+
+    ready: bool
+    reasons: list[str] = Field(default_factory=list)
 
 
 class ChannelBinding(BaseModel):
@@ -192,7 +214,7 @@ class ChannelBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     feature: str
-    index: int | None = None
+    index: int | None = Field(default=None, ge=0)
     name: str | None = None
     taxonomy_type: str
     actuator: ActuatorKind = ActuatorKind.UNKNOWN
@@ -204,6 +226,47 @@ class ChannelBinding(BaseModel):
     origin: BindingOrigin = BindingOrigin.INFERRED
     status: ValidationStatus = ValidationStatus.UNRESOLVED
     validations: list[Validation] = Field(default_factory=list)
+    source_identity: str | None = None
+    frame: str | None = None
+    sign: int | None = None
+    alignment: str | None = None
+    calibration_transform: str | None = None
+    limits: tuple[float, float] | None = None
+    noise_reference: str | None = None
+    property_origins: dict[str, BindingOrigin] = Field(default_factory=dict)
+    property_status: dict[str, ValidationStatus] = Field(default_factory=dict)
+    conflicts: list[PropertyConflict] = Field(default_factory=list)
+    invalidated_validations: list[Validation] = Field(default_factory=list)
+    capabilities: dict[str, CapabilityCheck] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def coherent_declarations(self) -> "ChannelBinding":
+        """Reject malformed limits/signs, without treating assertions as evidence."""
+
+        expected = {
+            "proprio.joint_position": {Quantity.POSITION},
+            "proprio.gripper_width": {Quantity.POSITION},
+            "action.joint_position_command": {Quantity.POSITION},
+            "proprio.joint_velocity": {Quantity.VELOCITY},
+            "action.joint_velocity_command": {Quantity.VELOCITY},
+            "proprio.joint_acceleration": {Quantity.ACCELERATION},
+            "proprio.joint_torque": {Quantity.EFFORT, Quantity.CURRENT},
+            "action.joint_torque_command": {Quantity.EFFORT, Quantity.CURRENT},
+        }.get(self.taxonomy_type)
+        if (
+            expected
+            and self.quantity != Quantity.UNKNOWN
+            and self.quantity not in expected
+        ):
+            raise ValueError("quantity contradicts the selected taxonomy type")
+        if self.sign not in (None, -1, 1):
+            raise ValueError("sign must be -1 or 1")
+        if self.limits is not None and (
+            not all(math.isfinite(x) for x in self.limits)
+            or not self.limits[0] < self.limits[1]
+        ):
+            raise ValueError("limits must be an increasing lower/upper pair")
+        return self
 
 
 class FeatureAssertion(BaseModel):
@@ -359,6 +422,17 @@ class BindingSection(BaseModel):
     features: dict[str, str] = Field(default_factory=dict)
     channels: list[ChannelBinding] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def unique_channels(self) -> "BindingSection":
+        """Never allow duplicate selectors to silently replace one another."""
+
+        keys = [(c.source_identity, c.feature, c.index) for c in self.channels]
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                "duplicate binding channel selector (source, feature, index)"
+            )
+        return self
+
 
 class RequirementsSection(BaseModel):
     """The bundle's `requirements` section: what a pass needs.
@@ -388,6 +462,19 @@ class RequirementsSection(BaseModel):
     require_resolved_bindings: bool = False
     require_numeric_payloads: bool = True
     min_pass_episodes: int | None = Field(default=None, ge=0)
+    required_capabilities: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preset(cls, data: Any) -> Any:
+        """A named built-in preset has actual requirements, even with only an id."""
+
+        if isinstance(data, dict) and data.get("id") == "vision-imitation-v1":
+            data = dict(data)
+            data["required_capabilities"] = sorted(
+                set(data.get("required_capabilities", [])) | {"video_quality"}
+            )
+        return data
 
 
 class PolicySection(BaseModel):
@@ -413,6 +500,19 @@ class ExecutionSection(BaseModel):
 
     tier: ExecutionTier = ExecutionTier.STANDARD
     limits: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def supported_limits(self) -> "ExecutionSection":
+        """Reject budgets the runtime cannot enforce."""
+
+        if self.limits.keys() - {"max_bytes", "max_files"}:
+            raise ValueError("execution.limits supports only max_bytes and max_files")
+        if any(
+            v is not None and (type(v) is not int or v < 0)
+            for v in self.limits.values()
+        ):
+            raise ValueError("execution limits must be nonnegative integers or null")
+        return self
 
 
 class Bundle(BaseModel):

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from upath import UPath
 
 # Internal
+from kalanos.analysis.models.binding import ChannelBinding
 from kalanos.analysis.models.paths import AnyPath
 
 
@@ -338,6 +339,9 @@ class Channel(BaseModel):
 
     name: str
     axis: str | None = None
+    source_index: int | None = Field(default=None, ge=0)
+    declared_name: str | None = None
+    binding: ChannelBinding | None = None
 
 
 class Stream(BaseModel):

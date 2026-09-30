@@ -113,6 +113,7 @@ class Requires(BaseModel):
     regular_sampling: bool = False
     min_samples: int = 0
     taxonomy: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
 
 
 @runtime_checkable
@@ -266,6 +267,8 @@ class ChannelContext(BaseModel):
             `self.stream.taxonomy_type`.
         """
 
+        if self.channel.binding is not None:
+            return self.channel.binding.taxonomy_type
         return self.stream.taxonomy_type
 
     @model_validator(mode="after")

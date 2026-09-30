@@ -62,11 +62,13 @@ _REQUIRES_JERK = Requires(
     regular_sampling=True,
     min_samples=5,
     taxonomy=[_JOINT_POSITION],
+    capabilities=["derivatives"],
 )
 _REQUIRES_CHATTER = Requires(
     regular_sampling=True,
     min_samples=5,
     taxonomy=[_JOINT_VELOCITY],
+    capabilities=["derivatives"],
 )
 _REQUIRES_STILL_DRIFT = Requires(min_samples=8, taxonomy=[_JOINT_POSITION])
 _REQUIRES_VEL_SATURATION = Requires(min_samples=2, taxonomy=[_JOINT_VELOCITY])

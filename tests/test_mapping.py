@@ -86,12 +86,13 @@ def test_an_argument_override_types_the_state_stream_as_joint_position():
     assert override.origin is OverrideOrigin.ARGUMENT
     assert override.path is None
 
-    # The four joint-position metrics now run on the stream's own data.
+    # A feature assertion routes the stream but does not validate physical units.
     # The tiny fixture is too short and too busy for still_drift to find a settled
     # tail, so that one is checked only for having got past the taxonomy gate.
     [first, *_] = states
     for name in ("max_abs_jerk", "mean_jerk_norm"):
-        assert first.metrics[name].status is not MetricStatus.NOT_APPLICABLE
+        assert first.metrics[name].status is MetricStatus.NOT_APPLICABLE
+        assert "derivatives" in first.metrics[name].evidence["reason"]
     for channel in first.channels:
         status = channel.metrics["limit_proximity_pct"].status
         assert status is not MetricStatus.NOT_APPLICABLE
