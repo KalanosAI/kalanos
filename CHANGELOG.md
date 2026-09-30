@@ -1,8 +1,21 @@
 # Changelog
 
-## 0.7.0 — unreleased
+## 0.7.0
 
 The decision-integrity release. Report schema 7.0.0.
+
+### Contextual noise evidence, real-data fixes and release packaging (R07-03, R07-08/09)
+
+- Complete R07-03 contextual smooth/residual SNR evidence with scoped native-scale
+  reference validation. Preserve component measurements; a quiet hold within its
+  validated reference receives no SNR penalty. Unassessed SNR cannot be promoted
+  by a matching statistical manifest alone.
+- Count Boolean nulls in the missing-value check, correcting numeric coverage for
+  datasets carrying Boolean terminal flags. Boolean data remains outside SNR.
+- Schema-7 publisher and Action companion updates ship alongside; package and
+  CITATION versions agree; release metadata is checked before tagging. See
+  `docs/RELEASE-0.7.0.md` and the real-data record in `docs/ACCEPTANCE-0.7.0.md`.
+- Deeper diagnostics and review/selection/export are planned for 0.7.1.
 
 ### Contract (R07-01, R07-03 interfaces, R07-02/04/05 models)
 
@@ -39,7 +52,7 @@ The decision-integrity release. Report schema 7.0.0.
 - Add `compare`, `profiles list/show/validate`, richer `inspect`, and public `compare`/`load_report` APIs. Refuse unsupported numerical comparisons and retain historical schema evidence. Opt-in `--hash-source` records complete local byte identity with before/after stability checks.
 - Enforce structured calibration matching before statistical blocking. Uncalibrated critical findings require review, which makes readiness undefined. Legacy name lists cannot authorize blocking and disabling enforcement is rejected.
 - Record payload/metric failures as operational errors, with partial completion and CLI exit 2. The language-conditioned missing-instruction rule explicitly uses its existing contract route.
-- R07-03 SNR improvements remain deferred. No accepted production manifest is shipped.
+- R07-03 is completed by the contextual noise section above. No accepted production manifest is shipped.
 
 ### Clock provenance and recorded order (R07-04)
 

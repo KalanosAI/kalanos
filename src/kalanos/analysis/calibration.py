@@ -155,7 +155,11 @@ def apply_calibration(findings, policies, run, scope, producer):
         if (
             f.severity == Severity.CRITICAL
             and (entry.consequence or Consequence.BLOCK) == Consequence.BLOCK
-            and (entry.route or BlockingRoute.STATISTICAL) == BlockingRoute.STATISTICAL
+            and (
+                f.metric_id == "integrity.snr_db"
+                or (entry.route or BlockingRoute.STATISTICAL)
+                == BlockingRoute.STATISTICAL
+            )
         ):
             outcome = evaluate(
                 policy,
@@ -169,6 +173,16 @@ def apply_calibration(findings, policies, run, scope, producer):
                     policy,
                 ),
             )
+            if (
+                f.metric_id == "integrity.snr_db"
+                and f.evidence.get("noise_assessment", {}).get("status")
+                != "above_reference"
+            ):
+                outcome = {
+                    **outcome,
+                    "accepted": False,
+                    "reason": "SNR physical noise assessment is unavailable",
+                }
             updates.update(
                 calibration=outcome,
                 evidence_strength="statistical" if outcome["accepted"] else "heuristic",

@@ -49,6 +49,7 @@ _PROPERTIES = (
     "calibration_transform",
     "limits",
     "noise_reference",
+    "noise_floor",
 )
 _TYPES = {
     "proprio.joint_position": (ActuatorKind.JOINT, Quantity.POSITION),
@@ -178,7 +179,12 @@ def capability_checks(
         or binding.representation == Representation.DISCRETE
     ):
         noise.append("reward/discrete signals do not support this noise claim")
-    if not binding.noise_reference or "noise_reference" not in validated_for("noise"):
+    if not (
+        binding.noise_floor is not None
+        and "noise_floor" in validated_for("noise")
+        or binding.noise_reference
+        and "noise_reference" in validated_for("noise")
+    ):
         noise.append("matching noise reference lacks scoped validation")
     return {
         "numeric": CapabilityCheck(

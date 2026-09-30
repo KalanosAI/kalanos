@@ -240,7 +240,7 @@ kalanos inspect report.json --episode ID     # every reason on one episode
 
 `inspect` also reads reports written by 0.6 (schema 6.3–6.5) without changing them, and points out where their old fields contradict each other.
 
-Planned: `kalanos compare`, `--sample`.
+Report comparison is available with `kalanos compare`; audit sampling remains planned.
 
 ---
 
@@ -618,3 +618,18 @@ or required unknown evidence remains.
 ## License
 
 [Apache-2.0](https://github.com/KalanosAI/kalanos/blob/main/LICENSE).
+
+
+### Contextual noise evidence (0.7.0)
+
+0.7.0 adds contextual SNR evidence and a validated native-scale noise
+reference. Quiet holds within that reference retain measurements without an SNR
+penalty. Missing reference evidence leaves a diagnostic review candidate; it
+cannot authorize a statistical block. Boolean flags receive missing-value checks
+and remain excluded from SNR. See [the 0.7.0 release contract](docs/RELEASE-0.7.0.md)
+and [binding reference configuration](docs/PROFILES.md#noise-reference-evidence).
+
+Schema-7 integrations must preserve `scope`, `eligibility_counts`, `readiness`,
+`sufficiency`, and `coverage`. `readiness.score: null` means undefined, never zero.
+Use the matching publisher/Action migration before exposing these reports.
+Deeper diagnostics and review/selection/export are planned for **0.7.1**.

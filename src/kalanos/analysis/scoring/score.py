@@ -252,7 +252,8 @@ def consequence_for(
     if consequence != Consequence.BLOCK:
         return consequence, None
     route = metric_policy.route or BlockingRoute.STATISTICAL
-    if route == BlockingRoute.STATISTICAL:
+    # A smooth/residual ratio is statistical even if a policy labels it contract.
+    if route == BlockingRoute.STATISTICAL or key == "integrity.snr_db":
         return Consequence.REVIEW, None
     return Consequence.BLOCK, route
 
@@ -409,6 +410,12 @@ def _resolve(
                 update={"status": MetricStatus.REPORT_ONLY, "evidence": evidence}
             ),
             None,
+        )
+
+    if result.evidence.get("noise_assessment", {}).get("status") == "within_reference":
+        return _stay_report_only(
+            "residual is within the validated reference; "
+            "the ratio cannot establish a noise defect"
         )
 
     # Step 3: no policy entry, permanently report-only, or graded with
