@@ -38,7 +38,7 @@ pip install 'kalanos[video]'    # PyAV, for sampled video diagnostics
 pip install 'kalanos[all]'      # everything
 ```
 
-The default audit needs none of these. A diagnostics plan whose extra isn't installed leaves the required capability unevaluated, so its episodes are `unknown` rather than passed, and the report's `diagnostics.results[].reason` names the missing extra.
+Missing optional dependencies leave the affected diagnostic unavailable, with the needed extra named in `diagnostics.results[].reason`. If its capability is listed in `requirements.required_capabilities`, the missing evidence makes the episode `unknown` unless a blocking finding takes precedence. Requesting a report-only diagnostic does not make its capability required. Adapter extras are still needed to read their respective formats.
 
 **2. Grade something.**
 

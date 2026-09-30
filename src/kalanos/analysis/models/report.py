@@ -18,6 +18,8 @@ and a path is a real filesystem path.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
+from collections import Counter
 from enum import Enum
 
 # External
@@ -484,6 +486,9 @@ class Report(BaseModel):
         episodes; and the counts partition the episodes plus the failed ones.
         """
 
+        episode_ids = [e.id for e in self.episodes]
+        if len(episode_ids) != len(set(episode_ids)):
+            raise ValueError("duplicate episode ids")
         if self.coverage is not None:
             from kalanos.analysis.coverage import report_coverage
 
@@ -542,10 +547,34 @@ class Report(BaseModel):
                 raise ValueError(
                     "eligibility_counts.total does not cover the inventory"
                 )
-            if counts.blocked != len(blocked):
-                raise ValueError(
-                    "eligibility_counts.blocked disagrees with the episodes"
+            tally = Counter(e.eligibility.status.value for e in self.episodes)
+            tally["unknown"] += failed + gap
+            for field, status in (
+                ("pass_count", "pass"),
+                ("blocked", "blocked"),
+                ("review", "review"),
+                ("unknown", "unknown"),
+            ):
+                if getattr(counts, field) != tally[status]:
+                    raise ValueError(
+                        f"eligibility_counts.{field} disagrees with episode "
+                        "decisions and failed/unresolved inventory"
+                    )
+            expected_share = (
+                counts.pass_count / counts.total
+                if counts.inventory_complete and counts.total
+                else None
+            )
+            if counts.confirmed_eligible_share is not None and (
+                expected_share is None
+                or not math.isclose(
+                    counts.confirmed_eligible_share,
+                    expected_share,
+                    rel_tol=0,
+                    abs_tol=1e-12,
                 )
+            ):
+                raise ValueError("confirmed_eligible_share disagrees with the counts")
             if self.inventory is not None and (
                 counts.inventory_complete != self.inventory.complete
             ):

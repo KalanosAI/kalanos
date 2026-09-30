@@ -34,6 +34,22 @@ The decision-integrity and optional deeper-diagnostics release. Report schema 7.
 - See `docs/DIAGNOSTICS-0.7.0.md` and `docs/CAPABILITIES.md` for exact supported
   inputs, conservative abstention, controls and remaining limits.
 
+### Diagnostic correctness fixes
+
+- Match the consumed channel before propagating findings into training windows;
+  a defect on an unused channel no longer changes those windows' status.
+- Use exact rational native-clock/grid comparisons for windows, including declared
+  clock transforms, age and gap limits. Preserve causal matching without an
+  epsilon that could admit future samples. Reported times remain JSON numbers.
+- Reconcile every episode-status count with recorded decisions and failed or
+  unresolved inventory. Reject duplicate episode IDs and incorrect published
+  eligible shares. Missing optional shares remain readable.
+- Reconcile window summaries with complete, uniquely addressed window records
+  and explicit unexamined-budget unknowns; reject contradictory imported evidence.
+- Clarify that missing diagnostic extras affect eligibility only when the
+  corresponding capability is required. Package and report schema versions stay
+  0.7.0 and 7.0.0 respectively.
+
 ### Contract (R07-01, R07-03 interfaces, R07-02/04/05 models)
 
 - One authoritative `episodes[].eligibility` (`pass | blocked | review | unknown`) under a named scope, decided once after every metric runs. Every dataset count, the gate, the CLI exit code and the compatibility `train_ready` derive from it; a report whose surfaces disagree fails validation.
