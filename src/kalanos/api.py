@@ -7,7 +7,7 @@
 # Built-in
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from uuid import uuid4
@@ -32,7 +32,11 @@ from kalanos.analysis.models.provenance import (
     content_digest,
 )
 from kalanos.analysis.models.report import Report
-from kalanos.assets.bundle import load_bundle, resolve_run_configuration
+from kalanos.assets.bundle import (
+    load_bundle,
+    load_bundle_policy,
+    resolve_run_configuration,
+)
 from kalanos.assets.dictionary import load_dictionary, use_dictionary
 from kalanos.assets.policy import load_policy
 from kalanos.core.settings import get_settings
@@ -71,7 +75,7 @@ def grade(
     policy: Policy | None = None,
     dictionary: Dictionary | None = None,
     limits: SourceLimits | None = None,
-    mapping: Mapping[str, str] | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: str | os.PathLike[str] | UPath | None = None,
     sidecar: bool = True,
     bundle: str | os.PathLike[str] | UPath | Bundle | None = None,
@@ -166,8 +170,10 @@ def grade(
         loaded_bundle = load_bundle(bundle_path)
     else:
         loaded_bundle = None
-    if loaded_bundle is not None and loaded_bundle.policy.path is not None:
-        policy = load_policy(UPath(loaded_bundle.policy.path))
+    if loaded_bundle is not None:
+        bundle_policy = load_bundle_policy(loaded_bundle, bundle_path)
+        if bundle_policy is not None:
+            policy = bundle_policy
     config = resolve_run_configuration(
         root,
         dictionary=dictionary,
@@ -207,6 +213,8 @@ def grade(
         policy=config.policy_id,
         binding=config.binding_id,
         dictionary=config.dictionary_id,
+        execution=config.execution_id,
+        bundle=config.bundle_id,
     )
 
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,

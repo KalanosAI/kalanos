@@ -34,8 +34,9 @@ from kalanos.analysis.models.binding import (
     resolve_feature_types,
 )
 from kalanos.analysis.models.dictionary import Dictionary
-from kalanos.analysis.models.errors import MappingOverrideError
+from kalanos.analysis.models.errors import ConfigurationError, MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
+from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import (
     ConfigIdentity,
     ExecutionTier,
@@ -46,6 +47,8 @@ from kalanos.assets.mapping import (
     load_mapping_file,
     sidecar_path,
 )
+from kalanos.assets.policy import load_policy
+from kalanos.assets.yaml_strict import safe_load_strict
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -90,6 +93,8 @@ class RunConfiguration:
     policy_id: ConfigIdentity
     binding_id: ConfigIdentity | None
     dictionary_id: ConfigIdentity
+    execution_id: ConfigIdentity | None = None
+    bundle_id: ConfigIdentity | None = None
     bundle: Bundle = field(default_factory=Bundle)
 
 
@@ -113,7 +118,7 @@ def load_bundle(path: UPath) -> Bundle:
     except FileNotFoundError as exc:
         raise MappingOverrideError(f"no bundle at {path}") from exc
     try:
-        payload = yaml.safe_load(raw)
+        payload = safe_load_strict(raw)
     except yaml.YAMLError as exc:
         raise MappingOverrideError(f"{path} is not valid YAML: {exc}") from exc
     try:
@@ -130,6 +135,54 @@ def load_bundle(path: UPath) -> Bundle:
     return bundle
 
 
+def resolve_policy_path(bundle: Bundle, bundle_path: UPath | None) -> UPath | None:
+    """Where the bundle's policy file is, relative to the bundle file itself.
+
+    A relative `policy.path` is taken against the bundle's own directory, so a
+    profile behaves the same from any working directory. An absolute path or a
+    URL is kept as given. An in-memory bundle has no directory, so a relative
+    path there is a configuration error.
+
+    Raises
+    ------
+    ConfigurationError
+    """
+
+    if bundle.policy.path is None:
+        return None
+    declared = UPath(bundle.policy.path)
+    if declared.is_absolute() or "://" in str(bundle.policy.path):
+        return declared
+    if bundle_path is None:
+        raise ConfigurationError(
+            f"policy.path {bundle.policy.path!r} is relative but the bundle has no "
+            "file location; use an absolute path"
+        )
+    return UPath(bundle_path).parent / declared
+
+
+def load_bundle_policy(bundle: Bundle, bundle_path: UPath | None) -> Policy | None:
+    """The bundle's policy from where the bundle says, or `None` for the default.
+
+    Every way this can fail — a missing file, unreadable YAML, a policy that
+    does not validate — is a configuration error, not a crash.
+
+    Raises
+    ------
+    ConfigurationError
+    """
+
+    path = resolve_policy_path(bundle, bundle_path)
+    if path is None:
+        return None
+    try:
+        return load_policy(path)  # type: ignore[arg-type]
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ConfigurationError(
+            f"bundle policy {path} could not be loaded: {exc}"
+        ) from exc
+
+
 def resolve_run_configuration(
     root: UPath,
     *,
@@ -137,7 +190,7 @@ def resolve_run_configuration(
     policy_digest: str,
     bundle: Bundle | None = None,
     bundle_path: UPath | None = None,
-    mapping: Mapping[str, str] | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: UPath | None = None,
     sidecar: bool = True,
     tier: ExecutionTier | None = None,
@@ -191,9 +244,12 @@ def resolve_run_configuration(
         assertions += assertions_from_overrides(
             load_mapping_file(mapping_file, origin=OverrideOrigin.FILE)
         )
+    # Arguments arrive as pairs, not a dict, so two `--map` flags for one
+    # feature reach the resolver and can be refused as a conflict.
+    pairs = mapping.items() if isinstance(mapping, Mapping) else (mapping or [])
     assertions += [
         FeatureAssertion(feature=k, taxonomy_type=v, origin=BindingOrigin.ARGUMENT)
-        for k, v in (mapping or {}).items()
+        for k, v in pairs
     ]
 
     try:
@@ -214,14 +270,47 @@ def resolve_run_configuration(
 
     effective_tier = tier or bundle.execution.tier
     requirements = bundle.requirements
+    # The binding identity is the *effective* mapping after precedence: the
+    # winning type and origin per feature, plus any per-channel semantics.
+    # Two runs that resolve the same interpretation share it; an argument
+    # that overrides a bundle changes it. Paths are not part of it.
+    effective = {
+        feature: {"taxonomy_type": w.taxonomy_type, "origin": w.origin.value}
+        for feature, w in sorted(resolved.types.items())
+    }
+    channels = (
+        [c.model_dump(mode="json") for c in bundle.binding.channels]
+        if bundle.binding is not None
+        else []
+    )
     binding_id = (
         ConfigIdentity(
-            id=bundle.binding.id,
-            digest=content_digest(bundle.binding.model_dump(mode="json")),
-            origin=str(bundle_path) if bundle_path else "bundle",
+            id=bundle.binding.id
+            if bundle.binding is not None
+            else "effective-mappings",
+            digest=content_digest({"features": effective, "channels": channels}),
+            origin="resolved",
         )
-        if bundle.binding is not None
+        if effective or channels
         else None
+    )
+    bundle_id = (
+        ConfigIdentity(
+            id=bundle.binding.id if bundle.binding is not None else "bundle",
+            digest=content_digest(
+                bundle.model_dump(mode="json", exclude={"policy": {"path"}})
+            ),
+            origin=str(bundle_path) if bundle_path else "in-memory",
+        )
+        if bundle_path is not None or bundle != Bundle()
+        else None
+    )
+    execution_id = ConfigIdentity(
+        id=f"tier-{effective_tier.value}",
+        digest=content_digest(
+            {"tier": effective_tier.value, "limits": bundle.execution.limits}
+        ),
+        origin="resolved",
     )
     return RunConfiguration(
         overrides=overrides,
@@ -244,11 +333,15 @@ def resolve_run_configuration(
             origin=str(bundle.policy.path) if bundle.policy.path else "builtin",
         ),
         binding_id=binding_id,
+        # The whole dictionary, not its key list: a changed unit or alias is
+        # a changed interpretation.
         dictionary_id=ConfigIdentity(
-            id="dictionary",
-            digest=content_digest(sorted(dictionary.entries)),
+            id=f"dictionary-v{dictionary.schema_version}",
+            digest=content_digest(dictionary.model_dump(mode="json")),
             origin="loaded",
         ),
+        execution_id=execution_id,
+        bundle_id=bundle_id,
         bundle=bundle,
     )
 
@@ -262,6 +355,8 @@ def overrides_for(config: RunConfiguration) -> Sequence[MappingOverride]:
 __all__ = [
     "RunConfiguration",
     "load_bundle",
+    "load_bundle_policy",
     "overrides_for",
+    "resolve_policy_path",
     "resolve_run_configuration",
 ]

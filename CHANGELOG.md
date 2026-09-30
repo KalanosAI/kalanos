@@ -17,6 +17,16 @@ The decision-integrity release. Report schema 7.0.0.
 - Domain: `ClockInfo` (origin incl. `publish` and `presentation`, origin evidence), `SourceOrder`, `ChannelBinding` with separate actuator kind, quantity, representation, unit and command semantics. Adapters populate these in R07-04/02.
 - Policy: `MetricPolicy.consequence`/`route`, `Policy.enforce_calibration` (off) and `calibrated_metrics`.
 
+### Contract corrections (branch review round 2)
+
+- Inventory: a declared episode that never loads is `inventory.unresolved`, counted as `unknown`; `complete` is derived, never assumed; readiness and the eligible share are null while the denominator is unresolved; the default gate fails an incomplete audit; `run.completion` is `partial`.
+- Every stream records `evaluation.payload`; under `numeric-core` a stream with channels that was not read (`missing_input`, `skipped`, `error`) makes its episode `unknown`. One stream's result never covers another stream.
+- `--tier metadata` is an execution boundary: no numeric payload is fetched, required checks are `unknown`, the default gate fails.
+- Dataset `score.train_ready` derives from the counts and inventory in assembly, with or without a letter gate; validation rejects a contradiction.
+- `run.binding` digests the effective mapping after precedence (an argument override changes it); `run.bundle` identifies the declared file; the dictionary digest covers full content; `run.execution` records tier and limits.
+- Same-priority mapping conflicts are refused wherever they occur: repeated `--map` flags, duplicate YAML keys (strict loader for bundles and mapping files), and disagreements below the winning level.
+- A bundle's relative `policy.path` resolves against the bundle's directory; missing or malformed policies are `ConfigurationError` → exit 2.
+
 ### Configuration
 
 - `--profile bundle.yaml`: one file, four sections with separate identities (`binding`, `requirements`, `policy`, `execution`).

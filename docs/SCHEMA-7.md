@@ -7,9 +7,9 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 | Field | Type | What it is |
 |---|---|---|
 | `producer` | `Producer` | Package name and version, build revision when the environment supplies `KALANOS_BUILD_REVISION`, adapter and metric implementation versions (populated by later work packages). |
-| `run` | `RunInfo` | Run id, start/finish, completion, execution tier, `source` evidence, and the four configuration identities (`requirements`, `policy`, `binding`, `dictionary`) each with a content digest. |
+| `run` | `RunInfo` | Run id, start/finish, completion (`partial` when the inventory is incomplete), execution tier, `source` evidence, and configuration identities each with a content digest: `requirements`, `policy`, `binding` (the *effective* mapping after precedence — an argument override changes it), `bundle` (the declared bundle file), `dictionary` (full content, not key list), `execution` (tier and limits). |
 | `scope` | `EvaluationScope` | `requirements_id`, `policy_id`, `binding_id`, `tier`. Every decision is relative to this. |
-| `inventory` | `Inventory` | Episodes expected (when the source declares a count), loaded, and failed with reasons; whether enumeration is believed complete. |
+| `inventory` | `Inventory` | Episodes expected (when the source declares a count), loaded, failed with reasons, and `unresolved` (declared but never enumerated — no identities are invented). `complete` is `false` whenever `unresolved > 0`; finishing a directory walk proves nothing. `notes` records oddities such as more loaded than declared. |
 | `eligibility_counts` | `EligibilityCounts` | `total`, `pass_count`, `blocked`, `review`, `unknown`, `inventory_complete`, `confirmed_eligible_share`. The counts partition `total`. |
 | `readiness` | `Readiness` | `formula_id`, `score` or `null`, `reasons`, `passing_quality`. Replaces the 6.x shape. |
 | `sufficiency` | `Sufficiency` | `status` and per-requirement `checks`. |
@@ -20,6 +20,7 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 | Field | What it is |
 |---|---|
 | `episodes[].eligibility` | `status`, `scope_id`, `policy_id`, `reasons[]` (each with `id`, `kind`, `status`, `consequence`, `route`, `detail`). Required on every episode. |
+| `episodes[].streams[].evaluation` | `payload` (`computed`, `not_required`, `missing_input`, `skipped`, `error`), `reason`, `n_channels_graded`. Under `numeric-core` a stream with channels whose payload is `missing_input`, `skipped` or `error` makes the episode `unknown` — one stream's pass never covers another stream that was not read. |
 | `findings[].consequence` | `block`, `review` or `report_only`. |
 | `findings[].route` | `contract` or `statistical` when `consequence` is `block`. |
 | `findings[].support` | `kind` (`whole_episode` or `intervals`), `index_space`, `intervals[]` with zero-based half-open `start`/`end_exclusive` and optional wider `support_start`/`support_end_exclusive`. Metrics that measure the whole episode carry `whole_episode`; no interval is ever invented. Existing metrics emit `whole_episode` until R07-05 localises them. |
@@ -28,6 +29,9 @@ Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer
 
 - `episodes[].score.train_ready` mirrors `eligibility` (`true`/`false`/`null`). No score threshold sets it. Dataset `score.train_ready` is a compatibility summary. Validation rejects a contradiction.
 - `gate.failing_episodes` is exactly the set of `blocked` episodes; validation rejects any other set.
+- Dataset `score.train_ready` is a function of `eligibility_counts` and nothing else: `false` if any blocked, `true` only if the inventory is complete, non-empty and all pass, `null` otherwise — with or without a letter gate. Validation rejects a value that disagrees.
+- `eligibility_counts.total = loaded + failed + unresolved`; failed and unresolved episodes count as `unknown`. `confirmed_eligible_share` and `readiness.score` are `null` while the inventory is incomplete.
+- `--tier metadata` reads no numeric payloads: every stream with channels reports `payload: skipped`, required numeric checks are `unknown`, and the default gate fails. A tier never lowers the requirements.
 - `gate.task_traits` and `gate.dataset_traits` are descriptive; they no longer exempt episodes from blocking.
 - `gate.pruned_score` is the mean quality of non-blocked episodes: a candidate description, not a sufficiency claim.
 - Letter fields remain and drive nothing.
@@ -65,12 +69,12 @@ requirements:
   min_pass_episodes: null
 policy:
   id: default-decisions-v1
-  path: null                     # a policy file, or the packaged default
+  path: null                     # a policy file (relative to this bundle's directory), or the packaged default
 execution:
   tier: standard                 # metadata | standard | full
 ```
 
-Every section is optional; the defaults are the built-in scope.
+Every section is optional; the defaults are the built-in scope. A duplicate key anywhere in a bundle or mapping file is a configuration error (exit 2), as is the same feature mapped to two types at one precedence level — even when a higher level would have overridden it. A missing or malformed `policy.path` is exit 2, never a traceback.
 
 ## Consumers: what to change
 

@@ -18,7 +18,7 @@ None of these predicts task success. Passing integrity checks does not establish
 | Status | Assigned when | Default use |
 |---|---|---|
 | `blocked` | A finding carries the consequence `block` | Excluded from the eligible pool |
-| `unknown` | A required family graded nothing, a required binding is unresolved, or the episode could not be graded | Never auto-approved; the missing evidence is named |
+| `unknown` | A required family graded nothing, a stream with channels was not read (payload missing, skipped by the tier, or errored), a required binding is unresolved, the episode could not be graded, or the source declared it but never yielded it | Never auto-approved; the missing evidence is named |
 | `review` | Required checks ran; a finding carries the consequence `review` | Awaits a recorded decision |
 | `pass` | Required checks ran; no blocking or review reason remains | Eligible, subject to sufficiency |
 
@@ -53,7 +53,7 @@ A blocking finding on every episode of a task is reported as a task trait; one o
 
 Otherwise it is `null` and `readiness.reasons` says why. A known all-blocked inventory scores 0; a fully passing one scores its mean quality. No assumed values are inserted for missing evidence.
 
-`eligibility_counts` is always published: `total` partitions into the four statuses, failed-to-load episodes counted as `unknown`, and `confirmed_eligible_share = pass / total` when the inventory is complete — a confirmed fraction, not an estimate.
+`eligibility_counts` is always published: `total` partitions into the four statuses; failed-to-load episodes and episodes the source declared but never yielded (`inventory.unresolved`) count as `unknown`; `confirmed_eligible_share = pass / total` only when the inventory is complete — a confirmed fraction, not an estimate. A source that declares 50 episodes and yields 49 is incomplete: the 50th is unknown, not absent.
 
 ## Sufficiency
 
@@ -70,13 +70,13 @@ A bundle (`--profile bundle.yaml`) carries four sections, each with its own iden
 | `policy` | How evidence becomes consequences | No |
 | `execution` | What this run attempts (`tier`) | No |
 
-Reducing the tier never reduces the requirements: a required check that a lower tier skips makes episodes `unknown`.
+Reducing the tier never reduces the requirements: `--tier metadata` reads no numeric payloads, so under `numeric-core` every episode is `unknown` and the default gate fails. Use it to check that a source is readable and how it is bound, not to pass it.
 
 Default scope is `numeric-core-v1`: readable numeric input under an explicit missing-value contract, the `integrity` family graded. It does not silently demand physical units, capture timing, video quality or behavioural diversity.
 
 ### Mapping precedence
 
-`--map` > `--map-file` > bundle `binding.features` > discovered `kalanos-map.yaml` > source declarations > inferred. Every displaced assertion is recorded in `binding_conflicts`. Two assertions at one priority that disagree are a configuration error (exit 2). Precedence does not validate: an override outranks a sidecar and is still an assertion.
+`--map` > `--map-file` > bundle `binding.features` > discovered `kalanos-map.yaml` > source declarations > inferred. Every displaced assertion is recorded in `binding_conflicts`. Two assertions at one priority that disagree are a configuration error (exit 2), including two `--map` flags for one feature, a duplicated key in a YAML file, and a disagreement at a level a higher level would have overridden. Precedence does not validate: an override outranks a sidecar and is still an assertion. `run.binding` identifies the *effective* mapping after precedence; `run.bundle` identifies the declared file.
 
 ## CLI gate
 
