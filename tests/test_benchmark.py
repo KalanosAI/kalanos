@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 # Internal
 from kalanos.analysis.metrics.registry import registered_metrics
-from kalanos.analysis.models.domain import Episode
+from kalanos.analysis.models.domain import Clock, ClockInfo, Episode
 from kalanos.assets.policy import load_policy
 from kalanos.benchmark import (
     Benchmark,
@@ -157,9 +157,21 @@ def test_a_spike_is_detected_wherever_spike_pct_graded_clean():
 
 
 def test_a_metric_not_graded_on_the_clean_stream_has_no_detection_cell():
-    """Verify timing metrics a reconstructed clock leaves ungraded get no cell."""
-
-    rates = _benchmark(sample=3)
+    """Generated clocks remain ineligible for acquisition checks after injection."""
+    episodes = _episodes()
+    for episode in episodes:
+        episode.streams = [
+            stream.model_copy(
+                update={
+                    "clock": Clock.RECONSTRUCTED,
+                    "clock_info": ClockInfo.from_legacy(Clock.RECONSTRUCTED),
+                }
+            )
+            for stream in episode.streams
+        ]
+    rates = benchmark_episodes(
+        episodes, policy=load_policy(None), n_episodes=len(episodes), sample=3
+    )
 
     timing = {"effective_hz", "dt_jitter_ms", "drop_rate"}
     assert not [row for row in rates.detection if row.metric in timing]

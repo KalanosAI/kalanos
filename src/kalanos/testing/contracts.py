@@ -13,7 +13,7 @@ it names a `Defect` and `apply_defect` builds the defective context;
 `check_adapter`: a confidence bid outside 0.0-1.0 or wrong on a supported or
 unsupported path, `describe` naming the wrong adapter or a wrong episode count,
 `episodes` returning a materialised list or not being deterministic,
-`sample` not honoured, non-monotonic or non-float timestamps, an empty taxonomy type,
+`sample` not honoured, non-float or misaligned timestamps, an empty taxonomy type,
 or a path that should be declined instead succeeding or raising anything
 but `AdapterRefusal`.
 """
@@ -282,7 +282,7 @@ def _check_describe(name: str, adapter: Adapter, path: UPath) -> DatasetInfo:
 
 
 def _check_timestamps(name: str, stream: Stream, path: UPath) -> None:
-    """Assert a stream's timestamps are float, non-null, finite and non-decreasing.
+    """Assert the adapter preserves a numeric axis and aligned provenance.
 
     Parameters
     ----------
@@ -299,11 +299,22 @@ def _check_timestamps(name: str, stream: Stream, path: UPath) -> None:
     assert timestamps.dtype.is_float(), (
         f"{subject} must be float dtype, got {timestamps.dtype}"
     )
-    assert timestamps.null_count() == 0, f"{subject} must not contain nulls"
-    assert timestamps.is_finite().all(), f"{subject} must all be finite"
-    assert timestamps.diff().drop_nulls().ge(0).all(), (
-        f"{subject} must be non-decreasing"
-    )
+    # Nulls, nonfinite values and backwards steps can be real input defects.
+    # The adapter must retain them, not repair a recording to satisfy this helper.
+    if stream.native_timestamps is not None:
+        assert len(stream.native_timestamps) == len(timestamps), (
+            f"{subject}: native tick length mismatch"
+        )
+    indices = stream.source_order.original_index
+    if indices is not None:
+        assert (
+            len(indices) == len(timestamps)
+            and len(set(indices)) == len(indices)
+            and all(i >= 0 for i in indices)
+        ), f"{subject}: invalid source row map"
+        assert not stream.source_order.preserved or indices == sorted(indices), (
+            f"{subject}: inconsistent preserved order"
+        )
 
 
 def _check_stream(name: str, stream: Stream, path: UPath) -> None:
@@ -368,7 +379,12 @@ def _episode_shape(episodes: list[Episode]) -> list[tuple]:
                     stream.instance,
                     stream.attribution,
                     stream.source_field,
-                    tuple(stream.timestamps.to_list()),
+                    tuple(
+                        ("nonfinite", str(value))
+                        if value is not None and not math.isfinite(value)
+                        else value
+                        for value in stream.timestamps.to_list()
+                    ),
                     tuple(channel.name for channel in stream.channels),
                 )
                 for stream in episode.streams
@@ -422,7 +438,8 @@ def check_adapter(
       when declared, matches a full iteration.
     - `episodes` returns an iterator rather than a materialised list, is
       deterministic between two calls, and yields at least one episode.
-    - Every stream's timestamps are float, non-null, finite and non-decreasing,
+    - Every stream's canonical timestamps are float, with aligned native ticks and
+      a consistent source-row map when supplied; source defects are retained,
       its taxonomy type is non-empty and either resolved or explicitly `unmapped.*`,
       and its payload length matches its timestamps.
     - `sample=0` yields nothing, and `sample=1` yields at most one episode.

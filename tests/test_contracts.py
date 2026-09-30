@@ -42,6 +42,9 @@ from kalanos.testing import (
 # A metric missing from here has no discrimination test — the sweep below fails on it.
 BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "effective_hz": Defect.CLOCK_DRIFT,
+    "recorded_hz": Defect.CLOCK_DRIFT,
+    "recorded_dt_spread_ms": Defect.JITTER,
+    "recorded_drop_estimate": Defect.DROPOUT,
     "dt_jitter_ms": Defect.JITTER,
     "monotonic_violations": Defect.REPEATED_TIMESTAMPS,
     "drop_rate": Defect.DROPOUT,

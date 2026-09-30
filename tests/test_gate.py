@@ -434,8 +434,8 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
     )
 
 
-def test_a_metric_graded_in_a_minority_of_episodes_is_still_not_observable(tmp_path):
-    """Two episodes with a measured clock do not stand in for the other eighteen."""
+def test_jitter_alone_cannot_make_an_unknown_clock_observable(tmp_path):
+    """Two jittery time axes provide no producer declaration of capture origin."""
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched=set(), jittered={0, 1})
@@ -445,4 +445,4 @@ def test_a_metric_graded_in_a_minority_of_episodes_is_still_not_observable(tmp_p
     assert report.gate is not None
     not_observable = {item.metric: item for item in report.gate.coverage.not_observable}
     assert {"effective_hz", "drop_rate"} <= not_observable.keys()
-    assert not_observable["drop_rate"].share == pytest.approx(0.9)
+    assert not_observable["drop_rate"].share == pytest.approx(1.0)

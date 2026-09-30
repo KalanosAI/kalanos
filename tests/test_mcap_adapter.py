@@ -107,12 +107,13 @@ def test_a_topic_name_resolves_when_the_message_type_does_not():
     assert streams["/cmd_vel"].taxonomy_type == "action.base_velocity_command"
 
 
-def test_a_header_stamped_topic_keeps_the_capture_clock():
-    """Verify a header-stamped topic reads `Clock.CAPTURE`, a headerless one `LOG`."""
+def test_a_header_stamped_topic_does_not_imply_capture_origin():
+    """A populated header stamp does not certify capture timing."""
 
     streams = _episode_streams()
 
-    assert streams["/joint_states"].clock is Clock.CAPTURE
+    assert streams["/joint_states"].clock is Clock.UNKNOWN
+    assert not streams["/joint_states"].clock_info.certifies_acquisition
     assert streams["/cmd_vel"].clock is Clock.LOG
 
 

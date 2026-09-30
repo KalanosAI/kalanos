@@ -179,6 +179,7 @@ class ClockInfo(BaseModel):
     native_dtype: str | None = None
     epoch: str | None = None
     transforms: list[str] = Field(default_factory=list)
+    tick_period_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     @classmethod
     def from_legacy(cls, clock: "Clock") -> "ClockInfo":
@@ -187,7 +188,7 @@ class ClockInfo(BaseModel):
         match clock:
             case Clock.CAPTURE:
                 return cls(
-                    origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.PRODUCER
+                    origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.INFERRED
                 )
             case Clock.RECEIVE:
                 return cls(
@@ -408,6 +409,7 @@ class Stream(BaseModel):
     attribution: Attribution = Attribution.SINGLE
     kind: Kind
     timestamps: pl.Series
+    native_timestamps: pl.Series | None = None
     payload: Payload | None = None
     source_path: AnyPath
     source_field: str | None = None
@@ -418,6 +420,40 @@ class Stream(BaseModel):
     timestamp_dtype: TimestampDtype
     is_regular: bool = False
     channels: list[Channel] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _clock_and_order_contract(self) -> "Stream":
+        """Keep legacy clock labels derived and native rows aligned.
+
+        A legacy capture label is insufficient evidence for acquisition timing.
+        Explicit ClockInfo is authoritative when both representations are given.
+        A transformed stream without an index map remains unobservable in source
+        order; consumers must not silently inspect the sorted view instead.
+        """
+
+        if self.clock_info is None:
+            self.clock_info = ClockInfo.from_legacy(self.clock)
+        self.clock = self.clock_info.origin.compatibility_clock
+        if self.native_timestamps is not None and len(self.native_timestamps) != len(
+            self.timestamps
+        ):
+            raise ValueError("native timestamps must align with canonical timestamps")
+        indices = self.source_order.original_index
+        if indices is not None and (
+            len(indices) != len(self.timestamps)
+            or len(set(indices)) != len(indices)
+            or any(i < 0 for i in indices)
+        ):
+            raise ValueError(
+                "source row indices must be unique, nonnegative and aligned"
+            )
+        if (
+            self.source_order.preserved
+            and indices is not None
+            and indices != sorted(indices)
+        ):
+            raise ValueError("preserved source order requires increasing row indices")
+        return self
 
     @model_validator(mode="before")
     @classmethod

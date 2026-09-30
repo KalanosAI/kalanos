@@ -586,32 +586,9 @@ def test_an_episode_level_finding_names_no_stream_or_channel(monkeypatch):
     assert stream_finding.stream == "unmapped.tcp_pose"
 
 
-def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
-    """Verify assemble_report's actual numbers against the fixture's own pathologies.
-
-    `tests/fixtures/README.md` names what each instance is: `armA` is the
-    negative control, `armB` carries a flatlined `tcp_pose_z_mm` channel,
-    `armC` carries a burst of dropped samples, `armD` has a jittery clock
-    that stays ungraded. With `integrity` bands grading alongside `timing`,
-    every instance's own noise floor and flatline runs move its score off
-    100. `armC`'s score and the rollups pin an exact number, since
-    `drop_rate` is a settled band; the other three assert only that they
-    stay high and that armB — the one with an outright flatlined channel —
-    scores below its clean siblings, since their own bands are still
-    candidates and pinning their sixteen-digit values would break on the
-    next confirmation run. `drop_rate` runs at stream level, so it is
-    armC's own metrics that carry its critical status, not any of its
-    channels'; `flatline_pct` runs at channel level, so armB's critical
-    finding lands on `tcp_pose_z_mm` specifically.
-
-    `armA` and `armB` are stamped on an exactly even clock, so their rate
-    metrics are not applicable — capture timing is not observable there — and
-    their perfect clocks no longer dilute armC's dropout in the rollup (84.037
-    before 0.5.0, 82.474 since). Since 0.6.2 a channel still for part of the
-    episode is not "stuck" (flatline bad above 90%), which lifts armC (59.826
-    to 61.381) and the rollup (84.101). Since 0.6.3 a channel that never changes
-    in an episode is a warning, not critical, which lifts armB (83.333 to
-    91.667) and the rollup (86.185).
+def test_report_grades_integrity_without_unverified_acquisition_timing():
+    """CSV timestamps have unknown origin. Recorded gaps stay descriptive;
+    integrity findings still grade and retain their instance/channel addresses.
     """
 
     raw_episode, adapter = _analysed_fixture()
@@ -646,7 +623,7 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
     assert arm_c is not None
     assert arm_d is not None
 
-    assert arm_c == pytest.approx(61.381, abs=1e-3)
+    assert arm_c > 80.0
     assert arm_a > 90.0
     assert arm_d > 90.0
     assert arm_b > 80.0
@@ -655,24 +632,20 @@ def test_assemble_report_grades_the_fixtures_four_instances_to_known_scores():
 
     [armc] = [stream for stream in episode.streams if stream.instance == "armC"]
     assert armc.channels, "armC's arm stream lost its channels somewhere in the walk"
-    assert armc.metrics["drop_rate"].status == MetricStatus.CRITICAL
+    assert armc.metrics["drop_rate"].status == MetricStatus.NOT_APPLICABLE
+    assert armc.metrics["recorded_drop_estimate"].status == MetricStatus.REPORT_ONLY
+    assert armc.metrics["recorded_drop_estimate"].value > 0.05
 
-    assert episode.score.score == pytest.approx(86.185, abs=1e-3)
-    assert report.score.score == pytest.approx(86.185, abs=1e-3)
+    assert report.score.score == episode.score.score
+    assert report.score.score > 85
 
-    # The stream-level drop_rate on armC is the dataset's only critical
-    # finding. armB's flatlined channel never changes in the episode, which
-    # since 0.6.3 reads as unused or disconnected: a channel-level warning,
-    # not critical. Between them they prove both levels of grade_stream thread
-    # episode_id/instance/channel correctly, not just that a finding of the
-    # right severity exists somewhere in the list.
+    # Missing provenance must not turn a recorded-axis estimate into a
+    # critical acquisition finding. The real channel finding keeps its address.
     by_severity = {
         (finding.metric_id, finding.instance, finding.channel): finding.severity
         for finding in report.findings
     }
-    assert {key for key, sev in by_severity.items() if sev == Severity.CRITICAL} == {
-        ("timing.drop_rate", "armC", None)
-    }
+    assert not any(key[0] == "timing.drop_rate" for key in by_severity)
     assert (
         by_severity[("integrity.flatline_pct", "armB", "tcp_pose_z_mm")]
         == Severity.WARNING
@@ -812,13 +785,7 @@ def test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child(
 
 
 def test_assemble_report_regrades_metrics_rather_than_keeping_report_only():
-    """Verify scoring's resolve_status actually ran, rather than metrics' own output.
-
-    Every metric in `metrics.timing` returns `report_only` by design, since it
-    has no policy to grade against — a Report showing only `report_only`
-    everywhere would mean `score_metrics` never ran. `drop_rate` now runs at
-    stream level, so the statuses to check live on the stream, not a channel.
-    """
+    """Integrity metrics still grade when unknown-clock acquisition checks abstain."""
 
     raw_episode, adapter = _analysed_fixture()
     policy = load_default_policy()
@@ -839,7 +806,8 @@ def test_assemble_report_regrades_metrics_rather_than_keeping_report_only():
         metric.status
         for episode in report.episodes
         for stream in episode.streams
-        for metric in stream.metrics.values()
+        for channel in stream.channels
+        for metric in channel.metrics.values()
     }
     assert statuses & {MetricStatus.GOOD, MetricStatus.WARNING, MetricStatus.CRITICAL}
 

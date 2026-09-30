@@ -7,6 +7,7 @@
 # Built-in
 import json
 import logging
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +25,12 @@ from kalanos.analysis.models.domain import (
     UNMAPPED_TAXONOMY_PREFIX,
     Channel,
     Clock,
+    ClockInfo,
+    ClockOrigin,
     FramePayload,
     Kind,
     MappingSource,
+    OriginEvidence,
     Stream,
     TimestampDtype,
 )
@@ -360,7 +364,7 @@ def sampling_is_regular(timestamps: pl.Series) -> bool:
     Parameters
     ----------
     timestamps : pl.Series
-        The episode's own timestamps, already time-sorted.
+        The episode's own timestamps, in source row order.
 
     Returns
     -------
@@ -369,6 +373,8 @@ def sampling_is_regular(timestamps: pl.Series) -> bool:
     """
 
     ts_values = timestamps.to_list()
+    if any(value is None or not math.isfinite(value) for value in ts_values):
+        return False
     gaps = [b - a for a, b in zip(ts_values, ts_values[1:], strict=False)]
     return regularity(gaps).is_regular
 
@@ -387,12 +393,13 @@ def episode_clock(
     """Label an episode's clock `RECONSTRUCTED` when its stamps are `frame_index / fps`.
 
     Every timestamp has to match to within the rounding its source format allows,
-    and `frame_index` has to step by exactly one between consecutive rows.
+    including when rows are missing, repeated or out of order. Those defects
+    remain visible to structural timing checks.
 
     Parameters
     ----------
     episode_frame : pl.DataFrame
-        The episode's own rows, already time-sorted.
+        The episode's own rows, in source row order.
     fps : float or None
         The declared frame rate, or `None` when `info.json` declares none.
     timestamp_dtype : TimestampDtype
@@ -404,14 +411,21 @@ def episode_clock(
         `RECONSTRUCTED` when every condition holds, `UNKNOWN` otherwise.
     """
 
-    if fps is None or fps <= 0 or "frame_index" not in episode_frame.columns:
+    if (
+        fps is None
+        or not math.isfinite(fps)
+        or fps <= 0
+        or "frame_index" not in episode_frame.columns
+    ):
         return Clock.UNKNOWN
     frame_index = episode_frame["frame_index"]
     has_nulls = frame_index.null_count() or episode_frame[TIME_COLUMN].null_count()
     if episode_frame.height == 0 or has_nulls:
         return Clock.UNKNOWN
-    # A skipped frame index stays UNKNOWN, so the gap test still sees the doubled gap.
-    if not (frame_index.diff().drop_nulls() == 1).all():
+    if (
+        not frame_index.is_finite().all()
+        or not episode_frame[TIME_COLUMN].is_finite().all()
+    ):
         return Clock.UNKNOWN
 
     timestamp = pl.col(TIME_COLUMN).cast(pl.Float64)
@@ -419,7 +433,13 @@ def episode_clock(
         (timestamp - pl.col("frame_index") / fps).abs().max().alias("deviation"),
         timestamp.abs().max().alias("largest"),
     ).row(0)
-    within = deviation <= timestamp_dtype.epsilon * largest
+    within = (
+        deviation is not None
+        and largest is not None
+        and math.isfinite(deviation)
+        and math.isfinite(largest)
+        and deviation <= timestamp_dtype.epsilon * max(largest, 1.0)
+    )
     return Clock.RECONSTRUCTED if within else Clock.UNKNOWN
 
 
@@ -441,7 +461,7 @@ def series_stream(
     Parameters
     ----------
     frame : pl.DataFrame
-        The episode's own rows, already time-sorted.
+        The episode's own rows, in source row order.
     feature : str
         The feature key as `info.json` spells it.
     channels : list[Channel]
@@ -557,7 +577,7 @@ def series_streams(
     Parameters
     ----------
     episode_frame : pl.DataFrame
-        The episode's own rows, already time-sorted.
+        The episode's own rows, in source row order.
     plan : FeaturePlan
         The dataset's resolved feature plan.
     timestamps : pl.Series
@@ -602,3 +622,34 @@ def series_streams(
             )
         )
     return streams
+
+
+def with_episode_clock(
+    streams: list[Stream], frame: pl.DataFrame, *, clock: Clock, domain: str
+) -> list[Stream]:
+    """Attach the actual recorded time column, without claiming decoded video PTS."""
+    native = frame[TIME_COLUMN]
+    info = ClockInfo(
+        origin=ClockOrigin.GENERATED
+        if clock == Clock.RECONSTRUCTED
+        else ClockOrigin.UNKNOWN,
+        origin_evidence=OriginEvidence.INFERRED
+        if clock == Clock.RECONSTRUCTED
+        else OriginEvidence.NONE,
+        source_field=TIME_COLUMN,
+        native_unit="s",
+        native_dtype=str(native.dtype),
+        epoch="episode-relative",
+        domain=domain,
+        transforms=[f"{native.dtype}->Float64 seconds"],
+    )
+    return [
+        s.model_copy(
+            update={
+                "clock_info": info.model_copy(deep=True),
+                "clock": info.origin.compatibility_clock,
+                "native_timestamps": native,
+            }
+        )
+        for s in streams
+    ]

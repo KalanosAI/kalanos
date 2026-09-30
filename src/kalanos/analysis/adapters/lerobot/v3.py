@@ -31,6 +31,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     sampling_is_regular,
     series_streams,
     timestamp_dtype_of,
+    with_episode_clock,
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
@@ -318,7 +319,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
 
                 episode_frame = frame.filter(
                     pl.col("episode_index") == row["episode_index"]
-                ).sort(TIME_COLUMN)
+                )
                 timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                 clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -369,6 +370,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     path, f"episode {row.get('episode_index')}: {exc}"
                 ) from exc
 
+            streams = with_episode_clock(
+                streams,
+                episode_frame,
+                clock=clock,
+                domain=f"{path}#episode:{row['episode_index']}",
+            )
             yield Episode(
                 id=f"episode_{row['episode_index']:06d}",
                 streams=streams,

@@ -22,9 +22,12 @@ from kalanos.analysis.metrics.registry import (
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
+    ClockInfo,
+    ClockOrigin,
     Episode,
     FramePayload,
     Kind,
+    OriginEvidence,
     Stream,
     TimestampDtype,
 )
@@ -69,7 +72,7 @@ def _stream_context(
     *,
     is_regular: bool = True,
     taxonomy_type: str = "unmapped.tcp_pose_x_mm",
-    clock: Clock = Clock.UNKNOWN,
+    clock: Clock = Clock.CAPTURE,
     timestamp_dtype: TimestampDtype = TimestampDtype.FLOAT64,
 ) -> StreamContext:
     """Build a StreamContext from a plain list of timestamps.
@@ -103,6 +106,11 @@ def _stream_context(
         timestamps=pl.Series("time_s", timestamps),
         source_path=_SOURCE_PATH,
         clock=clock,
+        clock_info=ClockInfo(
+            origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.PRODUCER
+        )
+        if clock == Clock.CAPTURE
+        else None,
         timestamp_dtype=timestamp_dtype,
     )
     return StreamContext(stream=stream, is_regular=is_regular)
@@ -252,22 +260,14 @@ def test_a_collapsed_clock_returns_not_applicable_rather_than_raising_or_zero():
         assert results[name].value is None
 
 
-def test_a_null_timestamp_is_dropped_rather_than_crashing_the_metric():
-    """Verify a hole in the time column is skipped, not subtracted against None.
-
-    `loading` sorts unresolved timestamps to the tail rather than dropping
-    them, so a well-formed stream can still hand this stage a null partway
-    through. Four valid timestamps survive the drop here —
-    [0.0, 0.01, 0.03, 0.04] — giving gaps of [0.01, 0.02, 0.01].
-    """
-
+def test_a_null_timestamp_breaks_adjacency_without_inventing_dropout():
+    """A missing timestamp cannot create a measured gap across that row."""
     ctx = _stream_context([0.0, 0.01, None, 0.03, 0.04])
-
     results = run_stream_metrics(ctx)
-
-    assert results["effective_hz"].value == pytest.approx(100.0)
-    assert results["dt_jitter_ms"].value == pytest.approx(5.7735, abs=1e-3)
-    assert results["drop_rate"].value == pytest.approx(0.2)
+    for key in ("effective_hz", "dt_jitter_ms", "drop_rate"):
+        assert results[key].value is None
+        assert "invalid timestamps" in results[key].evidence["reason"]
+    assert results["monotonic_violations"].evidence["n_gaps"] == 2
 
 
 def test_a_stream_rejects_a_payload_and_timestamps_length_mismatch():
@@ -613,10 +613,10 @@ def test_rate_metrics_report_timing_not_observable_on_an_exactly_even_clock(name
     """
 
     stamps = [index / 30.0 for index in range(60)]
-    result = run_stream_metrics(_stream_context(stamps))[name]
+    result = run_stream_metrics(_stream_context(stamps, clock=Clock.UNKNOWN))[name]
 
     assert result.status == MetricStatus.NOT_APPLICABLE
-    assert "floating-point precision" in result.evidence["reason"]
+    assert "explicit producer" in result.evidence["reason"]
 
 
 @pytest.mark.parametrize("name", ["effective_hz", "dt_jitter_ms", "drop_rate"])
@@ -624,11 +624,13 @@ def test_float32_frame_number_stamps_are_not_observable_past_a_minute(name):
     """Past about 32 s at 30 Hz, float32 rounding alone moves gaps by over 0.01%."""
 
     stamps = _float32_frame_number_stamps(1801)
-    context = _stream_context(stamps, timestamp_dtype=TimestampDtype.FLOAT32)
+    context = _stream_context(
+        stamps, timestamp_dtype=TimestampDtype.FLOAT32, clock=Clock.UNKNOWN
+    )
     result = run_stream_metrics(context)[name]
 
     assert result.status == MetricStatus.NOT_APPLICABLE
-    assert "floating-point precision" in result.evidence["reason"]
+    assert "explicit producer" in result.evidence["reason"]
 
 
 def test_one_dropped_frame_on_a_float32_reconstructed_clock_is_still_measured():
@@ -636,8 +638,10 @@ def test_one_dropped_frame_on_a_float32_reconstructed_clock_is_still_measured():
 
     stamps = _float32_frame_number_stamps(1801)
     del stamps[900]
-    context = _stream_context(stamps, timestamp_dtype=TimestampDtype.FLOAT32)
-    result = run_stream_metrics(context)["drop_rate"]
+    context = _stream_context(
+        stamps, timestamp_dtype=TimestampDtype.FLOAT32, clock=Clock.UNKNOWN
+    )
+    result = run_stream_metrics(context)["recorded_drop_estimate"]
 
     assert result.status != MetricStatus.NOT_APPLICABLE
     assert result.value == pytest.approx(1 / 1801, rel=0.1)
@@ -651,7 +655,7 @@ def test_a_reconstructed_clock_label_makes_timing_not_observable():
 
     for name in ("effective_hz", "dt_jitter_ms", "drop_rate"):
         assert results[name].status == MetricStatus.NOT_APPLICABLE, name
-        assert "frame numbers divided by" in results[name].evidence["reason"], name
+        assert "generated" in results[name].evidence["reason"], name
     assert results["monotonic_violations"].value is not None
 
 

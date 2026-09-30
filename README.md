@@ -123,7 +123,7 @@ How to read it, top to bottom:
 
 Every metric answers one of four questions, and none of them needs labels:
 
-- **Did the clock lie?** Timestamp jitter, dropped samples, streams out of sync. When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred.
+- **What does the clock say?** Backwards and repeated timestamps, the recorded cadence, interval spread and gaps, and where each timestamp came from (captured, logged, generated from frame numbers, unknown). When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred. Kalanos reports what the recorded timeline shows, and only grades *capture* timing when the recording carries evidence that its timestamps are capture times; see [Clock provenance and recorded order](#clock-provenance-and-recorded-order).
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
@@ -143,34 +143,32 @@ Letter grades are deprecated since 0.6.5: reports still carry the old letter fie
 
 ### What will my data score? Worked examples
 
-Each row is a 50-episode, 50 Hz arm dataset with one problem dialled in, scored by Kalanos 0.6.5; the dataset-trait row shows the 0.7.0 result, which is the only one that changed. Everything else is clean, including a realistic 0.25% clock wobble.
+Each row is a 50-episode, 50 Hz arm dataset in HDF5 with one problem dialled in, scored by Kalanos 0.7.0. Everything else is clean, including a realistic 0.25% clock wobble. Its timestamps are an ordinary `timestamp` dataset, so their origin is *unknown*: nothing in the file says they were stamped at capture. That is the situation for almost every public robotics dataset, and it decides how the timing rows read.
 
-| What's wrong | Readiness | Episodes passing | Blocking | After excluding them |
+| What's wrong | Readiness | Episodes passing | Blocking | What the report shows |
 |---|---|---|---|---|
 | Nothing (clean control) | **100** | 50/50 | 0 | — |
-| 3% of samples dropped in 5 episodes | **100** | 50/50 | 0 (warning only) | — |
-| 8% of samples dropped in 2 episodes (4%) | **96** | 48/50 | 2 | 100 |
-| 8% of samples dropped in 5 episodes (10%) | **90** | 45/50 | 5 | 100 |
-| 8% of samples dropped in 10 episodes (20%) | **80** | 40/50 | 10 | 100 |
-| 8% of samples dropped in 20 episodes (40%) | **60** | 30/50 | 20 | 100 |
-| Control glitches (sudden command jumps) in 4 episodes (8%) | **92** | 46/50 | 4 | 100 |
-| Clock declared 50 Hz, actually 45 Hz (10% slow) | **100** | 50/50 | 0 | — |
-| Clock declared 50 Hz, actually 40 Hz (20% slow) | **95** | 50/50 | 0 (warning: lowers timing) | — |
-| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **0** | 0/50 | 50: a dataset trait, still blocking (see below) | — |
-| Clock jitter of 5% of the sampling period, every episode | **100** | 50/50 | 0: jitter is measured, not yet scored | — |
-| 5% jitter **and** 8% of samples dropped in 10 episodes | **80** | 40/50 | 10 (the drops) | 100 |
-| 5% repeated timestamps in 10 episodes | **100** | 50/50 | 0: measured, not yet scored | — |
+| 3% of samples dropped in 5 episodes | **100** | 50/50 | 0 | `recorded_drop_estimate` on the 5 episodes |
+| 8% of samples dropped in 5 episodes (10%) | **100** | 50/50 | 0 | `recorded_drop_estimate` on the 5 episodes |
+| 8% of samples dropped in 20 episodes (40%) | **98** | 50/50 | 0 | `recorded_drop_estimate` on the 20 episodes |
+| Control glitches (sudden command jumps) in 4 episodes (8%) | **92** | 46/50 | 4 | Spike findings on the 4 episodes; 100 after excluding them |
+| Clock declared 50 Hz, actually 45 Hz (10% slow) | **100** | 50/50 | 0 | `recorded_hz` 45 |
+| Clock declared 50 Hz, actually 35 Hz (30% slow), every episode | **100** | 50/50 | 0 | `recorded_hz` 35 on every episode |
+| Clock jitter of 5% of the sampling period, every episode | **100** | 50/50 | 0 | `recorded_dt_spread_ms` |
+| 5% jitter **and** 8% of samples dropped in 10 episodes | **99** | 50/50 | 0 | Spread everywhere; drop estimate on the 10 |
+| 5% repeated timestamps in 10 episodes | **100** | 50/50 | 0 | `monotonic_violations` on the 10, with source rows |
 
 How to read it:
 
-- **Dropped samples**: under 1% of an episode is fine, 1–5% is a warning that lowers its quality, over 5% makes the episode blocking. Readiness then falls with the share of blocking episodes: 10 blocking of 50 is 80.
-- **Glitches** make the episodes they hit blocking, through the spike and noise checks.
-- **A problem in every episode blocks every episode.** A clock 30% slow in all 50 episodes is listed as a dataset trait so you see it's systemic, but it still blocks all 50: readiness 0, not 93. Excluding episodes can't fix it; the remedy is fixing the recording, or, if it's a known convention rather than a defect, a policy rule that exempts that finding under a named scope. (Before 0.7.0 traits were exempt, which let a defect in every episode read as 93.)
-- **Jitter and repeated timestamps** appear in every report with their numbers but don't change readiness yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
+- **Timing is reported, not graded, unless capture evidence exists.** The drop estimate, recorded rate and interval spread describe the recorded timeline. They cannot tell a lost sensor frame from an exporter that skipped a row, or a slow clock from a declared rate that was simply wrong, so they are report-only. The capture checks (`drop_rate`, `effective_hz`, `dt_jitter_ms`) grade and can block only when an adapter records producer evidence that the timestamps are capture times. No built-in reader promotes a timestamp to capture on its own; an adapter with an authoritative capture contract can (see [docs/ADAPTERS.md](docs/ADAPTERS.md)).
+- **Read the timing findings before trusting a timing-sensitive dataset.** A readiness of 100 here says the integrity checks found nothing; it is not a claim that the clock was good. The report names every episode with a drop estimate, and the recorded rate beside the rate you expected.
+- **Glitches** make the episodes they hit blocking, through the spike and noise checks. Readiness falls with the share of blocking episodes: 4 of 50 is 92.
+- **A problem in every episode blocks every episode.** A blocking finding shared by all 50 episodes is listed as a dataset trait so you see it's systemic, but it still blocks all 50: readiness 0. Excluding episodes can't fix it; the remedy is fixing the recording, or, if it's a known convention rather than a defect, a policy rule that exempts that finding under a named scope.
+- **Repeated and backwards timestamps** are measured in source order, never hidden by sorting, and listed with the source rows they occur on. They don't change readiness yet: their thresholds will be set from real recordings, not guessed ([docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md)).
 
 All of these thresholds are candidates, tested on synthetic and real datasets and open to revision against labelled failures.
 
-Checks that can't observe something say so rather than score it: on converted datasets whose timestamps were reconstructed from frame numbers (most LeRobot hub data), the timing checks report *capture timing is not observable* instead of a perfect score, and the noise check needs at least ~45 Hz to tell sensor noise from motion.
+Checks that can't observe something say so rather than score it: without evidence that timestamps are capture times (including converted datasets whose timestamps were generated from frame numbers, which is most LeRobot hub data), the capture timing checks report *not observable* instead of a perfect score, while the recorded-timeline checks still describe what the timestamps show. The noise check needs at least ~45 Hz to tell sensor noise from motion.
 
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
@@ -452,6 +450,49 @@ no path is supplied. A relative policy path in an in-memory bundle is rejected.
 
 See [the R07-02 implementation contract](docs/R07-02.md) for the validation shape,
 test matrix, migration considerations and remaining release boundaries.
+
+### Clock provenance and recorded order
+
+Reports include `clock_info` and `source_order` for every stream, including
+metadata-only runs. They describe the timestamp origin, its evidence, source
+field, native unit/dtype, known domain/epoch and conversions. Timestamp origin
+can be capture, receive, publish, log, presentation, generated, simulation or
+unknown. A shared numeric epoch does not establish clock synchronization.
+
+Grading preserves source row order. Backwards timestamps and repeated steps stay
+visible; grading does not repair them by sorting. Timing calculations retain
+native ticks internally and subtract integer ticks before converting to seconds.
+Null, NaN and infinite timestamps break adjacency and retain their source row
+addresses. A reordered third-party stream needs a source-row index map for
+ordering checks; without one those checks abstain.
+
+`recorded_hz`, `recorded_dt_spread_ms` and `recorded_drop_estimate` describe the
+recorded timeline and are report-only under the default policy. A generated
+50 Hz timeline can have measurable gaps without proving any sensor frame loss.
+The acquisition checks `effective_hz`, `dt_jitter_ms` and `drop_rate` require
+explicit producer evidence that timestamps represent capture time. Jitter alone
+does not provide that evidence, and a uniform producer-declared capture clock
+is not rejected just for being uniform.
+
+LeRobot frame-index/rate matches are labelled inferred generation, even when rows
+are missing or out of order. An HDF5 grid created by the adapter is labelled known
+generation; an existing damaged time column is preserved. MCAP uses a complete
+header time column with unknown origin, otherwise a distinguishable nonzero
+publish-time column, otherwise log time; it never mixes these fields row by row.
+A header timestamp alone does not certify capture time. Camera streams backed by
+LeRobot metadata retain that metadata clock; decoded media PTS are not inspected
+by this slice.
+
+Existing scores can change: unverified acquisition checks now abstain, and
+preserved row order can expose previously hidden defects. A higher score after
+removing unsupported checks is not evidence of improved recording quality.
+Previously saved reports are not rewritten. Adapters with an authoritative
+producer capture contract can supply explicit `ClockInfo`; there is no automatic
+clock promotion through a channel mapping or bundle declaration.
+
+See [the R07-04 clock contract](docs/R07-04.md) for code changes, test cases,
+source-format limits and release checks.
+
 
 ---
 

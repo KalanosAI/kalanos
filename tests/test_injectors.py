@@ -8,7 +8,12 @@
 import pytest
 
 # Internal
-from kalanos.analysis.models.domain import Clock, FramePayload, TimestampDtype
+from kalanos.analysis.models.domain import (
+    Clock,
+    ClockInfo,
+    FramePayload,
+    TimestampDtype,
+)
 from kalanos.testing import (
     Defect,
     add_noise,
@@ -94,15 +99,20 @@ def test_dropping_samples_removes_timestamps_and_rows_together():
     assert surviving == expected
 
 
-def test_retiming_a_reconstructed_clock_drops_the_label_and_keeps_the_dtype():
-    """The rewritten stamps are no longer frame numbers, so the defect stays visible."""
+def test_dropout_preserves_clock_origin_and_keeps_the_dtype():
+    """A missing row does not turn generated timestamps into measured capture time."""
 
     reconstructed = clean_recording().model_copy(
-        update={"clock": Clock.RECONSTRUCTED, "timestamp_dtype": TimestampDtype.FLOAT32}
+        update={
+            "clock": Clock.RECONSTRUCTED,
+            "clock_info": ClockInfo.from_legacy(Clock.RECONSTRUCTED),
+            "timestamp_dtype": TimestampDtype.FLOAT32,
+        }
     )
     dropped = drop_samples(reconstructed)
 
-    assert dropped.clock is Clock.UNKNOWN
+    assert dropped.clock is Clock.RECONSTRUCTED
+    assert not dropped.clock_info.certifies_acquisition
     assert dropped.timestamp_dtype is TimestampDtype.FLOAT32
 
 

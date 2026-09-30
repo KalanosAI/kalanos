@@ -32,6 +32,14 @@ The decision-integrity release. Report schema 7.0.0.
 - Inventory: an adapter that refuses part-way keeps the episodes it yielded and the count it declared; the gap is `unresolved`; a refused source is listed in `inventory.refused_sources` rather than counted as one failed episode; a refused directory is not re-offered file by file; `run.completion` is `partial`.
 - Metadata tier is enforced at the storage boundary for LeRobot v2/v3: parquet schema read, index/clock columns projected, numeric vectors never materialised (`kalanos.analysis.execution` carries the tier to adapters). `StreamEvaluation.n_channels_declared` added.
 
+### Clock provenance and recorded order (R07-04)
+
+- Readers preserve source row order (LeRobot v2/v3, CSV/delimited/JSON/JSONL, HDF5, MCAP); backwards and repeated timestamps are measured in source order with the offending source rows, never hidden by sorting.
+- Every stream reports `clock_info` (origin, origin evidence, source field, native unit/dtype, domain/epoch, transforms) and `source_order`, including at metadata tier. Native integer ticks are subtracted before conversion to seconds; null/NaN/inf timestamps break adjacency and keep their source addresses.
+- New report-only recorded-timeline checks: `recorded_hz`, `recorded_dt_spread_ms`, `recorded_drop_estimate`. The capture checks `effective_hz`, `dt_jitter_ms` and `drop_rate` require producer evidence that timestamps are capture times, and abstain otherwise.
+- **Behaviour change:** no built-in reader records producer capture evidence, so dropped samples, wrong clock rates and jitter no longer block or lower readiness on built-in formats. They are reported, with the affected episodes named. A legacy `Clock.CAPTURE` label migrates as inferred capture, not producer proof. README worked examples re-scored on 0.7.0.
+- MCAP reads in file order and selects header, then distinguishable publish, then log time per topic; a header stamp alone is not capture evidence. HDF5 keeps a damaged recorded time axis instead of substituting a generated grid.
+
 ### Contract corrections (branch review round 4)
 
 - CLI: an incomplete inventory fails the default `--fail-on blocked,unknown` gate (exit 1) — a refused source alone, passing episodes beside a refused source, and undelivered declared episodes. `--fail-on blocked` permits it with a stderr warning. Operational errors remain exit 2.
