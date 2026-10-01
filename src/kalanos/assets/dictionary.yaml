@@ -31,8 +31,27 @@
 #   quality     - QC results, drift and anomaly reports
 #   governance  - licensing, privacy and access controls
 #   storage     - the container format the data is shipped in
+#
+# The `categories` table below files each family under its reference-taxonomy category, and puts that category in one group: sensor, command, derived, outcome or context.
 
-schema_version: 1
+schema_version: 2
+categories:
+  proprio:    { slug: proprioceptive_state,    group: sensor  }
+  extero:     { slug: exteroceptive_streams,   group: sensor  }
+  action:     { slug: action_control,          group: command }
+  derived:    { slug: derived_estimated_state, group: derived }
+  calib:      { slug: calibration_sync,        group: context }
+  embodiment: { slug: embodiment_description,  group: context }
+  scene:      { slug: environment_scene,       group: context }
+  sim:        { slug: simulation_synthetic,    group: context }
+  task:       { slug: task_language,           group: context }
+  annotation: { slug: annotation_labels,       group: outcome }
+  reward:     { slug: reward_evaluation,       group: outcome }
+  provenance: { slug: provenance_collection,   group: context }
+  reference:  { slug: reference_index,         group: context }
+  quality:    { slug: quality_validation,      group: outcome }
+  governance: { slug: governance_compliance,   group: context }
+  storage:    { slug: storage_packaging,       group: context }
 entries:
 
   # ░█▀█░█▀▄░█▀█░█▀█░█▀▄░▀█▀░█▀█
@@ -43,7 +62,6 @@ entries:
  
   proprio.joint_position:
     label: Joint position
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -54,7 +72,6 @@ entries:
     group_hint: indexed
   proprio.joint_velocity:
     label: Joint velocity (measured)
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -65,7 +82,6 @@ entries:
     group_hint: indexed
   proprio.joint_acceleration:
     label: Joint acceleration
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -76,7 +92,6 @@ entries:
     group_hint: indexed
   proprio.joint_torque:
     label: Joint torque / effort
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -87,7 +102,6 @@ entries:
     group_hint: indexed
   proprio.motor_current:
     label: Motor current / duty cycle
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -98,7 +112,6 @@ entries:
     group_hint: indexed
   proprio.joint_temperature:
     label: Motor / joint temperature
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -109,7 +122,6 @@ entries:
     group_hint: indexed
   proprio.encoder_counts:
     label: Raw encoder counts
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -118,7 +130,6 @@ entries:
     group_hint: indexed
   proprio.ee_pose:
     label: End-effector pose (measured)
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: free
@@ -127,7 +138,6 @@ entries:
     group_hint: axes
   proprio.ee_twist:
     label: End-effector velocity (twist)
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: free
@@ -136,7 +146,6 @@ entries:
     group_hint: axes
   proprio.ee_wrench:
     label: End-effector wrench
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: free
@@ -147,7 +156,6 @@ entries:
     group_hint: axes
   proprio.gripper_width:
     label: Gripper aperture / width
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: scalar
@@ -157,7 +165,6 @@ entries:
     plausible_range: [0, 0.15]
   proprio.grasp_contact:
     label: Gripper contact / grasp flag
-    category: proprioceptive_state
     modality: boolean
     kind: series
     shape: scalar
@@ -165,7 +172,6 @@ entries:
     typical_rate_hz: [20.0, 100.0]
   proprio.finger_joint_state:
     label: Finger joint states (multi-finger)
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -177,7 +183,6 @@ entries:
     group_hint: indexed
   proprio.wheel_position:
     label: Wheel encoder / joint states
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: per_joint
@@ -187,7 +192,6 @@ entries:
     group_hint: indexed
   proprio.base_twist:
     label: Base twist (cmd_vel echo)
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: free
@@ -196,7 +200,6 @@ entries:
     group_hint: axes
   proprio.battery_power:
     label: Battery / power draw
-    category: proprioceptive_state
     modality: numeric
     kind: series
     shape: free
@@ -204,7 +207,6 @@ entries:
     typical_rate_hz: [1.0, 10.0]
   proprio.safety_state:
     label: E-stop / safety-state channel
-    category: proprioceptive_state
     modality: categorical
     kind: series
     shape: scalar
@@ -219,7 +221,6 @@ entries:
   
   extero.wrist_rgb:
     label: Wrist camera RGB
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
@@ -229,7 +230,6 @@ entries:
     typical_rate_hz: [15.0, 60.0]
   extero.exterior_rgb:
     label: Exterior / third-person RGB
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
@@ -239,14 +239,12 @@ entries:
     typical_rate_hz: [15.0, 60.0]
   extero.stereo_rgb:
     label: Stereo pair (left+right raw)
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
     typical_rate_hz: [15.0, 60.0]
   extero.fisheye_rgb:
     label: Fisheye / panoramic / 360
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
@@ -254,7 +252,6 @@ entries:
     typical_rate_hz: [15.0, 30.0]
   extero.depth:
     label: Depth image
-    category: exteroceptive_streams
     modality: depth
     kind: image
     shape: free
@@ -265,7 +262,6 @@ entries:
     plausible_range: [0, 10]
   extero.depth_confidence:
     label: Depth confidence / validity mask
-    category: exteroceptive_streams
     modality: depth
     kind: image
     shape: free
@@ -273,7 +269,6 @@ entries:
     typical_rate_hz: [15.0, 60.0]
   extero.disparity:
     label: Disparity map
-    category: exteroceptive_streams
     modality: depth
     kind: image
     shape: free
@@ -282,7 +277,6 @@ entries:
     typical_rate_hz: [15.0, 60.0]
   extero.point_cloud:
     label: Point cloud (RGB-D derived)
-    category: exteroceptive_streams
     modality: point_cloud
     kind: points
     shape: free
@@ -291,7 +285,6 @@ entries:
     typical_rate_hz: [5.0, 30.0]
   extero.lidar_point_cloud:
     label: LiDAR point cloud
-    category: exteroceptive_streams
     modality: point_cloud
     kind: points
     shape: free
@@ -300,7 +293,6 @@ entries:
     typical_rate_hz: [10.0, 20.0]
   extero.lidar_raw:
     label: LiDAR packet-level raw
-    category: exteroceptive_streams
     modality: point_cloud
     kind: points
     shape: free
@@ -308,7 +300,6 @@ entries:
     typical_rate_hz: [10.0, 20.0]
   extero.radar:
     label: Radar detections / cube
-    category: exteroceptive_streams
     modality: radar
     kind: points
     shape: free
@@ -316,7 +307,6 @@ entries:
     typical_rate_hz: [10.0, 20.0]
   extero.event_camera:
     label: Event camera stream (DVS)
-    category: exteroceptive_streams
     modality: event
     kind: events
     shape: free
@@ -324,7 +314,6 @@ entries:
     typical_rate_hz: [100000.0, 10000000.0]
   extero.thermal:
     label: Thermal / IR image
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
@@ -332,7 +321,6 @@ entries:
     typical_rate_hz: [9.0, 60.0]
   extero.tactile_image:
     label: Vision-based tactile image
-    category: exteroceptive_streams
     modality: tactile
     kind: image
     shape: free
@@ -341,7 +329,6 @@ entries:
     typical_rate_hz: [30.0, 120.0]
   extero.taxel_pressure:
     label: Taxel / pressure array
-    category: exteroceptive_streams
     modality: tactile
     kind: series
     shape: free
@@ -350,7 +337,6 @@ entries:
     group_hint: indexed
   extero.skin_proximity:
     label: Whole-body / skin proximity
-    category: exteroceptive_streams
     modality: tactile
     kind: series
     shape: free
@@ -359,7 +345,6 @@ entries:
     group_hint: indexed
   extero.audio:
     label: Microphone / contact audio
-    category: exteroceptive_streams
     modality: audio
     kind: audio
     shape: free
@@ -367,7 +352,6 @@ entries:
     typical_rate_hz: [16000.0, 48000.0]
   extero.imu:
     label: IMU (accel+gyro+mag)
-    category: exteroceptive_streams
     modality: numeric
     kind: series
     shape: free
@@ -378,7 +362,6 @@ entries:
     group_hint: axes
   extero.range_sensor:
     label: Ultrasonic / ToF range
-    category: exteroceptive_streams
     modality: numeric
     kind: series
     shape: scalar
@@ -388,7 +371,6 @@ entries:
     plausible_range: [0, 10]
   extero.multispectral:
     label: Multispectral / hyperspectral
-    category: exteroceptive_streams
     modality: image
     kind: image
     shape: free
@@ -403,7 +385,6 @@ entries:
   
   action.joint_position_command:
     label: Joint position command
-    category: action_control
     modality: numeric
     kind: series
     shape: per_joint
@@ -414,7 +395,6 @@ entries:
     group_hint: indexed
   action.joint_velocity_command:
     label: Joint velocity command
-    category: action_control
     modality: numeric
     kind: series
     shape: per_joint
@@ -425,7 +405,6 @@ entries:
     group_hint: indexed
   action.joint_torque_command:
     label: Joint torque command
-    category: action_control
     modality: numeric
     kind: series
     shape: per_joint
@@ -436,7 +415,6 @@ entries:
     group_hint: indexed
   action.cartesian_pose_command:
     label: Cartesian pose command
-    category: action_control
     modality: numeric
     kind: series
     shape: free
@@ -445,7 +423,6 @@ entries:
     group_hint: axes
   action.cartesian_twist_command:
     label: Cartesian velocity / twist command
-    category: action_control
     modality: numeric
     kind: series
     shape: free
@@ -454,7 +431,6 @@ entries:
     group_hint: axes
   action.gripper_command:
     label: Gripper command
-    category: action_control
     modality: numeric
     kind: series
     shape: scalar
@@ -462,7 +438,6 @@ entries:
     typical_rate_hz: [20.0, 100.0]
   action.base_velocity_command:
     label: Base velocity command (cmd_vel)
-    category: action_control
     modality: numeric
     kind: series
     shape: free
@@ -471,7 +446,6 @@ entries:
     group_hint: axes
   action.action_vector:
     label: Normalized/canonical action vector
-    category: action_control
     modality: numeric
     kind: series
     shape: free
@@ -480,27 +454,23 @@ entries:
     plausible_range: [-1, 1]
   action.tokenized_action:
     label: Tokenized action (FAST/BPE)
-    category: action_control
     modality: categorical
     kind: series
     shape: free
     aliases: [action_ids, action_tokens, discretized_action, fast_tokens]
   action.control_mode:
     label: Control mode / interface enum
-    category: action_control
     modality: categorical
     kind: series
     shape: scalar
     aliases: [control_interface, control_mode]
   action.controller_gains:
     label: Controller gains / impedance params
-    category: action_control
     modality: numeric
     shape: free
     aliases: [cartesian_impedance, controller_config, damping, kd, kp, stiffness]
   action.control_frequency:
     label: Control loop frequency
-    category: action_control
     modality: numeric
     shape: scalar
     unit: Hz
@@ -508,7 +478,6 @@ entries:
     plausible_range: [1, 2000]
   action.teleop_input:
     label: Raw teleop device input
-    category: action_control
     modality: numeric
     kind: series
     shape: free
@@ -517,7 +486,6 @@ entries:
     typical_rate_hz: [30.0, 120.0]
   action.teleop_latency:
     label: Teleop latency measurements
-    category: action_control
     modality: numeric
     kind: series
     shape: scalar
@@ -527,7 +495,6 @@ entries:
     plausible_range: [0, 1000]
   action.intervention_flag:
     label: Intervention / correction flags
-    category: action_control
     modality: boolean
     kind: series
     shape: scalar
@@ -542,7 +509,6 @@ entries:
   
   derived.odometry:
     label: Odometry (wheel/visual/VIO)
-    category: derived_estimated_state
     modality: numeric
     kind: series
     shape: free
@@ -551,7 +517,6 @@ entries:
     group_hint: axes
   derived.gnss_fix:
     label: GNSS / RTK fix
-    category: derived_estimated_state
     modality: numeric
     kind: series
     shape: free
@@ -560,7 +525,6 @@ entries:
     group_hint: axes
   derived.slam_trajectory:
     label: SLAM trajectory (optimized)
-    category: derived_estimated_state
     modality: numeric
     kind: series
     shape: free
@@ -569,21 +533,18 @@ entries:
     group_hint: axes
   derived.transform_tree:
     label: TF / transform tree snapshots
-    category: derived_estimated_state
     modality: structured
     shape: free
     aliases: [calibrated_sensors, frame_transforms, tf, tf_static, transforms]
     typical_rate_hz: [10.0, 100.0]
   derived.object_tracks:
     label: 2D/3D object tracks
-    category: derived_estimated_state
     modality: structured
     shape: free
     aliases: [track_id, tracked_objects, tracks]
     typical_rate_hz: [10.0, 30.0]
   derived.trajectory_prediction:
     label: Trajectory prediction / futures
-    category: derived_estimated_state
     modality: numeric
     kind: series
     shape: free
@@ -591,7 +552,6 @@ entries:
     typical_rate_hz: [2.0, 10.0]
   derived.optical_flow:
     label: Optical flow
-    category: derived_estimated_state
     modality: image
     kind: image
     shape: free
@@ -600,7 +560,6 @@ entries:
     typical_rate_hz: [15.0, 30.0]
   derived.surface_normals:
     label: Surface normals / geometry maps
-    category: derived_estimated_state
     modality: image
     kind: image
     shape: free
@@ -609,27 +568,23 @@ entries:
     plausible_range: [-1, 1]
   derived.occupancy_grid:
     label: Occupancy grid / costmap
-    category: derived_estimated_state
     modality: grid
     shape: free
     aliases: [costmap, global_costmap, local_costmap, occupancy]
     typical_rate_hz: [1.0, 10.0]
   derived.voxel_grid:
     label: Voxel grid / TSDF / SDF
-    category: derived_estimated_state
     modality: volume
     shape: free
     unit: m
     aliases: [esdf, occupancy_voxels, sdf, tsdf, voxel_grid]
   derived.hd_map:
     label: HD map / lane graph
-    category: derived_estimated_state
     modality: structured
     shape: free
     aliases: [centerlines, drivable_area, lane_graph, lanelet, road_network]
   derived.object_pose_estimate:
     label: Object 6-DoF pose estimate
-    category: derived_estimated_state
     modality: numeric
     kind: series
     shape: free
@@ -645,47 +600,40 @@ entries:
 
   calib.intrinsics:
     label: Intrinsics (K matrix)
-    category: calibration_sync
     modality: numeric
     shape: free
     unit: px
     aliases: [cameraMatrix, camera_intrinsic, camera_matrix, intrinsics]
   calib.distortion:
     label: Distortion coefficients
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [distCoeffs, dist_coeffs, distortion_coefficients, distortion_params]
   calib.rectification:
     label: Rectification / projection matrices
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [T_rect, projection_matrix, rectification_matrix]
   calib.camera_base_extrinsics:
     label: Camera-to-base extrinsics
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [T_base_cam, cam2base_extrinsics, camera_extrinsic, extrinsics, sensor2ego]
     group_hint: axes
   calib.camera_camera_extrinsics:
     label: Camera-to-camera extrinsics
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [T_cam0_cam1, cam2cam_extrinsics, relative_pose, stereo_extrinsics]
     group_hint: axes
   calib.hand_eye_transform:
     label: Hand-eye transform
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [T_ee_cam, T_gripper_camera, cam2gripper, eye_in_hand_transform, hand_eye]
     group_hint: axes
   calib.joint_zero_offsets:
     label: Joint zero offsets / DH corrections
-    category: calibration_sync
     modality: numeric
     shape: per_joint
     unit: rad
@@ -693,13 +641,11 @@ entries:
     group_hint: indexed
   calib.payload_inertial:
     label: Payload / tool inertial params
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [F_x_Cload, end_effector_inertia, payload, tcp_payload, tool_mass]
   calib.imu_extrinsics:
     label: IMU intrinsics & IMU-camera extrinsics
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [
@@ -707,20 +653,17 @@ entries:
       timeshift_cam_imu]
   calib.lidar_camera_extrinsics:
     label: LiDAR-camera extrinsics
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [T_cam_lidar, calibrated_sensor, lidar2cam, sensor_calibration]
     group_hint: axes
   calib.tactile_calibration:
     label: Tactile sensor calibration
-    category: calibration_sync
     modality: numeric
     shape: free
     aliases: [baseline_reading, tactile_calibration, taxel_gains]
   calib.hardware_timestamps:
     label: Per-stream hardware timestamps
-    category: calibration_sync
     modality: numeric
     kind: series
     shape: scalar
@@ -728,7 +671,6 @@ entries:
     aliases: [header.stamp, log_time, publish_time]
   calib.clock_offset:
     label: Clock offset / skew estimates
-    category: calibration_sync
     modality: numeric
     kind: series
     shape: scalar
@@ -737,20 +679,17 @@ entries:
     typical_rate_hz: [0.1, 1.0]
   calib.frame_drop_log:
     label: Frame-drop / gap log
-    category: calibration_sync
     modality: structured
     shape: free
     aliases: [dropped_frames, frame_gaps, missing_indices, skipped_frames]
   calib.trigger_signal:
     label: Trigger / strobe signals
-    category: calibration_sync
     modality: numeric
     kind: series
     shape: scalar
     aliases: [genlock, hardware_trigger_ts, strobe, sync_pulse, trigger]
   calib.validity_window:
     label: Calibration validity window
-    category: calibration_sync
     modality: structured
     shape: free
     unit: s
@@ -764,62 +703,52 @@ entries:
 
   embodiment.robot_model:
     label: URDF / MJCF / USD robot model
-    category: embodiment_description
     modality: structured
     shape: free
     aliases: [robot_description, robot_usd_path, urdf]
   embodiment.kinematic_chain:
     label: Kinematic chain / DH table
-    category: embodiment_description
     modality: numeric
     shape: free
     aliases: [joint_origins, kinematic_chain, link_transforms]
   embodiment.joint_limits:
     label: Joint limits (pos/vel/acc/torque)
-    category: embodiment_description
     modality: numeric
     shape: free
     aliases: [
       effort_limits, joint_limits, limit, position_limits, qpos_range, velocity_limits]
   embodiment.link_inertial:
     label: Link mass / inertia / COM
-    category: embodiment_description
     modality: numeric
     shape: free
     aliases: [center_of_mass, inertia, inertial]
   embodiment.meshes:
     label: Collision & visual meshes
-    category: embodiment_description
     modality: geometry
     shape: free
     aliases: [asset_path, geom, mesh_file]
   embodiment.ee_spec:
     label: Gripper / end-effector spec
-    category: embodiment_description
     modality: structured
     shape: free
     aliases: [ee_config, end_effector, gripper_spec, gripper_type]
   embodiment.embodiment_id:
     label: Embodiment ID / morphology tag
-    category: embodiment_description
     modality: categorical
     shape: free
     aliases: [embodiment, morphology, robot, robot_name, robot_type]
   embodiment.robot_serial:
     label: Robot serial / fleet unit ID
-    category: embodiment_description
     modality: categorical
     shape: free
     aliases: [device_id, fleet_id, robot_id, unit_id]
   embodiment.firmware_version:
     label: Firmware / driver versions
-    category: embodiment_description
     modality: categorical
     shape: free
     aliases: [driver_version, firmware_version, sdk_version, software_version]
   embodiment.space_spec:
     label: Action/observation space spec
-    category: embodiment_description
     modality: structured
     shape: free
     aliases: [action_spec, features, obs_spec, observation_space]
@@ -832,62 +761,52 @@ entries:
 
   scene.scene_graph:
     label: Scene graph / USD stage
-    category: environment_scene
     modality: structured
     shape: free
     aliases: [prim_path, scene.usd, scene_graph, stage, world]
   scene.object_inventory:
     label: Object inventory / asset list
-    category: environment_scene
     modality: structured
     shape: free
     aliases: [asset_registry, assets, object_list, scene_objects]
   scene.object_poses:
     label: Object initial & final 6-DoF poses
-    category: environment_scene
     modality: numeric
     kind: series
     shape: free
     aliases: [init_state, obj_init_pos, object_poses]
   scene.object_meshes:
     label: Object meshes / point clouds
-    category: environment_scene
     modality: geometry
     shape: free
     aliases: [asset_file, mesh_path, model.obj, obj_pointcloud, object_mesh]
   scene.workspace_id:
     label: Scene / room / workspace ID
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [environment, room_id, scene_id, scene_name, scene_token]
   scene.lighting:
     label: Lighting condition label
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [illumination, light_condition, lighting, lux]
   scene.weather:
     label: Weather / outdoor conditions
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [conditions, fog, rain, weather]
   scene.time_of_day:
     label: Time of day / season
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [season, time_of_day, timeofday]
   scene.clutter_level:
     label: Distractor / clutter level
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [clutter_level, difficulty, num_distractors, scene_complexity]
   scene.background_material:
     label: Background / surface material
-    category: environment_scene
     modality: categorical
     shape: free
     aliases: [background, material, substrate, surface, table_texture]
@@ -900,7 +819,6 @@ entries:
 
   sim.sim_state:
     label: Privileged sim state
-    category: simulation_synthetic
     modality: numeric
     kind: series
     shape: free
@@ -908,7 +826,6 @@ entries:
     typical_rate_hz: [30.0, 1000.0]
   sim.segmentation_gt:
     label: Instance / semantic segmentation GT
-    category: simulation_synthetic
     modality: image
     kind: image
     shape: free
@@ -916,56 +833,47 @@ entries:
       instance_id_segmentation, instance_segmentation, seg_mask, semantic_segmentation]
   sim.geometry_gt:
     label: Depth / normals / flow GT
-    category: simulation_synthetic
     modality: image
     kind: image
     shape: free
     aliases: [depth_gt, distance_to_camera, ground_truth_depth]
   sim.collision_log:
     label: Contact events / collision log
-    category: simulation_synthetic
     modality: structured
     shape: free
     aliases: [collision_events, contacts, net_contact_force]
   sim.physics_parameters:
     label: Physics parameters (mass/friction/restitution)
-    category: simulation_synthetic
     modality: numeric
     shape: free
     aliases: [friction, material_props, physics_params, restitution]
   sim.domain_randomization:
     label: Domain randomization ranges
-    category: simulation_synthetic
     modality: structured
     shape: free
     aliases: [domain_randomization, dr_params, rand_range, randomization_cfg, randomize]
   sim.seeds:
     label: Random seeds
-    category: simulation_synthetic
     modality: numeric
     shape: scalar
     aliases: [env_seed, np_seed, random_seed, seed, torch_seed]
   sim.renderer_settings:
     label: Renderer / solver settings
-    category: simulation_synthetic
     modality: structured
     shape: free
     aliases: [physics_dt, render_cfg, rt_subframes, sim_params, solver_type, substeps]
   sim.simulator_version:
     label: Simulator + version
-    category: simulation_synthetic
     modality: categorical
     shape: free
     aliases: [engine, isaac_version, mujoco_version, sim_version, simulator]
   sim.sim_real_pairs:
     label: Sim-real paired episodes
-    category: simulation_synthetic
     modality: structured
     shape: free
     aliases: [digital_twin_ref, paired_id]
   sim.sim2real_gap:
     label: Sim2real gap metrics
-    category: simulation_synthetic
     modality: numeric
     shape: free
     aliases: [sim2real_delta, transfer_gap]
@@ -978,62 +886,52 @@ entries:
 
   task.instruction:
     label: Natural-language task instruction
-    category: task_language
     modality: text
     shape: free
     aliases: [instruction, language_instruction, natural_language_instruction, prompt]
   task.step_decomposition:
     label: Sub-task / step decomposition
-    category: task_language
     modality: text
     shape: free
     aliases: [high_level_task, skill_sequence, steps, substep_instruction, subtask]
   task.reasoning_trace:
     label: Chain-of-thought / reasoning trace
-    category: task_language
     modality: text
     kind: text
     shape: free
     aliases: [chain_of_thought, cot, rationale, reasoning, thought]
   task.goal_state:
     label: Goal image / goal state
-    category: task_language
     modality: image
     shape: free
     aliases: [desired_goal, goal, goal_image, goal_obs, target_image]
   task.scene_caption:
     label: Scene caption / dense description
-    category: task_language
     modality: text
     shape: free
     aliases: [caption, description, image_caption, scene_description]
   task.vqa_pairs:
     label: VQA pairs / spatial queries
-    category: task_language
     modality: text
     shape: free
     aliases: [conversations, qa_pairs, vqa]
   task.affordance_grounding:
     label: Affordance / keypoint grounding
-    category: task_language
     modality: structured
     shape: free
     aliases: [affordance, contact_point, grasp_point, grounding]
   task.referring_expression:
     label: Referring expressions / object refs
-    category: task_language
     modality: structured
     shape: free
     aliases: [expression, object_ref, referring_expression]
   task.task_id:
     label: Task ID / hierarchical taxonomy
-    category: task_language
     modality: structured
     shape: free
     aliases: [primary_task, task_category, task_id, task_index, task_name]
   task.skill_vocabulary:
     label: Skill primitive vocabulary
-    category: task_language
     modality: categorical
     shape: free
     aliases: [action_verb, primitive, skill, skill_name, verb]
@@ -1046,57 +944,48 @@ entries:
 
   annotation.clip_frame_range:
     label: Skill clip frame ranges
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [clip_annotation, clips, frame_ranges]
   annotation.phase_boundary:
     label: Action / phase boundaries
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [keyframe_indices, phase_labels, segment_boundaries]
   annotation.failure_label:
     label: Failure onset & failure-mode label
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [error_type, failure_frame, failure_mode, failure_reason]
   annotation.keyframe_label:
     label: Keyframe / bottleneck labels
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [bottleneck, keyframe_idx, keyframes, waypoint_indices]
   annotation.bbox_2d:
     label: Bounding boxes
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [annotations, bbox, bbox_2d, boxes, gt_boxes]
   annotation.segmentation_mask:
     label: Semantic / instance segmentation masks
-    category: annotation_labels
     modality: image
     kind: image
     shape: free
     aliases: [label_map, mask, seg, segm]
   annotation.keypoints_2d:
     label: 2D keypoints (object/robot)
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [joints_2d, kpts, landmarks]
   annotation.bbox_3d:
     label: 3D bounding boxes
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [bbox_3d, boxes_3d, gt_boxes_3d, laser_labels, sample_annotation]
     typical_rate_hz: [2.0, 10.0]
   annotation.point_cloud_label:
     label: Point-cloud semantic labels
-    category: annotation_labels
     modality: point_cloud
     kind: points
     shape: free
@@ -1104,27 +993,23 @@ entries:
     typical_rate_hz: [10.0, 20.0]
   annotation.grasp_pose:
     label: Grasp pose annotations
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [grasp_poses, grasps, gripper_pose]
   annotation.hand_pose:
     label: Hand pose (MANO / 21 kpts)
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [hand_joints, hand_landmarks, hand_pose, mano_params, wrist_and_palm_poses]
     typical_rate_hz: [30.0, 60.0]
   annotation.body_pose:
     label: Body pose (SMPL-X / skeleton)
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [body_pose, joints_3d, keypoints_3d, skeleton, smpl_params]
     typical_rate_hz: [30.0, 60.0]
   annotation.gaze:
     label: Gaze / eye tracking
-    category: annotation_labels
     modality: numeric
     kind: series
     shape: free
@@ -1132,19 +1017,16 @@ entries:
     typical_rate_hz: [30.0, 120.0]
   annotation.hoi_label:
     label: Human-object interaction labels
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [action_label, hoi, interaction_label, narration]
   annotation.demo_quality:
     label: Demonstration quality rating
-    category: annotation_labels
     modality: numeric
     shape: scalar
     aliases: [annotation_quality, demo_rating]
   annotation.preference_ranking:
     label: Human preference / ranking pairs
-    category: annotation_labels
     modality: structured
     shape: free
     aliases: [comparison, preference, ranking]
@@ -1157,59 +1039,50 @@ entries:
 
   reward.frame_reward:
     label: Per-frame reward
-    category: reward_evaluation
     modality: numeric
     kind: series
     shape: scalar
     aliases: [reward, rewards, step_reward]
   reward.discount_flag:
     label: Discount / bootstrap flags
-    category: reward_evaluation
     modality: numeric
     kind: series
     shape: scalar
     aliases: [discount, done, dones, is_first, is_last, is_terminal]
   reward.success_label:
     label: Episode success / outcome label
-    category: reward_evaluation
     modality: boolean
     kind: series
     shape: scalar
     aliases: [episode_success, is_success, outcome, success, success_flag, task_completed]
   reward.value_score:
     label: Learned reward / value model scores
-    category: reward_evaluation
     modality: numeric
     kind: series
     shape: scalar
     aliases: [advantage, critic_score, q_value, reward_model_score]
   reward.eval_protocol:
     label: Eval protocol definition
-    category: reward_evaluation
     modality: structured
     shape: free
     aliases: [benchmark_config, eval_config, num_trials, protocol]
   reward.benchmark_scenario:
     label: Benchmark scenario / task suite
-    category: reward_evaluation
     modality: structured
     shape: free
     aliases: [benchmark, env_id, task_suite]
   reward.rollout_log:
     label: Rollout / eval logs
-    category: reward_evaluation
     modality: structured
     shape: free
     aliases: [eval_log, rollout, trial_results]
   reward.success_rubric:
     label: Success rubric / scoring criteria
-    category: reward_evaluation
     modality: text
     shape: free
     aliases: [eval_criteria, rubric, scoring_guide, success_criteria]
   reward.baseline_results:
     label: Baseline results table
-    category: reward_evaluation
     modality: numeric
     shape: free
     aliases: [baseline, benchmark_results, leaderboard, results]
@@ -1222,61 +1095,51 @@ entries:
 
   provenance.episode_id:
     label: Episode ID
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [demo_id, episode_id, episode_index, episode_metadata, sample_token, traj_id]
   provenance.session_id:
     label: Session / batch ID
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [batch_id, collection_session, log_id, recording_id, session_id]
   provenance.site_id:
     label: Site / building / lab ID
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [building, institution, lab, site_id]
   provenance.operator_hash:
     label: Operator / collector hash
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [annotator_id, collector_id, demonstrator, operator_id, user_id]
   provenance.capture_timestamp:
     label: Capture timestamp & timezone
-    category: provenance_collection
     modality: numeric
     shape: scalar
     aliases: [capture_time, created_at, date, recording_date]
   provenance.collection_modality:
     label: Collection modality (teleop/scripted/autonomous/human-video)
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [collection_method, data_source, demo_type, is_teleop]
   provenance.teleop_device_type:
     label: Teleop device type
-    category: provenance_collection
     modality: categorical
     shape: free
     aliases: [input_device, teleop_device]
   provenance.collection_protocol:
     label: Collection protocol / SOP version
-    category: provenance_collection
     modality: text
     shape: free
     aliases: [collection_guide, procedure_id, protocol_version, sop]
   provenance.retry_count:
     label: Retry / attempt count
-    category: provenance_collection
     modality: numeric
     shape: scalar
     aliases: [attempt, retry_count, take, trial_num]
   provenance.reset_procedure:
     label: Reset / scene-randomization procedure
-    category: provenance_collection
     modality: structured
     shape: free
     aliases: [init_randomization, initial_state_dist, reset_procedure, scene_reset]
@@ -1289,61 +1152,51 @@ entries:
 
   reference.episode_path_index:
     label: Episode ID to storage path
-    category: reference_index
     modality: structured
     shape: free
     aliases: [episode_id_to_path, file_path, recording_folderpath, relative_path]
   reference.camera_intrinsics_index:
     label: Camera serial to intrinsics
-    category: reference_index
     modality: structured
     shape: free
     aliases: [camera_id, camera_serials, sensor_token]
   reference.embodiment_mapping:
     label: Cross-dataset embodiment mapping
-    category: reference_index
     modality: structured
     shape: free
     aliases: [action_space_map, dataset_transform, embodiment_map, harmonization]
   reference.frame_step_index:
     label: Frame / step index (offsets)
-    category: reference_index
     modality: structured
     shape: free
     aliases: [episode_data_index, frame_index, step_id]
   reference.shard_manifest:
     label: Shard / chunk manifest
-    category: reference_index
     modality: structured
     shape: free
     aliases: [num_shards, shards, tfrecord_index]
   reference.data_splits:
     label: Train / val / test splits
-    category: reference_index
     modality: structured
     shape: free
     aliases: [fold, split]
   reference.mixture_weights:
     label: Data mixture weights / sampling ratios
-    category: reference_index
     modality: numeric
     shape: free
     aliases: [dataset_weights, mixture, sample_ratio, sampling_weights]
   reference.norm_stats:
     label: Normalization statistics (mean/std/quantiles)
-    category: reference_index
     modality: numeric
     shape: free
     aliases: [dataset_statistics, norm_stats]
   reference.dataset_stats:
     label: Dataset summary statistics
-    category: reference_index
     modality: numeric
     shape: free
     aliases: [total_episodes, total_frames]
   reference.site_code_table:
     label: Building / site code table
-    category: reference_index
     modality: structured
     shape: free
     aliases: [building_codes, lab_registry, location_map, site_table]
@@ -1356,50 +1209,42 @@ entries:
 
   quality.schema_validation:
     label: Schema validation results
-    category: quality_validation
     modality: structured
     shape: free
     aliases: [check_results, expectation_suite, scan_result, validation_result]
   quality.qc_scorecard:
     label: Per-episode QC scorecard
-    category: quality_validation
     modality: numeric
     shape: free
     aliases: [episode_quality, qc_score, quality_score, quality_status, scorecard]
   quality.outlier_flag:
     label: Anomaly / outlier flags
-    category: quality_validation
     modality: categorical
     shape: free
     aliases: [anomaly, flagged, outlier_flag]
   quality.sync_verification:
     label: Multi-modal sync verification
-    category: quality_validation
     modality: numeric
     shape: free
     aliases: [alignment_error, skew_ms, sync_check, time_sync_status]
   quality.sensor_health:
     label: Sensor health / diagnostics log
-    category: quality_validation
     modality: structured
     shape: free
     aliases: [diagnostics, sensor_status]
     typical_rate_hz: [0.1, 1.0]
   quality.duplicate_detection:
     label: Duplicate / near-duplicate detection
-    category: quality_validation
     modality: numeric
     shape: free
     aliases: [dedup_result, duplicates, near_dup_score, phash]
   quality.label_audit:
     label: Label audit / re-annotation sample
-    category: quality_validation
     modality: numeric
     shape: free
     aliases: [audit_sample, disagreement_rate, label_qa, re_annotation]
   quality.distribution_shift_report:
     label: Distribution-shift report
-    category: quality_validation
     modality: numeric
     shape: free
     aliases: [distribution_shift, drift, kl_divergence, mmd, psi]
@@ -1412,97 +1257,81 @@ entries:
 
   governance.license:
     label: Dataset license / SPDX identifier
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [license, license_url, spdx_id, terms_of_use]
   governance.license_map:
     label: Per-asset / per-subset license map
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [asset_licenses, license_map, per_file_license, subset_license]
   governance.attribution:
     label: Third-party asset attribution
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [NOTICE, attribution, citation, credits, source_attribution]
   governance.pii_detection:
     label: PII / face / plate detection results
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [detected_pii, face_boxes, pii_flags, privacy_scan, sensitive_entities]
   governance.redaction_status:
     label: Redaction / blurring status & method
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [anonymized, blur_method, face_blur, is_blurred, redaction_status]
   governance.consent_records:
     label: Consent records / participant agreements
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [agreement_ref, consent_id, irb_approval, participant_consent]
   governance.withdrawal_log:
     label: Data subject / withdrawal request log
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [deletion_request, dsr_log, erasure_request, withdrawal]
   governance.data_residency:
     label: Jurisdiction / data-residency tag
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [data_location, jurisdiction, region, residency, sovereignty_tag]
   governance.transfer_records:
     label: Cross-border transfer records
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [cross_border, export_record, transfer_basis, transfer_log]
   governance.export_control:
     label: Export-control classification
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [dual_use, eccn, export_classification, itar_ear_status]
   governance.sensitivity_label:
     label: Sensitivity / classification label
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [classification, confidentiality, data_class, sensitivity]
   governance.access_log:
     label: Access logs / audit trail
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [access_log, audit_trail, cloudtrail, s3_access_log]
   governance.dataset_version:
     label: Dataset version / commit ID
-    category: governance_compliance
     modality: categorical
     shape: free
     aliases: [commit_id, dvc_hash, lakefs_commit, revision]
   governance.lineage_graph:
     label: Processing pipeline lineage graph
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [derived_from, lineage, parent_dataset, pipeline_dag, provenance]
   governance.retention_policy:
     label: Retention / deletion policy
-    category: governance_compliance
     modality: structured
     shape: free
     aliases: [delete_after, expiry, lifecycle_rule, retention_policy, ttl]
   governance.dataset_card:
     label: Dataset card / datasheet
-    category: governance_compliance
     modality: text
     shape: free
     aliases: [DATASHEET.md, README.md, dataset card, model_card]
@@ -1515,71 +1344,59 @@ entries:
 
   storage.hdf5_file:
     label: HDF5 episode file
-    category: storage_packaging
     modality: container
     shape: free
   storage.rlds_shards:
     label: RLDS / TFDS shards
-    category: storage_packaging
     modality: container
     shape: free
     aliases: ['*.tfrecord-XXXXX-of-YYYYY', tfrecord]
   storage.lerobot_format:
     label: LeRobot / Parquet + video
-    category: storage_packaging
     modality: container
     shape: free
   storage.mcap_bag:
     label: MCAP / ROS2 bag
-    category: storage_packaging
     modality: container
     shape: free
     aliases: ['*.db3', '*.mcap']
   storage.webdataset_shards:
     label: WebDataset tar shards
-    category: storage_packaging
     modality: container
     shape: free
     aliases: [__key__, shard-XXXXXX.tar]
   storage.zarr_chunks:
     label: Zarr / N5 chunked arrays
-    category: storage_packaging
     modality: container
     shape: free
     aliases: [.zarray, .zattrs, chunks]
   storage.video_encoding:
     label: Video encoding parameters
-    category: storage_packaging
     modality: structured
     shape: free
     aliases: [codec, crf, pix_fmt, vcodec, video_info]
   storage.checksums:
     label: Checksums / content hashes
-    category: storage_packaging
     modality: structured
     shape: free
     aliases: [checksum, content_hash, etag, md5, sha256]
   storage.file_manifest:
     label: File manifest / inventory
-    category: storage_packaging
     modality: structured
     shape: free
     aliases: [SHA256SUMS, inventory, manifest]
   storage.format_schema_version:
     label: Format / schema version
-    category: storage_packaging
     modality: categorical
     shape: free
     aliases: [codebase_version, format_version, schema_version]
   storage.storage_tier:
     label: Storage tier / placement policy
-    category: storage_packaging
     modality: structured
     shape: free
     aliases: [lifecycle, placement_policy, storage_class, tier]
   storage.replication_map:
     label: Replication / geo-distribution map
-    category: storage_packaging
     modality: structured
     shape: free
     aliases: [geo_redundancy, region_map, replicas, replication]

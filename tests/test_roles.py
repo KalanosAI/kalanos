@@ -17,10 +17,16 @@ from kalanos.analysis.models.dictionary import Dictionary, GroupHintKind
 # The minimum an entry needs, for tests about something other than its content.
 _BARE = {
     "label": "Anything",
-    "category": "proprioceptive_state",
     "modality": "numeric",
     "kind": "series",
     "shape": "scalar",
+}
+
+# A categories table covering every family the dictionaries below use.
+_CATEGORIES = {
+    "proprio": {"slug": "proprioceptive_state", "group": "sensor"},
+    "extero": {"slug": "exteroceptive_streams", "group": "sensor"},
+    "derived": {"slug": "derived_estimated_state", "group": "derived"},
 }
 
 
@@ -44,7 +50,8 @@ def _dictionary(**entries: dict) -> Dictionary:
 
     return Dictionary.model_validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "categories": _CATEGORIES,
             "entries": {
                 key.replace("_", ".", 1): value for key, value in entries.items()
             },

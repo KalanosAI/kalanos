@@ -486,7 +486,11 @@ def test_payload_error_is_counted_and_not_misreported_as_an_empty_stream():
         update={"payload": Broken()}
     )
     result, _ = grade_stream(
-        stream, policy=load_default_policy(), is_regular=True, episode_id="test"
+        stream,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="test",
+        category=None,
     )
     assert result.evaluation.payload == PayloadStatus.ERROR
     assert result.declared_channels and not result.channels

@@ -34,6 +34,7 @@ from kalanos.analysis.models.binding import (
     EvaluationScope,
     RequirementsSection,
 )
+from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
 from kalanos.analysis.models.mapping import MappingOverride
@@ -71,6 +72,7 @@ from kalanos.analysis.scoring.eligibility import (
 )
 from kalanos.analysis.scoring.gate import apply_gate
 from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
+from kalanos.assets.dictionary import load_default_dictionary
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -91,6 +93,7 @@ def grade_stream(
     policy: Policy,
     is_regular: bool,
     episode_id: str,
+    category: str | None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
@@ -106,6 +109,8 @@ def grade_stream(
     episode_id : str
         The recording this stream belongs to,
         for addressing any finding it or its channels raise.
+    category : str or None
+        The dictionary category of the stream's taxonomy type, `None` when unmapped.
 
     Returns
     -------
@@ -226,6 +231,7 @@ def grade_stream(
             coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
             instance=stream.instance,
             attribution=stream.attribution,
+            category=category,
             mapping_source=stream.mapping_source,
             score=stream_score,
             metrics=stream_metrics,
@@ -248,6 +254,7 @@ def grade_episode(
     adapter: str,
     adapter_confidence: float,
     policy: Policy,
+    dictionary: Dictionary,
     tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
@@ -262,6 +269,8 @@ def grade_episode(
         The adapter's winning bid, recorded on the result.
     policy : Policy
         The loaded grading policy.
+    dictionary : Dictionary
+        The dictionary each stream's category is looked up in.
 
     Returns
     -------
@@ -282,6 +291,7 @@ def grade_episode(
             policy=policy,
             is_regular=stream.is_regular,
             episode_id=episode.id,
+            category=dictionary.category_of(stream.taxonomy_type),
             tier=tier,
         )
         graded_streams.append(graded_stream)
@@ -397,6 +407,7 @@ def assemble_report(
 
     for item in analysed:
         validate_review_plan(diagnostics_plan, item.policy)
+    dictionary = load_default_dictionary()
     tier = scope.tier if scope is not None else ExecutionTier.STANDARD
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
@@ -406,6 +417,7 @@ def assemble_report(
             adapter=item.adapter,
             adapter_confidence=item.adapter_confidence,
             policy=item.policy,
+            dictionary=dictionary,
             tier=tier,
         )
         graded_episodes.append(graded_episode)
@@ -551,6 +563,7 @@ def assemble_report(
         duration_s=duration_s,
         source=source,
         datasets=list(datasets),
+        categories=dictionary.category_groups,
         mapping_overrides=list(mapping_overrides),
         gate=gate,
         readiness=readiness,

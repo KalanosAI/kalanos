@@ -52,6 +52,7 @@ from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.pipeline import with_declared_limits
 from kalanos.analysis.reporting.assemble import grade_episode, grade_stream
 from kalanos.assets.bundle import prepare_configuration
+from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.core.settings import get_settings
 from kalanos.testing.injectors import (
     Defect,
@@ -413,6 +414,7 @@ def _inject_episode(
                 policy=policy,
                 is_regular=stream.is_regular,
                 episode_id=episode.id,
+                category=clean_stream.category,
             )
             after = _located(graded, channel)
             for metric, result in before.items():
@@ -476,6 +478,7 @@ def benchmark_episodes(
     seen = sampled = 0
     expected = n_episodes if n_episodes is not None else "?"
     planned = min(sample, n_episodes) if n_episodes is not None else sample
+    dictionary = load_default_dictionary()
     for position, episode in enumerate(episodes):
         seen += 1
         clean, _ = grade_episode(
@@ -483,6 +486,7 @@ def benchmark_episodes(
             adapter="benchmark",
             adapter_confidence=1.0,
             policy=policy,
+            dictionary=dictionary,
             tier=tier,
         )
         _tally_clean(clean, tallies)

@@ -329,10 +329,18 @@ def test_display_rename_after_binding_preserves_measurements_and_identity():
     a, b = episode(original), episode(renamed)
     assert binding_identity([a], None) == binding_identity([b], None)
     ga, _ = grade_episode(
-        a, adapter="test", adapter_confidence=1, policy=load_default_policy()
+        a,
+        adapter="test",
+        adapter_confidence=1,
+        policy=load_default_policy(),
+        dictionary=load_default_dictionary(),
     )
     gb, _ = grade_episode(
-        b, adapter="test", adapter_confidence=1, policy=load_default_policy()
+        b,
+        adapter="test",
+        adapter_confidence=1,
+        policy=load_default_policy(),
+        dictionary=load_default_dictionary(),
     )
     assert ga.score == gb.score
     assert [c.metrics for s in ga.streams for c in s.channels] == [

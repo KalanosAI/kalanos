@@ -35,6 +35,7 @@ from kalanos.analysis.models.coverage import CoverageRow
 
 # Internal
 from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
+from kalanos.analysis.models.dictionary import CategoryGroup
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -164,6 +165,8 @@ class GradedStream(BaseModel):
         Which subject it belongs to, or `None` for a single-subject recording.
     attribution : Attribution
         Where `instance` came from — mirrors `domain.Stream.attribution`.
+    category : str or None
+        The dictionary category of `taxonomy_type`, `None` when the stream is unmapped.
     mapping_source : MappingSource or None
         How `taxonomy_type` was decided — mirrors `domain.Stream.mapping_source`.
     score : ScoreResult
@@ -181,6 +184,7 @@ class GradedStream(BaseModel):
     taxonomy_type: str
     instance: str | None = None
     attribution: Attribution = Attribution.SINGLE
+    category: str | None = None
     mapping_source: MappingSource | None = None
     score: ScoreResult
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
@@ -426,6 +430,9 @@ class Report(BaseModel):
     datasets : list[DatasetInfo]
         What the adapter declared about each path it read,
         one entry per path, in walk order.
+    categories : dict[str, CategoryGroup]
+        Every category slug in the active dictionary mapped onto its group,
+        so a reader can group streams by `category` without the dictionary.
     mapping_overrides : list[MappingOverride]
         Every per-run override applied, with where it came from.
         Kalanos records each type as given and does not verify it.
@@ -466,6 +473,7 @@ class Report(BaseModel):
     duration_s: float | None = None
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
+    categories: dict[str, CategoryGroup] = Field(default_factory=dict)
     mapping_overrides: list[MappingOverride] = Field(default_factory=list)
     gate: Gate | None = None
     readiness: Readiness | None = None
@@ -547,7 +555,11 @@ class Report(BaseModel):
                 raise ValueError(
                     "eligibility_counts.total does not cover the inventory"
                 )
-            tally = Counter(e.eligibility.status.value for e in self.episodes)
+            tally = Counter(
+                e.eligibility.status.value
+                for e in self.episodes
+                if e.eligibility is not None
+            )
             tally["unknown"] += failed + gap
             for field, status in (
                 ("pass_count", "pass"),

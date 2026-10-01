@@ -36,10 +36,15 @@ _SPECIALISED_ADAPTER_FLOOR = 0.6
 
 _BARE_ENTRY = {
     "label": "Anything",
-    "category": "proprioceptive_state",
     "modality": "numeric",
     "kind": "series",
     "shape": "scalar",
+}
+
+# A categories table covering every family the dictionaries below use.
+_CATEGORIES = {
+    "proprio": {"slug": "proprioceptive_state", "group": "sensor"},
+    "derived": {"slug": "derived_estimated_state", "group": "derived"},
 }
 
 
@@ -401,7 +406,8 @@ def test_an_ambiguous_stem_stays_unmapped_rather_than_picking_a_claimant(
 
     dictionary = Dictionary.model_validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "categories": _CATEGORIES,
             "entries": {
                 "proprio.joint_position": {**_BARE_ENTRY, "aliases": ["pos"]},
                 "derived.tcp_position": {**_BARE_ENTRY, "aliases": ["pos"]},

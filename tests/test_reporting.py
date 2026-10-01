@@ -66,6 +66,7 @@ from kalanos.analysis.reporting.render import render_html, render_json, render_y
 from kalanos.analysis.reporting.write import write_report
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import grade_for, rollup, score_metrics
+from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 
 # Local
@@ -87,6 +88,9 @@ FIXTURE = UPath(__file__).parent / "fixtures" / "arm_multi_device.csv"
 # The letters table `_score`'s stand-in ScoreResults grade against —
 # loaded once, since every test in this module shares the same default policy.
 _POLICY = load_default_policy()
+
+# What `assemble_report` looks each stream's category up in, for calls that bypass it.
+_DICTIONARY = load_default_dictionary()
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -303,6 +307,42 @@ def test_report_carries_the_current_schema_version():
     assert report.schema_version == CURRENT_SCHEMA_VERSION
 
 
+def test_a_mapped_stream_carries_its_category_and_an_unmapped_one_carries_none():
+    """Verify each graded stream is labelled with its dictionary category."""
+
+    raw_episode, adapter = _analysed_fixture()
+    unmapped = raw_episode.streams[1].model_copy(
+        update={"taxonomy_type": "unmapped.mystery", "mapping_source": None}
+    )
+    episode = raw_episode.model_copy(
+        update={"streams": [raw_episode.streams[0], unmapped]}
+    )
+
+    report = assemble_report(
+        root=FIXTURE.parent,
+        analysed=[
+            AnalysedEpisode(
+                episode=episode, adapter=adapter, adapter_confidence=0.9, policy=_POLICY
+            )
+        ],
+        policy=_POLICY,
+    )
+
+    [graded] = report.episodes
+    assert {s.taxonomy_type: s.category for s in graded.streams} == {
+        "proprio.ee_pose": "proprioceptive_state",
+        "unmapped.mystery": None,
+    }
+
+
+def test_a_report_maps_every_category_to_its_group():
+    """Verify a reader can group stream categories from the report alone."""
+
+    report = assemble_report(root=UPath("."), analysed=[], policy=_POLICY)
+
+    assert report.categories == _DICTIONARY.category_groups
+
+
 def test_skipped_and_unresolved_sources_land_on_the_report_verbatim():
     """Verify a run with nothing analysed still reports what it declined to."""
 
@@ -357,7 +397,11 @@ def test_a_stream_with_no_channels_is_never_fetched():
     )
 
     graded, _findings = grade_stream(
-        video_like, policy=load_default_policy(), is_regular=True, episode_id=mapped.id
+        video_like,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id=mapped.id,
+        category=None,
     )
 
     assert graded.channels == []
@@ -370,7 +414,11 @@ def test_a_stream_with_no_payload_grades_its_own_metrics():
     empty = mapped.streams[0].model_copy(update={"payload": None, "channels": []})
 
     graded, _findings = grade_stream(
-        empty, policy=load_default_policy(), is_regular=True, episode_id=mapped.id
+        empty,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id=mapped.id,
+        category=None,
     )
 
     assert graded.channels == []
@@ -395,6 +443,7 @@ def test_a_stream_with_channels_but_no_payload_warns_and_grades_no_channels(capl
             policy=load_default_policy(),
             is_regular=True,
             episode_id=mapped.id,
+            category=None,
         )
 
     assert graded.channels == []
@@ -417,7 +466,11 @@ def test_grade_episode_rolls_up_an_episode_with_no_streams_to_score_none():
     episode = Episode(id="time_only", streams=[])
 
     graded, findings = grade_episode(
-        episode, adapter="csv", adapter_confidence=0.9, policy=load_default_policy()
+        episode,
+        adapter="csv",
+        adapter_confidence=0.9,
+        policy=load_default_policy(),
+        dictionary=_DICTIONARY,
     )
 
     assert graded.streams == []
@@ -439,7 +492,11 @@ def test_an_episode_spans_from_its_earliest_to_its_latest_timestamp():
     )
 
     graded, _ = grade_episode(
-        episode, adapter="csv", adapter_confidence=1.0, policy=load_default_policy()
+        episode,
+        adapter="csv",
+        adapter_confidence=1.0,
+        policy=load_default_policy(),
+        dictionary=_DICTIONARY,
     )
 
     assert graded.duration_s == pytest.approx(1.5)
@@ -470,7 +527,11 @@ def test_grade_episode_score_is_unchanged_with_no_episode_metrics_registered(
     policy = load_default_policy()
 
     graded, _findings = grade_episode(
-        raw_episode, adapter=adapter, adapter_confidence=0.9, policy=policy
+        raw_episode,
+        adapter=adapter,
+        adapter_confidence=0.9,
+        policy=policy,
+        dictionary=_DICTIONARY,
     )
 
     assert graded.metrics == {}
@@ -525,7 +586,11 @@ def test_grade_episode_folds_its_own_score_in_as_one_more_equal_weight_child(
     episode = Episode(id="episode_0", streams=[stream])
 
     graded, _findings = grade_episode(
-        episode, adapter="csv", adapter_confidence=0.9, policy=policy
+        episode,
+        adapter="csv",
+        adapter_confidence=0.9,
+        policy=policy,
+        dictionary=_DICTIONARY,
     )
 
     assert graded.metrics["stub_episode_metric"].status == MetricStatus.CRITICAL
@@ -574,7 +639,11 @@ def test_an_episode_level_finding_names_no_stream_or_channel(monkeypatch):
     episode = Episode(id="episode_0", streams=[stream])
 
     _graded, findings = grade_episode(
-        episode, adapter="csv", adapter_confidence=0.9, policy=policy
+        episode,
+        adapter="csv",
+        adapter_confidence=0.9,
+        policy=policy,
+        dictionary=_DICTIONARY,
     )
 
     by_metric = {finding.metric_id: finding for finding in findings}
@@ -775,7 +844,7 @@ def test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child(
     )
 
     graded, _findings = grade_stream(
-        stream, policy=policy, is_regular=True, episode_id="episode_0"
+        stream, policy=policy, is_regular=True, episode_id="episode_0", category=None
     )
 
     assert graded.metrics["stub_stream_metric"].status == MetricStatus.GOOD

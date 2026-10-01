@@ -90,7 +90,11 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
     )
 
     graded, _findings = grade_stream(
-        stream, policy=load_default_policy(), is_regular=True, episode_id="episode_0"
+        stream,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
     )
 
     assert graded.metrics["stub_frame_metric"].status == MetricStatus.NOT_APPLICABLE

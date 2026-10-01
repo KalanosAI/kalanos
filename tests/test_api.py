@@ -31,6 +31,8 @@ PUBLIC_SURFACE = {
     "load_dictionary",
     "Policy",
     "Dictionary",
+    "Category",
+    "CategoryGroup",
     "Report",
     "GradedEpisode",
     "GradedStream",

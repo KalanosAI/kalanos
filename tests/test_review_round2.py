@@ -39,7 +39,7 @@ from kalanos.analysis.models.report import PayloadStatus, Report
 from kalanos.analysis.reporting.assemble import grade_episode
 from kalanos.api import grade
 from kalanos.assets.bundle import load_bundle, resolve_run_configuration
-from kalanos.assets.dictionary import load_dictionary
+from kalanos.assets.dictionary import load_default_dictionary, load_dictionary
 from kalanos.assets.policy import load_policy
 from kalanos.assets.yaml_strict import DuplicateKeyError, safe_load_strict
 from kalanos.cli import app
@@ -127,7 +127,11 @@ def test_f2_a_required_stream_without_a_payload_makes_the_episode_unknown():
         }
     )
     graded, _ = grade_episode(
-        episode, adapter="lerobot_v3", adapter_confidence=1.0, policy=load_policy(None)
+        episode,
+        adapter="lerobot_v3",
+        adapter_confidence=1.0,
+        policy=load_policy(None),
+        dictionary=load_default_dictionary(),
     )
     statuses = {s.taxonomy_type: s.evaluation.payload for s in graded.streams}
     assert statuses[starved.taxonomy_type] == PayloadStatus.MISSING_INPUT
@@ -149,6 +153,7 @@ def test_f2_a_stream_without_channels_is_not_required():
         adapter="lerobot_v3",
         adapter_confidence=1.0,
         policy=load_policy(None),
+        dictionary=load_default_dictionary(),
     )
     for stream in graded.streams:
         if not stream.channels:
