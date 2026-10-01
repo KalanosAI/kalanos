@@ -171,6 +171,16 @@ metrics:
         good: 0.1
         bad: 0.5
 
+  # Report-only: no band is decided. One waits on the detector benchmark measuring
+  # how often this fires on clean real recordings.
+  motion.velocity_spike_pct:
+    report_only: true
+
+  # Report-only: dimensionless, unlike mean_jerk_norm, but no smoothness band has
+  # been set against real recordings.
+  motion.log_dimensionless_jerk:
+    report_only: true
+
   # No bound decided; docs/METRICS.md marks it to define.
   motion.action_chatter: {}
 

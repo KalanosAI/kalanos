@@ -1,5 +1,5 @@
-"""The motion family: jerk, chatter, saturation, limit proximity, drift, vibration,
-torque and energy.
+"""The motion family: jerk, velocity spikes, dimensionless jerk, chatter, saturation,
+limit proximity, drift, vibration, torque and energy.
 
 Whether the recorded motion is physically plausible. Every metric here gates
 on a `proprio.*` taxonomy type, since values like normalised jerk only mean
@@ -19,6 +19,7 @@ from typing import cast
 import polars as pl
 
 # Internal
+from kalanos.analysis.localization import finite, source_values, support_for
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
 from kalanos.analysis.models.domain import FramePayload
@@ -57,6 +58,9 @@ _STILL_STEP_RATIO = 0.05
 # not to deliberate motion.
 _HF_CUTOFF_HZ = 20.0
 
+# velocity_spike_pct tuning: the same 6σ that spike_pct uses on values.
+_VELOCITY_SPIKE_SIGMA = 6.0
+
 # Structural requirements, one per metric below.
 _REQUIRES_JERK = Requires(
     regular_sampling=True,
@@ -69,6 +73,14 @@ _REQUIRES_CHATTER = Requires(
     min_samples=5,
     taxonomy=[_JOINT_VELOCITY],
     capabilities=["derivatives"],
+)
+# One outlier among n first differences reaches at most sqrt(n - 1) σ, so
+# fewer than 38 differences could never clear 6σ however large the jump.
+_REQUIRES_VELOCITY_SPIKE = Requires(
+    regular_sampling=True, min_samples=40, taxonomy=[_JOINT_POSITION]
+)
+_REQUIRES_DIMENSIONLESS_JERK = Requires(
+    regular_sampling=True, min_samples=5, taxonomy=[_JOINT_POSITION]
 )
 _REQUIRES_STILL_DRIFT = Requires(min_samples=8, taxonomy=[_JOINT_POSITION])
 _REQUIRES_VEL_SATURATION = Requires(min_samples=2, taxonomy=[_JOINT_VELOCITY])
@@ -231,6 +243,164 @@ def max_abs_jerk(ctx: StreamContext) -> MetricResult:
             "n_samples": ctx.n_samples,
             "n_channels": n_channels,
             "median_dt_s": median_dt,
+        },
+    )
+
+
+@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_VELOCITY_SPIKE)
+def velocity_spike_pct(ctx: ChannelContext) -> MetricResult:
+    """Share of step-to-step position changes more than 6σ from their own mean.
+
+    The changes are not divided by dt: sampling is regular, so a constant dt
+    cancels out of the z-score.
+
+    Parameters
+    ----------
+    ctx : ChannelContext
+        The joint-position channel to measure.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when:
+        - the dtype is not numeric
+        - source row order is unavailable
+        - fewer than two finite position changes survive
+        - the position changes never vary
+        `report_only` otherwise.
+    """
+
+    if not ctx.values.dtype.is_numeric():
+        return not_applicable(
+            "channel is not numeric; there are no position changes to measure"
+        )
+
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    ordered_values, indices, _ = ordered
+
+    values = ordered_values.cast(pl.Float64).to_list()
+    diffs: list[float] = []
+    positions: list[int] = []
+    for position in range(1, len(values)):
+        previous, current = values[position - 1], values[position]
+        if finite(previous) and finite(current):
+            diffs.append(current - previous)
+            positions.append(position)
+
+    if len(diffs) < 2:
+        return not_applicable("fewer than two finite position changes")
+
+    mean = statistics.fmean(diffs)
+    std = statistics.pstdev(diffs)
+    if std == 0:
+        return not_applicable(
+            "position changes never vary; no scale to measure a velocity spike against"
+        )
+
+    spikes = [
+        position
+        for diff, position in zip(diffs, positions, strict=True)
+        if abs(diff - mean) > _VELOCITY_SPIKE_SIGMA * std
+    ]
+
+    return MetricResult(
+        value=100.0 * len(spikes) / len(diffs),
+        unit="%",
+        status=MetricStatus.REPORT_ONLY,
+        support=support_for(indices, [(p, p + 1) for p in spikes]),
+        evidence={
+            "n_differences": len(diffs),
+            "sample_indices": [indices[p] for p in spikes],
+            "threshold_sigma": _VELOCITY_SPIKE_SIGMA,
+        },
+    )
+
+
+@metric(
+    level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_DIMENSIONLESS_JERK
+)
+def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
+    """Log dimensionless jerk of one joint, `-ln(T^5 · ∫ jerk² dt / range²)`.
+
+    Higher is smoother. The value does not change when the same trajectory is
+    played faster or slower, or scaled in amplitude.
+
+    Parameters
+    ----------
+    ctx : ChannelContext
+        The joint-position channel to measure.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when:
+        - the dtype is not numeric
+        - source row order is unavailable
+        - any value or timestamp is null or non-finite
+        - the median gap is zero
+        - the channel never moves
+        - the third difference is zero throughout
+        - the dimensionless jerk overflows
+        `report_only` otherwise.
+    """
+
+    if not ctx.values.dtype.is_numeric():
+        return not_applicable(
+            "channel is not numeric; there is no series to differentiate"
+        )
+
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    ordered_values, _, timestamps = ordered
+
+    values = ordered_values.cast(pl.Float64).to_list()
+    if not all(finite(value) for value in values) or not all(
+        finite(timestamp) for timestamp in timestamps
+    ):
+        return not_applicable(
+            "channel carries null or non-finite values; there is no contiguous "
+            "series to differentiate"
+        )
+
+    dt = _median_gap(timestamps)
+    if dt is None or dt <= 0:
+        return not_applicable("median gap is zero")
+
+    duration = timestamps[-1] - timestamps[0]
+    amplitude = max(values) - min(values)
+    if amplitude == 0:
+        return not_applicable("channel never moves; smoothness is undefined")
+
+    third = [
+        values[i + 3] - 3 * values[i + 2] + 3 * values[i + 1] - values[i]
+        for i in range(len(values) - 3)
+    ]
+    # Products, since float ** raises OverflowError where a product gives inf.
+    dt_cubed = dt * dt * dt
+    duration_5 = duration * duration * duration * duration * duration
+    integral = sum((d / dt_cubed) * (d / dt_cubed) for d in third) * dt
+    dimensionless = duration_5 * integral / (amplitude * amplitude)
+
+    if dimensionless == 0:
+        return not_applicable(
+            "third difference is zero throughout; the motion has no jerk to measure"
+        )
+    if not math.isfinite(dimensionless):
+        return not_applicable("dimensionless jerk overflowed")
+
+    return MetricResult(
+        value=-math.log(dimensionless),
+        unit="dimensionless",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "estimator": "position_dimensionless_jerk_v1",
+            "duration_s": duration,
+            "amplitude": amplitude,
+            "median_dt_s": dt,
+            "n_samples": len(values),
         },
     )
 

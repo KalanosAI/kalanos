@@ -62,6 +62,7 @@ class Defect(str, Enum):
     SATURATION    = "saturation"
     DRIFT         = "drift"
     SPIKE         = "spike"
+    STEP          = "step"
     NOISE         = "noise"
     DEAD_TAXEL    = "dead_taxel"
     HYSTERESIS    = "hysteresis"
@@ -725,6 +726,55 @@ def spike_channel(
     return stream.model_copy(update={"payload": FramePayload(frame=new_frame)})
 
 
+def step_channel(
+    stream: Stream, channel: str, *, index: int | None = None, magnitude: float = 20.0
+) -> Stream:
+    """Offset one channel by a constant from one row to the end.
+
+    Models a sustained jump, such as an encoder slipping a count or a joint re-homing,
+    where `spike_channel` models a single bad sample.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged.
+    channel : str
+        The channel to step.
+    index : int or None
+        The first row to offset. Defaults to the channel's midpoint.
+    magnitude : float
+        How many of the channel's own standard deviations to add.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` whose `channel` carries `magnitude * std` added
+        to every sample from `index` on. A null stays null.
+        Every other channel and the timestamps are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If `channel` is not one of the stream's channels,
+        or `index` falls outside the frame.
+    """
+
+    _require_channel(stream, channel)
+    frame = _channel_frame(stream)
+    step_index = frame.height // 2 if index is None else index
+    _window(frame, step_index, 1)
+
+    std = cast(float, frame[channel].std())
+    offset = magnitude * std
+    values = [
+        value if position < step_index or value is None else value + offset
+        for position, value in enumerate(frame[channel].to_list())
+    ]
+    new_frame = frame.with_columns(pl.Series(channel, values))
+
+    return stream.model_copy(update={"payload": FramePayload(frame=new_frame)})
+
+
 def add_noise(stream: Stream, channel: str, *, amplitude: float = 0.2) -> Stream:
     """Add a deterministic alternating offset to one channel, at the Nyquist frequency.
 
@@ -1035,6 +1085,8 @@ def apply_defect(ctx: MetricInput, defect: Defect) -> MetricInput:
             injected = freeze_frames(stream, start=start, length=length)
         case Defect.SPIKE:
             injected = spike_channel(stream, _resolved_channel(channel, defect))
+        case Defect.STEP:
+            injected = step_channel(stream, _resolved_channel(channel, defect))
         case Defect.NOISE:
             injected = add_noise(stream, _resolved_channel(channel, defect))
         case Defect.DEAD_TAXEL:

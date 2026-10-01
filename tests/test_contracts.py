@@ -57,6 +57,8 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "hysteresis": Defect.HYSTERESIS,
     "mean_jerk_norm": Defect.SPIKE,
     "max_abs_jerk": Defect.SPIKE,
+    "velocity_spike_pct": Defect.STEP,
+    "log_dimensionless_jerk": Defect.SPIKE,
     "action_chatter": Defect.SPIKE,
     "still_drift": Defect.DRIFT,
     "vel_saturation_pct": Defect.SATURATION,
