@@ -13,6 +13,7 @@ import pytest
 
 # Internal
 import kalanos
+from kalanos.analysis.models.provenance import ExecutionTier
 
 # Local
 from helpers import FIXTURES_DIR
@@ -98,6 +99,13 @@ def test_grade_refuses_a_missing_path(tmp_path):
         kalanos.grade(tmp_path / "missing")
 
 
+def test_grade_refuses_a_sample_count_below_one(tmp_path):
+    """Verify vision_samples=0 is refused before the path is even looked at."""
+
+    with pytest.raises(ValueError, match="vision_samples"):
+        kalanos.grade(tmp_path / "missing", vision_samples=0)
+
+
 def test_grade_refuses_an_empty_folder(tmp_path):
     """Verify a folder holding nothing at all raises NothingToGrade."""
 
@@ -125,3 +133,18 @@ def test_a_graded_report_records_its_source():
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
     assert report.schema_version == "7.0.0"
+
+
+def test_the_full_tier_reads_every_camera_frame():
+    """Verify `--tier full` implies a full frame scan whatever the sample count."""
+
+    report = kalanos.grade(
+        str(FIXTURES_DIR / "lerobot_v3_tiny"),
+        tier=ExecutionTier.FULL,
+        vision_samples=2,
+    )
+
+    for episode in report.episodes:
+        camera = next(s for s in episode.streams if s.kind == "video")
+        evidence = camera.metrics["sharpness_score"].evidence
+        assert evidence["n_sampled"] == evidence["n_frames"]

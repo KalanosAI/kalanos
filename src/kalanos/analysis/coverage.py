@@ -4,6 +4,11 @@ import math
 from collections import Counter, defaultdict
 
 from kalanos.analysis.metrics.registry import registered_metrics
+from kalanos.analysis.metrics.vision import CORE_METRICS, is_camera_footage
+from kalanos.analysis.models.binding import (
+    SAMPLED_VIDEO_QUALITY_CAPABILITY,
+    VIDEO_QUALITY_CAPABILITY,
+)
 from kalanos.analysis.models.coverage import Availability, Coverage, CoverageRow
 from kalanos.analysis.models.metrics import Level, MetricStatus
 
@@ -118,6 +123,95 @@ def merge_rows(rows):
     return merged
 
 
+def _sampled(stream):
+    """A camera stream's `CORE_METRICS` results when all computed, else `None`.
+
+    A read that decoded fewer frames than it requested has not finished its sample,
+    however many the metrics computed on.
+    """
+
+    if not is_camera_footage(stream.kind, stream.taxonomy_type):
+        return None
+    if stream.frames is not None and stream.frames.missing_rows:
+        return None
+    results = [stream.metrics.get(name) for name in CORE_METRICS]
+    if all(r is not None and state_of(r) == Availability.COMPUTED for r in results):
+        return results
+    return None
+
+
+def _unsampled_reason(stream):
+    """Why the vision metrics did not sample a stream, from their own evidence."""
+
+    for name in CORE_METRICS:
+        result = stream.metrics.get(name)
+        if result is not None and state_of(result) != Availability.COMPUTED:
+            reason = result.evidence.get("reason")
+            if reason:
+                return reason
+    if stream.frames is not None and stream.frames.missing_rows:
+        return f"{len(stream.frames.missing_rows)} requested frame(s) were not decoded"
+    return "vision metrics did not sample the stream"
+
+
+def vision_metric_coverage(streams):
+    """Whether the vision metrics sampled every camera stream, and read every frame.
+
+    Parameters
+    ----------
+    streams : list of GradedStream
+
+    Returns
+    -------
+    tuple of (bool, bool)
+        `(sampled, full)`: sampled when every camera stream computed each of
+        `CORE_METRICS`, full when each of them also measured every declared frame.
+        No camera stream is `(False, False)`: nothing was evaluated.
+    """
+
+    cameras = [s for s in streams if is_camera_footage(s.kind, s.taxonomy_type)]
+    if not cameras:
+        return False, False
+    results = []
+    for s in cameras:
+        sampled = _sampled(s)
+        if sampled is None:
+            return False, False
+        results += sampled
+    full = all(
+        r.evidence.get("n_sampled") == r.evidence.get("n_frames") for r in results
+    )
+    return True, full
+
+
+def vision_metric_frames(streams):
+    """`(examined, declared)` frames over the cameras the vision metrics sampled.
+
+    A camera's examined count is the most frames any of `CORE_METRICS` measured on it.
+
+    Parameters
+    ----------
+    streams : list of GradedStream
+
+    Returns
+    -------
+    tuple of (int, int) or None
+        `None` when the metrics sampled no camera.
+    """
+
+    counts = [
+        (
+            max(int(r.evidence.get("n_sampled", 0)) for r in results),
+            int(results[0].evidence.get("n_frames", 0)),
+        )
+        for results in map(_sampled, streams)
+        if results is not None
+    ]
+    if not counts:
+        return None
+    return sum(e for e, _ in counts), sum(d for _, d in counts)
+
+
 def episode_coverage(episode, requirements):
     metrics = merge_rows(
         [r for s in episode.streams for r in s.coverage]
@@ -161,18 +255,21 @@ def episode_coverage(episode, requirements):
             r.availability == Availability.COMPUTED for r in by_kind[kind]
         )
 
-    camera_count = sum(s.kind in ("video", "image") for s in episode.streams)
+    camera_count = sum(
+        is_camera_footage(s.kind, s.taxonomy_type) for s in episode.streams
+    )
     sampled_vision = done("vision") and len(by_kind["vision"]) == camera_count
     full_vision = sampled_vision and all(
         r.measurements.get("examined_frames") == r.measurements.get("declared_frames")
         for r in by_kind["vision"]
     )
+    metric_sampled, metric_full = vision_metric_coverage(episode.streams)
     diagnostic_capabilities = {
         "cross_stream_timing": done("timing"),
         "action_consistency": done("tracking"),
         "motion_shape": done("motion"),
-        "sampled_video_quality": sampled_vision,
-        "video_quality": full_vision,
+        "sampled_video_quality": sampled_vision or metric_sampled,
+        "video_quality": full_vision or metric_full,
         "training_windows": done("windows"),
     }
     keys = set(requirements.required_capabilities) | {
@@ -234,7 +331,7 @@ def episode_coverage(episode, requirements):
         )
         for s in episode.streams
     ]
-    cameras = [s for s in episode.streams if s.kind in ("video", "image")]
+    cameras = [s for s in episode.streams if is_camera_footage(s.kind, s.taxonomy_type)]
     visual_state = (
         Availability.UNAVAILABLE
         if "video_quality" in requirements.required_capabilities
@@ -275,19 +372,42 @@ def episode_coverage(episode, requirements):
                 [(r.availability, r.reason) for r in by_kind["vision"]],
             )
         ]
+    metric_frames = vision_metric_frames(episode.streams)
+    # The vision metrics run under every scope; only one that needs video
+    # counts them against the camera streams, the rest keep them not required.
+    video_required = bool(
+        {VIDEO_QUALITY_CAPABILITY, SAMPLED_VIDEO_QUALITY_CAPABILITY}
+        & set(requirements.required_capabilities)
+    )
+    if not by_kind["vision"] and metric_frames is not None and video_required:
+        dimensions = [r for r in dimensions if r.key != "visual_quality"] + [
+            row(
+                "visual_quality",
+                "camera_stream_episode",
+                [
+                    (Availability.COMPUTED, None)
+                    if _sampled(s) is not None
+                    else (Availability.UNAVAILABLE, _unsampled_reason(s))
+                    for s in cameras
+                ],
+            )
+        ]
     return Coverage(
         metrics=metrics,
         capabilities=capabilities,
         dimensions=dimensions,
         decoded_frames_examined=sum(
             r.measurements.get("examined_frames", 0) for r in by_kind["vision"]
-        ),
-        eligible_visual_frames=sum(
-            r.measurements["declared_frames"] for r in by_kind["vision"]
         )
         if by_kind["vision"]
-        and all("declared_frames" in r.measurements for r in by_kind["vision"])
-        else None,
+        else (metric_frames[0] if metric_frames else 0),
+        eligible_visual_frames=(
+            sum(r.measurements["declared_frames"] for r in by_kind["vision"])
+            if all("declared_frames" in r.measurements for r in by_kind["vision"])
+            else None
+        )
+        if by_kind["vision"]
+        else (metric_frames[1] if metric_frames else None),
         training_windows_examined=sum(
             r.measurements.get("examined_windows", 0) for r in by_kind["windows"]
         )

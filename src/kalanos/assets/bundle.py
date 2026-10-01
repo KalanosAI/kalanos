@@ -33,6 +33,7 @@ from kalanos.analysis.models.binding import (
     assertions_from_overrides,
     resolve_feature_types,
 )
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.errors import ConfigurationError, MappingOverrideError
@@ -51,7 +52,7 @@ from kalanos.assets.mapping import (
 )
 from kalanos.assets.policy import load_policy
 from kalanos.assets.yaml_strict import safe_load_strict
-from kalanos.core.settings import get_settings
+from kalanos.core.settings import Settings, get_settings
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -86,6 +87,8 @@ class RunConfiguration:
     requirements : RequirementsSection
     requirements_id, policy_id, binding_id, dictionary_id : ConfigIdentity
         Identities with content digests, for the report's `run`.
+    vision : VisionSpec
+        How camera footage is read, after the command line and environment.
     """
 
     overrides: list[MappingOverride]
@@ -100,6 +103,7 @@ class RunConfiguration:
     bundle_id: ConfigIdentity | None = None
     bundle: Bundle = field(default_factory=Bundle)
     limits: SourceLimits = field(default_factory=SourceLimits)
+    vision: VisionSpec = field(default_factory=VisionSpec)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -336,6 +340,7 @@ def resolve_run_configuration(
                     if bundle.diagnostics
                     else {}
                 ),
+                **_vision_identity(bundle.vision),
             }
         ),
         origin="resolved",
@@ -374,6 +379,67 @@ def resolve_run_configuration(
     )
 
 
+def _vision_identity(vision: VisionSpec) -> dict[str, object]:
+    """How camera footage is read, for the execution identity, empty when default.
+
+    Left out at its default so a run without vision settings keeps its digest.
+    """
+
+    if vision == VisionSpec():
+        return {}
+    return {"vision": vision.model_dump(mode="json")}
+
+
+def resolve_vision(
+    bundle_vision: VisionSpec,
+    settings: Settings,
+    *,
+    samples: int | None,
+    full_frame_scan: bool | None,
+    tier: ExecutionTier,
+) -> VisionSpec:
+    """Resolve how camera footage is read: CLI, then environment, then bundle.
+
+    Parameters
+    ----------
+    bundle_vision : VisionSpec
+        The bundle's `vision` section.
+    settings : Settings
+        The process settings, carrying any `KALANOS_*` override.
+    samples, full_frame_scan : int, bool or None
+        The command line's values, `None` where it gave none.
+    tier : ExecutionTier
+        The run's tier; the full tier always scans every frame.
+
+    Returns
+    -------
+    VisionSpec
+        The bundle's section with the sample count and the full scan resolved.
+    """
+
+    sample_frames = next(
+        value
+        for value in (samples, settings.vision_samples, bundle_vision.sample_frames)
+        if value is not None
+    )
+    scan = next(
+        value
+        for value in (
+            full_frame_scan,
+            settings.full_frame_scan,
+            bundle_vision.full_frame_scan,
+        )
+        if value is not None
+    )
+    return VisionSpec.model_validate(
+        {
+            **bundle_vision.model_dump(),
+            "sample_frames": sample_frames,
+            "full_frame_scan": scan or tier == ExecutionTier.FULL,
+        }
+    )
+
+
 def overrides_for(config: RunConfiguration) -> Sequence[MappingOverride]:
     """The pipeline-shaped overrides a resolved configuration carries."""
 
@@ -391,8 +457,14 @@ def prepare_configuration(
     sidecar: bool = True,
     tier: ExecutionTier | None = None,
     limits: SourceLimits | None = None,
+    vision_samples: int | None = None,
+    full_frame_scan: bool | None = None,
 ) -> tuple[Policy, Dictionary, RunConfiguration]:
-    """Load grade/benchmark inputs identically; explicit policy wins over bundle."""
+    """Load grade/benchmark inputs identically; explicit policy wins over bundle.
+
+    `vision_samples` and `full_frame_scan` are the command line's values,
+    resolved with the environment and the bundle by `resolve_vision`.
+    """
 
     settings = get_settings()
     explicit_policy = policy is not None
@@ -444,9 +516,17 @@ def prepare_configuration(
         ]
         caps = [v for v in candidates if v is not None]
         effective[name] = min(caps) if caps else None
+    vision = resolve_vision(
+        config.bundle.vision,
+        settings,
+        samples=vision_samples,
+        full_frame_scan=full_frame_scan,
+        tier=config.scope.tier,
+    )
     config = replace(
         config,
         limits=SourceLimits(**effective),
+        vision=vision,
         execution_id=ConfigIdentity(
             id=f"tier-{config.scope.tier.value}",
             origin="resolved",
@@ -463,6 +543,7 @@ def prepare_configuration(
                         if config.bundle.diagnostics
                         else {}
                     ),
+                    **_vision_identity(vision),
                 }
             ),
         ),
@@ -478,4 +559,5 @@ __all__ = [
     "prepare_configuration",
     "resolve_policy_path",
     "resolve_run_configuration",
+    "resolve_vision",
 ]

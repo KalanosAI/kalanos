@@ -203,6 +203,22 @@ def test_optional_video_is_explicitly_outside_numeric_scope():
     assert r.eligible == 0 and r.not_required > 0 and r.computed == 0
 
 
+def test_a_depth_stream_is_no_camera_in_the_visual_quality_row():
+    """Depth video is not camera footage, so it is neither covered nor missing."""
+
+    report = grade(
+        LEROBOT_FIXTURE,
+        mapping={"observation.images.up": "extero.depth"},
+        bundle=Bundle(
+            requirements=RequirementsSection(required_capabilities=["video_quality"])
+        ),
+    )
+
+    for episode in report.episodes:
+        [row] = [r for r in episode.coverage.dimensions if r.key == "visual_quality"]
+        assert (row.eligible, row.not_required) == (0, 0)
+
+
 def test_missing_required_metric_cannot_be_covered_by_another_check():
     report = grade(
         LEROBOT_FIXTURE,

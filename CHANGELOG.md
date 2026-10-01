@@ -34,6 +34,44 @@ The decision-integrity and optional deeper-diagnostics release. Report schema 7.
 - See `docs/DIAGNOSTICS-0.7.0.md` and `docs/CAPABILITIES.md` for exact supported
   inputs, conservative abstention, controls and remaining limits.
 
+### Video quality
+
+- Grade camera streams with the `vision` metrics: `sharpness_score` (the share of
+  native-resolution edge energy a re-blur removes), `exposure_shift_pct` (frames
+  exposed unlike their camera's typical frame), `exposure_level` (reported, never
+  graded), `frozen_frame_pct` (repeats while an action stream moves, scaled by
+  contrast) and `frame_count_vs_timebase` (container packets against timestamps).
+  Depth streams are not cameras.
+- Read 10 evenly spaced frames per camera by default, each decoded once and shared
+  by every vision metric. `--vision-samples` and `--full-frame-scan`, the
+  `KALANOS_VISION_SAMPLES` and `KALANOS_FULL_FRAME_SCAN` variables, and the
+  `vision_samples` and `full_frame_scan` arguments of `grade()` override the
+  bundle; `--tier full` always reads every frame. The resolved settings are part
+  of the execution identity.
+- The vision metrics grade only under a scope requiring `sampled_video_quality` or
+  `video_quality`, and feed those capabilities and the coverage ledger. A camera
+  whose read stops short of its requested frames is not sampled.
+- Configure every camera read once, in a top-level `vision` section of the bundle
+  (`sample_frames`, `full_frame_scan`, `max_decode_frames`, `max_pixels`, previews
+  and exposure levels). `diagnostics.vision` is now a bool that publishes this
+  read; a bundle that sets the section under `diagnostics.vision` no longer
+  validates. The default sample is 10 frames, down from 96.
+- Record each camera's read once, as `GradedStream.frames`: rows requested,
+  examined and missing, and per frame its presentation time, shape, blur, clipped
+  share and, for evidence frames, a luminance SHA-256. Vision results carry
+  support intervals and, when graded warning or critical, a worst-frame
+  thumbnail. Decode caps and decoder failures keep the frames already read.
+- Compare each camera across its episodes in `Report.cameras`, raising
+  `vision.blur_vs_camera` and `vision.exposure_vs_camera` findings.
+- Calibrate the `sharpness_score`, `exposure_shift_pct` and `frozen_frame_pct`
+  bands on lerobot/pusht, lerobot/cmu_stretch and lerobot/aloha_static_towel; see
+  `docs/METRICS.md`.
+- `kalanos benchmark` injects blur, clipping and frozen frames into a
+  native-resolution copy of each camera, only under a scope that grades vision.
+  `kalanos.testing` adds `blur_frames`, `clip_frames`, `Defect.BLUR` and
+  `Defect.CLIPPED`, and `stream_context` takes `vision_samples`,
+  `full_frame_scan` and `episode_streams`.
+
 ### Diagnostic correctness fixes
 
 - Match the consumed channel before propagating findings into training windows;

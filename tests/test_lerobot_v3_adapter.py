@@ -142,11 +142,13 @@ def test_the_declared_rate_is_read_not_inferred(tmp_path):
     assert info.episode_count == 2
 
 
-def test_a_camera_stream_is_never_decoded_while_grading(monkeypatch):
-    """Verify grading the whole fixture never touches the video decoder."""
+def test_a_camera_stream_is_never_fully_decoded_while_grading(monkeypatch):
+    """Verify grading the whole fixture samples frames and never decodes them all."""
 
     monkeypatch.setattr(
-        video, "_load_av", lambda: pytest.fail("_load_av() was called while grading")
+        video.VideoPayload,
+        "fetch",
+        lambda self: pytest.fail("VideoPayload.fetch() was called while grading"),
     )
 
     policy = load_default_policy()

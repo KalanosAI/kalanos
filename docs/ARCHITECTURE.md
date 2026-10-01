@@ -135,7 +135,7 @@ Use the cheapest thing that can decide the question: heuristic before statistica
 
 In inference, most of the work is deterministic. Delimiters, containers, comment headers, monotonic time columns and magnitude-based unit inference are all things a parser can decide. A model costs seconds or minutes per file on CPU, which is the entire runtime budget for a folder of hundreds, and it fails differently: a heuristic says which signal was missing, while a model produces a plausible wrong answer. Some schemas are exotic enough that no rule will reach them, with undocumented nesting or field names no alias table anticipates. Those are what a model backend is for. The accumulating `UnresolvedSource` records are both the trigger for adding one and the corpus to measure it against.
 
-The same ordering applies to video. Decoding every frame of every episode to grade a dataset is not a plausible thing to do, so frame metrics run on a stratified sample and report how many frames they looked at. Frozen-frame detection needs no full decode at all, since hashing a strided subsample finds duplicates cheaply, and a camera that stopped updating looks fine in every other metric.
+The same ordering applies to video. Decoding every frame of every episode to grade a dataset is not a plausible thing to do, so frame metrics read a sample and report how many frames they looked at. Blur and exposure sample single frames. Frozen-frame detection reads a few windows of consecutive frames, since a freeze is only visible between neighbours, and the single frames are taken from inside those windows, so one decode serves all three. `--full-frame-scan` or `KALANOS_FULL_FRAME_SCAN` makes that one decode cover every frame, streamed so that only per-frame measurements are kept. Frozen-frame detection sees the episode's action streams through `StreamContext.episode_streams`, because a still camera over an idle robot is not a freeze, and a camera that stopped updating looks fine in every other metric.
 
 And in metrics generally. Descriptive statistics answer most questions about a signal, in a form a threshold can grade. Faults no fixed threshold catches, such as drift, regime change, or a pattern anomalous only relative to the rest of the recording, want a time-series detector instead. Either way the output is a `MetricResult` and the requirements gate applies unchanged, so scoring never learns which kind of thing produced a number.
 
@@ -273,9 +273,8 @@ Two display rules hold in every format:
 ## What is not built yet
 
 - `--plugin` as a CLI flag for loading a single-file adapter without publishing a package.
-- Every metric family beyond `timing`, `integrity` and `motion`: `consistency`, `vision`, `coverage`, `calibration`, `annotation` and `schema`.
+- Every metric family beyond `timing`, `integrity`, `motion` and `vision`: `consistency`, `coverage`, `calibration`, `annotation` and `schema`.
 - Running an out-of-tree metric, or writing a report through an out-of-tree reporter. Both groups are discovered and listed; neither is wired into a run.
-- Frame decoding: video streams are carried as lazy payloads, but no vision metric decodes one yet, so a frame is never graded.
 - The CLI beyond `grade`, the plugin listings and `new` — namely `inspect`, `--fail-under` and `--sample`.
 
 The issue tracker holds the sequence. This document describes the design those issues implement.

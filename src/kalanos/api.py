@@ -17,6 +17,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis import pipeline
+from kalanos.analysis.adapters.video import close_remote_handles
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
 # ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
@@ -38,9 +39,7 @@ from kalanos.analysis.models.provenance import (
 )
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.source_identity import hash_local_source
-from kalanos.assets.bundle import (
-    prepare_configuration,
-)
+from kalanos.assets.bundle import prepare_configuration
 from kalanos.core.settings import get_settings
 
 
@@ -75,6 +74,8 @@ def grade(
     policy: Policy | None = None,
     dictionary: Dictionary | None = None,
     limits: SourceLimits | None = None,
+    vision_samples: int | None = None,
+    full_frame_scan: bool | None = None,
     mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: str | os.PathLike[str] | UPath | None = None,
     sidecar: bool = True,
@@ -99,6 +100,13 @@ def grade(
     limits : SourceLimits or None
         The largest remote root to stream.
         `None` uses `Settings.remote_max_bytes` and `Settings.remote_max_files`.
+    vision_samples : int or None
+        How many frames blur and exposure sample, and windows frozen frames read.
+        `None` uses `Settings.vision_samples`, then the bundle's `vision` section.
+    full_frame_scan : bool or None
+        Whether frame metrics read every frame rather than a sample.
+        `None` uses `Settings.full_frame_scan`, then the bundle's `vision` section;
+        the full tier always reads every frame.
     mapping : Mapping[str, str] or None
         Source fields to type for this run, each a `Stream.source_field`
         mapped to a dictionary key. The same as `--map`.
@@ -135,6 +143,8 @@ def grade(
         If `path` held nothing to analyse, skip or refuse.
     AdapterTie
         If two adapters bid the same top confidence on one file.
+    ValueError
+        If `vision_samples` is below 1.
     MappingOverrideError
         If a mapping source is malformed, names a type the dictionary lacks,
         or names a field no stream has.
@@ -145,6 +155,9 @@ def grade(
     which beats the sidecar. Each applied override is recorded on
     `Report.mapping_overrides` with where it came from.
     """
+
+    if vision_samples is not None and vision_samples < 1:
+        raise ValueError(f"vision_samples must be at least 1; got {vision_samples}")
 
     # Step 1: resolve what was typed into a root, and refuse an oversized remote one,
     # before the policy and dictionary load.
@@ -167,6 +180,8 @@ def grade(
         sidecar=sidecar,
         tier=tier,
         limits=limits,
+        vision_samples=vision_samples,
+        full_frame_scan=full_frame_scan,
     )
     enforce_limits(source, config.limits)
     for conflict in config.conflicts:
@@ -205,15 +220,24 @@ def grade(
 
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,
     # so an empty report means the path itself held nothing.
-    report = pipeline.run(
-        root,
-        policy=policy,
-        source=source,
-        overrides=config.overrides,
-        config=config,
-        producer=producer,
-        run_info=run_info,
-    )
+    vision = config.vision
+    try:
+        report = pipeline.run(
+            root,
+            policy=policy,
+            source=source,
+            overrides=config.overrides,
+            config=config,
+            producer=producer,
+            run_info=run_info,
+            vision_samples=vision.sample_frames,
+            full_frame_scan=vision.full_frame_scan,
+            vision=vision,
+        )
+    finally:
+        # Remote video stays open across episodes; a later grade must not
+        # read a file that changed since through a stale handle.
+        close_remote_handles()
     if not (report.episodes or report.skipped or report.unresolved):
         raise NothingToGrade(f"{root} contains nothing to grade")
     if hash_source:

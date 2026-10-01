@@ -7,12 +7,15 @@
 # Built-in
 import importlib.metadata
 from pathlib import Path
+from unittest.mock import patch
 
 # External
 from typer.testing import CliRunner
 
 # Internal
+from kalanos import benchmark
 from kalanos.analysis.metrics.registry import registered_metrics
+from kalanos.analysis.models.binding import Bundle, RequirementsSection
 from kalanos.analysis.models.domain import Clock, ClockInfo, Episode
 from kalanos.assets.policy import load_policy
 from kalanos.benchmark import (
@@ -25,10 +28,16 @@ from kalanos.benchmark import (
     render_markdown,
 )
 from kalanos.cli import app
-from kalanos.testing import Defect, clean_recording
+from kalanos.testing import Defect, clean_frames, clean_recording
 
 # Local
 from helpers import FIXTURES_DIR
+
+
+# A scope under which vision grades, so cameras are decoded for injection.
+VIDEO_SCOPE = Bundle(
+    requirements=RequirementsSection(required_capabilities=["sampled_video_quality"])
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -199,5 +208,100 @@ def test_the_cli_benchmarks_a_lerobot_dataset_into_json(tmp_path: Path):
     assert benchmark.kalanos_version == importlib.metadata.version("kalanos")
     [dataset] = benchmark.datasets
     assert dataset.n_episodes == 2
-    # The fixture's camera stream is a decoded video, which has no frames to freeze.
-    assert Defect.FROZEN_FRAMES in dataset.not_injected
+    # The default scope does not grade vision, so no camera is decoded for injection.
+    for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
+        assert dataset.not_injected[defect] == "the scope does not grade vision"
+
+
+def _camera_episodes(count: int = 3) -> list[Episode]:
+    camera = clean_frames(frames=100, hz=30.0)
+    actions = clean_recording(
+        hz=30.0, samples=100, taxonomy_type="action.joint_position_command"
+    ).model_copy(update={"is_regular": True})
+    return [
+        Episode(id=f"episode_{index}", streams=[camera, actions])
+        for index in range(count)
+    ]
+
+
+def test_blur_and_clipping_are_injected_into_in_memory_frames():
+    """Verify the camera defects reach a stream holding its frames in memory."""
+
+    episodes = _camera_episodes()
+    rates = benchmark_episodes(
+        episodes, policy=load_policy(None), n_episodes=len(episodes), sample=3
+    )
+
+    for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
+        assert defect not in rates.not_injected, rates.not_injected.get(defect)
+
+
+def test_the_benchmark_keeps_vision_report_only_outside_a_video_scope():
+    """Verify the benchmark scopes vision as grade does, and closes remote video."""
+
+    closed: list[None] = []
+    with patch.object(benchmark, "close_remote_handles", lambda: closed.append(None)):
+        dataset = benchmark.benchmark_dataset(
+            str(FIXTURES_DIR / "lerobot_v3_tiny"), sample=0
+        )
+
+    vision_rows = [row for row in dataset.benign if row.family == "vision"]
+    assert vision_rows
+    for row in vision_rows:
+        assert row.observed_episodes == 0, row
+    assert closed
+
+
+def test_a_video_that_cannot_be_decoded_leaves_the_camera_defects_with_a_reason(
+    monkeypatch,
+):
+    """Verify a decode failure is reported per camera defect, not raised."""
+
+    def fail(self, size):
+        raise benchmark.DecodeFailed("broken file")
+
+    monkeypatch.setattr(benchmark.VideoPayload, "rgb_frames", fail)
+    dataset = benchmark.benchmark_dataset(
+        str(FIXTURES_DIR / "lerobot_v3_tiny"), sample=2, bundle=VIDEO_SCOPE
+    )
+
+    for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
+        assert "broken file" in dataset.not_injected[defect]
+
+
+def test_a_video_over_the_decode_cap_is_reported_not_decoded(monkeypatch):
+    """Verify a camera over the cap is refused before its frames are decoded."""
+
+    def fail(self, size):
+        raise AssertionError("decoded a video over the cap")
+
+    monkeypatch.setattr(benchmark.VideoPayload, "rgb_frames", fail)
+    monkeypatch.setattr(benchmark, "_MAX_DECODE_BYTES", 1)
+    dataset = benchmark.benchmark_dataset(
+        str(FIXTURES_DIR / "lerobot_v3_tiny"), sample=2, bundle=VIDEO_SCOPE
+    )
+
+    for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
+        assert "decode cap" in dataset.not_injected[defect]
+
+
+def test_camera_defects_are_injected_at_native_resolution(monkeypatch):
+    """Verify a camera defect goes into frames at the video's own size."""
+
+    shapes: set[tuple[int, ...]] = set()
+    inject = benchmark._inject
+
+    def record(stream, channel, defect):
+        if isinstance(stream.payload, benchmark.SyntheticFrames):
+            shapes.update(frame.shape for frame in stream.payload.frames)
+        return inject(stream, channel, defect)
+
+    monkeypatch.setattr(benchmark, "_inject", record)
+    dataset = benchmark.benchmark_dataset(
+        str(FIXTURES_DIR / "lerobot_v3_tiny"), sample=2, bundle=VIDEO_SCOPE
+    )
+
+    for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
+        assert defect not in dataset.not_injected, dataset.not_injected.get(defect)
+
+    assert shapes == {(32, 32, 3)}

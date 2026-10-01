@@ -18,9 +18,11 @@ from kalanos.testing import (
     Defect,
     add_noise,
     apply_defect,
+    blur_frames,
     clean_frames,
     clean_recording,
     clean_taxels,
+    clip_frames,
     drift_channel,
     drop_samples,
     freeze_frames,
@@ -248,6 +250,30 @@ def test_freezing_frames_repeats_the_predecessor_across_its_own_window():
 
     assert len(frozen.payload.frames) == len(clean.payload.frames)
     assert frozen.timestamps.to_list() == clean.timestamps.to_list()
+
+
+@pytest.mark.parametrize("inject", [blur_frames, clip_frames])
+def test_blurring_and_clipping_change_every_frame_and_nothing_else(inject):
+    """Both keep frame count, timestamps and shape; every frame's pixels change."""
+
+    numpy = pytest.importorskip("numpy")
+
+    clean = clean_frames(frames=12, height=16, width=16)
+    injected = inject(clean)
+
+    assert isinstance(injected.payload, SyntheticFrames) and isinstance(
+        clean.payload, SyntheticFrames
+    )
+    assert len(injected.payload.frames) == len(clean.payload.frames)
+    assert injected.timestamps.to_list() == clean.timestamps.to_list()
+    for before, after in zip(
+        clean.payload.frames, injected.payload.frames, strict=True
+    ):
+        assert after.shape == before.shape
+        assert not numpy.array_equal(after, before)
+
+    with pytest.raises(ValueError, match="SyntheticFrames"):
+        inject(clean_recording())
 
 
 def test_apply_defect_builds_frozen_frames_on_a_channelless_image_stream():

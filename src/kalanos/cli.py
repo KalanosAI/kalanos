@@ -140,6 +140,30 @@ def grade(
             ),
         ),
     ] = None,
+    vision_samples: Annotated[
+        int | None,
+        typer.Option(
+            "--vision-samples",
+            min=1,
+            help=(
+                "Frames sharpness and exposure sample per camera, "
+                "and 1 s windows the frozen-frame metric reads. "
+                "Defaults to KALANOS_VISION_SAMPLES, "
+                "then the bundle's vision section (10)."
+            ),
+        ),
+    ] = None,
+    full_frame_scan: Annotated[
+        bool,
+        typer.Option(
+            "--full-frame-scan",
+            help=(
+                "Read every video frame for frame metrics instead of a sample. "
+                "Slower; on a remote dataset it downloads every video segment. "
+                "Implied by --tier full."
+            ),
+        ),
+    ] = False,
     map_: Annotated[
         list[str] | None,
         typer.Option(
@@ -245,6 +269,15 @@ def grade(
     max_remote_files : int or None
         Refuse a remote dataset listing more files than this.
         `None` falls back to `Settings.remote_max_files`.
+    vision_samples : int or None
+        Frames sharpness and exposure sample per camera,
+        and 1 s windows the frozen-frame metric reads.
+        `None` falls back to `Settings.vision_samples`,
+        then the bundle's `vision` section.
+    full_frame_scan : bool
+        Read every video frame for frame metrics instead of a sample.
+        When absent, `Settings.full_frame_scan` decides,
+        then the bundle's `vision` section, or `--tier full` implies it.
     map_ : list[str] or None
         `FEATURE=TYPE` overrides, each typing one source field for this run.
     map_file : Path or None
@@ -295,6 +328,8 @@ def grade(
             sidecar=not no_sidecar,
             bundle=profile,
             tier=tier,
+            vision_samples=vision_samples,
+            full_frame_scan=True if full_frame_scan else None,
             hash_source=hash_source,
         )
     except KalanosError as exc:

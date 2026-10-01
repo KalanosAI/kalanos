@@ -56,9 +56,10 @@ execution:
   tier: full
 ```
 
-This preset requires video quality. Without an explicit visual diagnostic plan, no visual quality runner executes in this
-patch, including at full tier, so it remains unknown. Camera metadata and numeric
-analysis do not satisfy that requirement. Choosing a weaker profile changes the
+This preset requires video quality: every declared frame of every camera examined.
+At the full tier the vision metrics read every frame, so a run can satisfy it; at
+the standard tier they read a sample, and it remains unknown. Camera metadata and
+numeric analysis do not satisfy that requirement. Choosing a weaker profile changes the
 question asked and must not be described as completing the original audit.
 
 ## A selected decision policy

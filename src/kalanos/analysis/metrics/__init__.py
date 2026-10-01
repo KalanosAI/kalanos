@@ -8,4 +8,10 @@
 # Imported for its registration side effect:
 # decorating each function here is what puts it in the registry,
 # so the module must load before anything calls run_channel_metrics.
-from kalanos.analysis.metrics import annotation, integrity, motion, timing  # noqa: F401
+from kalanos.analysis.metrics import (  # noqa: F401
+    annotation,
+    integrity,
+    motion,
+    timing,
+    vision,
+)

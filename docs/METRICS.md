@@ -145,18 +145,105 @@ Distinct from `cross_stream` sync, which asks whether two clocks agree. These as
 
 ## vision
 
-Frame-level quality for camera streams. Every metric here runs on a stratified sample of frames and reports how many it looked at, because decoding everything to grade a dataset is not a plausible thing to do.
+Frame-level quality for camera streams. Every metric here reads a sample of frames by default and reports how many it looked at, because decoding everything to grade a dataset is not a plausible thing to do. `sharpness_score`, `exposure_shift_pct` and `exposure_level` measure 10 evenly spaced frames per camera stream by default, and `frozen_frame_pct` reads 10 evenly spaced windows of about 1 s of consecutive frames. The bundle's top-level `vision` section sets both counts (`sample_frames`) and whether all three read every frame (`full_frame_scan`); `KALANOS_VISION_SAMPLES` and `KALANOS_FULL_FRAME_SCAN` override it, and `--vision-samples` and `--full-frame-scan` override both. `--tier full` always reads every frame. No frame is decoded twice: when `frozen_frame_pct` will run, the sampled frames are taken from inside its windows, and otherwise only the sampled frames are decoded. Each frame is decoded as a 128x128 gray image for exposure and freezes, and each sampled frame also at native resolution for blur; every frame is measured and dropped, so a full scan holds no frames in memory. `frame_count_vs_timebase` counts the container's packets, decoding nothing, under a full scan too, since a decode bounded by the timestamps could never find a frame past them.
+
+These metrics grade only under a scope that requires `sampled_video_quality` or `video_quality`. Under the default `numeric-core-v1` scope they are measured and shown in every report but graded `report_only`. They feed the coverage ledger: a camera stream whose `sharpness_score` and `exposure_shift_pct` computed counts as sampled, and one where both measured every declared frame counts as fully read. `sampled_video_quality` needs every camera sampled; `video_quality`, which `vision-imitation-v1` requires, needs every camera fully read. Depth streams are not cameras here. A critical vision result requests review until a calibration manifest covers the metric.
 
 Without a decoder installed, all of these return `not_applicable` with a reason and the rest of the grade completes. A missing optional dependency must not turn a gradeable dataset into an error.
 
+The section's `max_decode_frames` bounds the frames a sampled read decodes, seek preroll included; a full scan reads every frame whatever its value. `max_pixels` bounds the size of a frame measured at native resolution. A read that reaches either cap is `unavailable`, and one the decoder fails after its first frame is an `error`; neither is graded, and both keep the frames already read as evidence. A file that fails before any frame decodes, one that is missing, cannot be opened or has no frame rate, is `not_applicable`. A stream whose rows the adapter reordered is not decoded, since frame positions would no longer name source rows.
+
+Each camera stream's read is recorded once, as `GradedStream.frames`: the rows requested, examined and missing, the sample plan and its parameters, and per frame its presentation time, luminance shape, blur and clipped share. The frames a sample would examine, and those `exposure_shift_pct` judged bad, also carry `luma_sha256`, a SHA-256 of their native luminance. Each metric carries only its own bad frames, as `support` intervals of source rows: `exposure_shift_pct` its bad sampled frames, `frozen_frame_pct` its counted runs. A `sharpness_score`, `exposure_shift_pct` or `frozen_frame_pct` result graded warning or critical also carries `thumbnail_png_base64`, a preview of its worst frame (`worst_index`, or `first_run_index` for a freeze), at the cost of decoding that one frame again.
+
+Depth streams (`extero.depth`, `extero.depth_confidence`, `extero.disparity`) are not camera footage, and every metric here is `not_applicable` on them.
+
 | Metric | Level | Requires | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
-| `frozen_frame_pct` | STREAM | an image or video stream | % | Share of frames identical to their predecessor. A camera that stopped updating looks fine in every other metric. | *to define* |
-| `blur_score` | STREAM | decode | variance | Variance of the Laplacian over sampled frames; lower means blurrier. Higher is better. | *to define* |
-| `exposure_bad_pct` | STREAM | decode | % | Share of sampled frames clipped at black or white. | *to define* |
-| `frame_count_vs_timebase` | STREAM | | fraction | Deviation between the number of frames present and the number the timebase implies. | *to define* |
+| `frozen_frame_pct` | STREAM | an image or video stream + an `action.*` stream | % | Share of frames, among those read, that repeat their predecessor inside a run of at least 0.5 s while an action stream in the same episode moves. A pair repeats when the mean absolute difference of its 64x64 gray thumbnails (2x2 averages of the shared 128x128 decode), scaled to a contrast of 255 by the lower P95 - P5 of the two frames, is below max(0.10, 0.25 x the 10th percentile of the stream's differences); a pair with a blank frame (P95 - P5 below 5) is never frozen. Reads `--vision-samples` evenly spaced windows (10 by default) of 1 s of consecutive frames, or every frame with `--full-frame-scan`. **Not applicable** without an action stream (an idle robot in a static scene would read as frozen) or with under 1 s of frames. | *calibrated: good < 0.01%, bad > 10%* |
+| `sharpness_score` | STREAM | decode | fraction | Median, over the sampled frames, of the share of the 3x3 Laplacian variance of the frame's native-resolution luminance that a further 3x3 box blur removes. Higher is sharper; a frame with no edges reads 0. | *calibrated: good > 0.74, bad < 0.55* |
+| `exposure_shift_pct` | STREAM | decode | % | Share of sampled frames exposed unlike their camera's typical frame within the episode, or blank. The typical frame is the median, over the sampled frames, of the mean gray level and of the share of pixels at 250 or more. A frame is bad when it is darker or brighter (its mean moves by more than 35% of the typical mean, and at least 20 gray levels), clipped (its share of pixels at 250 or more exceeds the typical share by more than 20 points), or blank (P95 - P5 below 5, on any camera). | *calibrated: good < 10%, bad > 40%* |
+| `exposure_level` | STREAM | decode | gray level | Median, over the sampled frames, of each frame's mean gray (0-255); evidence carries the median share of pixels at or below 5 and at or above 250. | reported, no band |
+| `frame_count_vs_timebase` | STREAM | a video file | fraction | `\|packets in the episode's segment - timestamps\| / timestamps`, with the segment's bounds taken half a frame early as tolerance. | *candidate: good < 1%, bad > 5%* |
 
-`frozen_frame_pct` needs no full decode: hashing a strided subsample of each frame finds duplicates cheaply.
+`frozen_frame_pct` counts only runs of at least 0.5 s, so isolated duplicates such as toto's every-4th-frame repeats never count. Its windows can miss a freeze that falls between them; `--full-frame-scan` finds it at the cost of time and, on a remote dataset, of downloading every video segment. The comparison, minimum run and moving-robot rules come from rda. Its *good* bound follows rda and Calibra: both flag any freeze, so any counted freeze leaves *good*; its *bad* bound is calibrated below. rda also excludes on three or more freezes or a single one of 3 s or more; neither is graded here, since `longest_run_s` and `n_runs` are evidence, not metrics.
+
+### Calibration
+
+The bands of `sharpness_score`, `exposure_shift_pct` and `frozen_frame_pct` are calibrated on three LeRobot datasets, retrieved from Hugging Face on 2026-10-01 and graded with kalanos 0.7.0, before its release, under a scope requiring `sampled_video_quality`, with the default 10 sampled frames:
+
+| dataset | revision | episodes | cameras | camera streams |
+|---|---|---|---|---|
+| `lerobot/pusht` | `7628202a2180972f291ba1bc6723834921e72c19` | 206 | `observation.image` (96x96, 10 fps) | 206 |
+| `lerobot/cmu_stretch` | `d84574233973ea9a292babd008256d2290a3f96e` | 135 | `observation.images.image` (128x128, 5 fps) | 135 |
+| `lerobot/aloha_static_towel` | `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff` | 50 | `cam_high`, `cam_low`, `cam_left_wrist`, `cam_right_wrist` (640x480, 50 fps) | 200 |
+
+Every episode was graded as it is, 541 clean camera streams in all. Defects went into 10 evenly spaced episodes of each dataset, 60 camera streams, each decoded at native resolution and graded clean and then under each variant:
+
+- `blur_5x5`: every frame replaced by its 5x5 box mean (`blur_frames`).
+- `clip_40pct`: the middle 40% of frames replaced by the same frames multiplied by 4 and clipped at white (`clip_frames` applied to the whole stream, then spliced).
+- `freeze_10pct`: 10% of the frames, from the 25% point on, replaced by the frame before them (`freeze_frames`), read with a full frame scan.
+
+The band rule:
+
+- *good* sits at the worst clean camera stream across all three datasets, its value rounded to two significant figures toward the defect, so that stream still grades good (a value on the bound is inside it).
+- *bad* is the value the matching defect reaches on the median injected stream.
+- Where *good* would reach or pass *bad*, the candidate band stays.
+
+| metric | band | worst clean stream (n = 541) | median injected stream (n = 60) | benchmark benign rate | benchmark detection rate |
+|---|---|---|---|---|---|
+| `sharpness_score` | good 0.74, bad 0.55 | 0.743 (aloha `cam_left_wrist`) | 0.549 (`blur_5x5`) | 0 of 206, 135 and 50 episodes | blur: 30/30, 30/30, 120/120 |
+| `exposure_shift_pct` | good 10%, bad 40% | 10% (aloha wrist cameras) | 40% (`clip_40pct`) | 0 of 206, 135 and 50 episodes | clipped: 30/30, 0/30, 0/120 |
+| `frozen_frame_pct` | good 0.01%, bad 10% | 0% | 10% (`freeze_10pct`) | 0 of 206, 135 and 50 episodes | frozen frames: 30/30, 2/30, 120/120 |
+
+Benchmark rates are per dataset, in the order pusht, cmu_stretch, aloha_static_towel, from `kalanos benchmark` with 30 sampled episodes under these bands. Four things limit them:
+
+- The benign rates are in-sample: *good* was placed beyond the same clean streams they count, so 0% follows from the rule. They show that no clean stream fires, not how often an unseen dataset would.
+- `exposure_shift_pct` compares each frame with its own episode's typical frame, so the benchmark's clip, which overexposes every frame alike, moves it only where the clip whitens frames unevenly, as on pusht's white background. A camera exposed one way throughout is the cross-episode comparison's to catch.
+- The benchmark freezes a quarter of the frames from the 25% point, wherever the robot is. It catches every freeze on pusht and aloha_static_towel but 2 of 30 on cmu_stretch, and under a full scan 57 of 60 `freeze_10pct` streams fire, the 3 misses cmu_stretch's too. Each missed freeze is found and set aside as idle: in the three cmu_stretch episodes checked, the actions move on 42% to 62% of steps, and on 30% to 45% inside the frozen stretch, below the majority a run needs. A freeze while the robot stands still reads like a still scene, so no signal-derived metric can tell them apart.
+- The 40% at which `exposure_shift_pct` reaches *bad* follows from the variant: 4 of the 10 sampled frames fall in the clipped stretch.
+
+*good* for `frozen_frame_pct` stays at 0.01% rather than 0: no clean stream froze, and the shortest counted run (0.5 s) already reads above 0.01% of any episode under 80 minutes.
+
+Left as candidates:
+
+- `frame_count_vs_timebase`: every clean stream read 0 and no variant models a frame-count fault, so rda's (liesliy/rda) working values stand, 1% for review and 5% for exclusion.
+- `blur_vs_camera` and `exposure_vs_camera`: neither raised a finding on any of the 541 clean streams; nothing was injected to place their fences.
+
+A calibrated band sets the grade only. It claims nothing about whether a task succeeded, and blocking on a vision result still needs an accepted calibration manifest.
+
+The measurements behind each metric's definition, on single datasets:
+
+- **Sharpness band.** Measured on `lerobot/aloha_static_towel` at revision `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff`, retrieved 2026-09-30: episode 0 (the first 500 frames of the AV1, 640x480, 50 fps clip) of `cam_high` and `cam_left_wrist`, as the median re-blur loss of 10 evenly spaced frames. A ratio, not a variance: the raw native Laplacian variance of the two sharp cameras of one robot differed 2.4x (128.5 and 53.3), so no fixed variance band fits every camera, while the ratio stayed within 0.78 to 0.83 for both.
+
+  | | sharp | box 3x3 | box 5x5 | box 9x9 |
+  |---|---|---|---|---|
+  | cam_high | 0.813 (0.800-0.834) | 0.508 | 0.366 | 0.294 |
+  | cam_left_wrist | 0.780 (0.688-0.804) | 0.465 | 0.308 | 0.218 |
+
+  Under the calibrated band, sharp footage grades good and a 3x3 blur or worse critical. The range beside a sharp value is its minimum to maximum over the 10 frames.
+- **Dim footage.** Re-encoded with libx264 and read in full on the same `cam_high` episode, a copy darkened to 0.2x read 5.4% frozen under a fixed difference floor and reads 0% with the contrast scaling, while a 10% freeze injected into it reads 9.6% (9.8% on the undarkened clip).
+- **Exposure follows each camera.** rda judges exposure by fixed gray levels: dark below a mean of 50, bright above 230, clipped at 20% of pixels at 250 or more, flat below a P95 - P5 of 20. Those rules marked every sampled frame of lerobot/pusht bad, because its simulator renders on a white background, and rda saw the same false blown-out results. No fixed level can separate the two: pusht frames average 249 to 250 with 74% to 84% of pixels at 255, where lerobot/cmu_stretch frames brightened 4x average 229 to 241 with 74% to 78%. So each frame is compared with its own camera instead, and pusht and cmu_stretch both read 0% on every episode. Overexposing, dimming to 0.4x or blacking out 4 of 10 sampled frames reads 40% on both. Contrast is not compared: it follows what is in view, and a third of clean pusht frames hold half the typical spread.
+- **Known limit.** Within one episode, a camera exposed the same way in most sampled frames is its own typical frame, so `exposure_shift_pct` reads it clean unless its frames are blank. Across episodes, a camera exposed one way in every episode gets a descriptive trait, and a single episode unlike its camera is flagged once the camera has 5 episodes. Below that, the per-episode limit still holds.
+
+### Across episodes
+
+After every episode is graded, each camera is compared with itself across the episodes it appears in. A camera is keyed by its source field (the LeRobot `video_key`) when it has one, and otherwise by its taxonomy type and instance; depth streams take no part. A camera is compared only when at least 5 of its episodes have the value. Both rules are candidates, not calibrated:
+
+- **Blur.** An episode is flagged `vision.blur_vs_camera` when its `laplacian_var` (from `sharpness_score` evidence), on a log scale, lies below Q1 - 1.5 x IQR of the camera's episodes, and is also at most half the camera's median. Only the low side is flagged. Raw variance is skewed upwards: on all 50 aloha episodes its fences raised 2 false positives on `cam_high`, and the log scale none.
+- **Exposure.** An episode is flagged `vision.exposure_vs_camera` when its `exposure_level` lies outside [Q1 - 1.5 x IQR, Q3 + 1.5 x IQR] of the camera's episodes, and is also at least 20 gray levels from the camera's median.
+
+Quartiles are linear interpolations over every episode of the camera, the one under test included. A finding is critical and requests review under a scope that grades vision (`video_quality` or `sampled_video_quality`), and is a `report_only` warning otherwise; it never moves the 0-100 score. The two rules are independent: raw Laplacian variance scales with contrast, so a dimmed or brightened episode can carry both findings. No absolute blur floor is set, because none separates the calibration datasets: clean `laplacian_var` ranges from 6.0 on aloha's `cam_right_wrist` to 1821 on cmu_stretch, while a 5x5 blur reaches up to 52.8 on cmu_stretch and 11.3 on aloha, and every frame dimmed to 0.2x, measured on the same 60 injected streams, up to 97.2 on cmu_stretch.
+
+A camera with at least half its pixels at or below 5 in every compared episode is described as `dark`, and one with at least half at or above 250 as `white`. The trait requests nothing: lerobot/pusht, whose simulator renders on white, is described, not flagged. `Report.cameras` holds one summary per camera: its key, the episodes it appears in, whether it was compared and why not, its median `laplacian_var` and `exposure_level`, its trait, and the episodes flagged by each rule.
+
+Measured on `lerobot/aloha_static_towel` at revision `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff`, retrieved 2026-09-30: 50 episodes of 500 frames (AV1, 640x480, 50 fps) of `cam_high` and `cam_left_wrist`, each summarised from 10 evenly spaced frames as the median native-luminance Laplacian variance and the median frame mean. Variants were applied to the decoded luminance before measuring.
+
+| camera | clean laplacian_var, min / median / max | clean mean gray, min / median / max | 3x3 blur, median var | 0.5x dim, median var / mean | 2x bright, median var / mean |
+|---|---|---|---|---|---|
+| cam_high | 88.7 / 100.8 / 119.9 | 83.0 / 92.4 / 101.9 | 20.3 | 26.4 / 46.2 | 266.9 / 163.5 |
+| cam_left_wrist | 27.2 / 35.6 / 44.6 | 100.1 / 105.3 / 113.8 | 8.6 | 9.9 / 52.6 | 120.6 / 180.5 |
+
+Over every run of 4 to 10 consecutive clean episodes, the fence alone held a false positive in 5 to 9 of every 41 to 47 windows, and with the two gaps it held none on either camera. With the gaps, every injected 3x3 blur, 0.5x dim and 2x brightening was flagged at 5, 6, 8 and 10 episodes, while at 4 episodes some were missed (7 of 188 blurs on `cam_left_wrist`, 21 of 188 dims on `cam_high`).
 
 ---
 
@@ -232,6 +319,11 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `mean_jerk_norm` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
 | `max_abs_jerk` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
 | `hf_vibration_ratio` | default | 0.1 | 0.3 | candidate · low confidence |
+| `sharpness_score` | default | 0.74 | 0.55 | calibrated (see *Calibration*) · higher is better |
+| `frame_count_vs_timebase` | default | 1% | 5% | candidate |
+| `frozen_frame_pct` | default | 0.01% | 10% | calibrated (see *Calibration*) |
+| `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
+| `exposure_level` | default | — | — | reported, no band |
 
 Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 

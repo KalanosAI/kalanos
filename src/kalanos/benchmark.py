@@ -25,6 +25,12 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
+from kalanos.analysis.adapters.video import (
+    DecodeFailed,
+    DecoderUnavailable,
+    VideoPayload,
+    close_remote_handles,
+)
 from kalanos.analysis.bindings import (
     binding_records,
     check_matched,
@@ -35,11 +41,13 @@ from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics.registry import registered_metrics
 from kalanos.analysis.models.binding import Bundle, EvaluationScope
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.domain import Episode, FramePayload, Stream
 from kalanos.analysis.models.errors import MappingOverrideError, NothingToGrade
 from kalanos.analysis.models.metrics import (
+    DEFAULT_VISION_SAMPLES,
     ChannelContext,
     Level,
     MetricResult,
@@ -50,7 +58,12 @@ from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import ConfigIdentity, ExecutionTier
 from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.pipeline import with_declared_limits
-from kalanos.analysis.reporting.assemble import grade_episode, grade_stream
+from kalanos.analysis.reporting.assemble import (
+    grade_episode,
+    grade_stream,
+    grades_vision,
+    scope_policy,
+)
 from kalanos.assets.bundle import prepare_configuration
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.core.settings import get_settings
@@ -107,6 +120,15 @@ _TEMPLATE_ENVIRONMENT = Environment(
 # Defects that model a tactile array.
 # Each is injected only into a stream the named metric would run on.
 _TAXEL_DEFECTS = {Defect.DEAD_TAXEL: "dead_taxel_pct", Defect.HYSTERESIS: "hysteresis"}
+
+# Defects that model a camera fault.
+# Each is injected only into a stream whose frames are held in memory;
+# a sampled video stream is decoded into memory first, at native resolution,
+# so an injected camera is measured the way `kalanos grade` measures it.
+_FRAME_DEFECTS = {Defect.FROZEN_FRAMES, Defect.BLUR, Defect.CLIPPED}
+# The most one camera's decoded native RGB frames may occupy in memory for injection;
+# each injected copy is held beside them, so the peak is about twice this.
+_MAX_DECODE_BYTES = 1 << 30
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -314,7 +336,7 @@ def _inject(stream: Stream, channel: str, defect: Defect) -> Stream:
     """
 
     payload = stream.payload
-    if defect == Defect.FROZEN_FRAMES and not stream.channels:
+    if defect in _FRAME_DEFECTS and not stream.channels:
         ctx = StreamContext(stream=stream, is_regular=stream.is_regular)
         return cast(StreamContext, apply_defect(ctx, defect)).stream
 
@@ -353,7 +375,7 @@ def _inject(stream: Stream, channel: str, defect: Defect) -> Stream:
 def _applies(defect: Defect, stream: Stream) -> bool:
     """Whether `defect` models a fault this stream could carry."""
 
-    if defect == Defect.FROZEN_FRAMES:
+    if defect in _FRAME_DEFECTS:
         return isinstance(stream.payload, SyntheticFrames)
     if defect in _TAXEL_DEFECTS:
         [entry] = [
@@ -363,6 +385,36 @@ def _applies(defect: Defect, stream: Stream) -> bool:
         ]
         return stream.taxonomy_type in entry.requires.taxonomy
     return isinstance(stream.payload, FramePayload) and bool(stream.channels)
+
+
+def _decoded(stream: Stream) -> Stream:
+    """Return a copy of a video stream with its frames decoded into memory.
+
+    Raises
+    ------
+    ValueError
+        If the decoded frames would pass the decode cap, the video cannot be decoded,
+        or it decodes to a different frame count than the stream has timestamps.
+    """
+
+    payload = cast(VideoPayload, stream.payload)
+    try:
+        height, width, _ = payload.rgb_frame(0).shape
+        needed = payload.frame_count * height * width * 3
+        if needed > _MAX_DECODE_BYTES:
+            raise ValueError(
+                f"video needs {needed} bytes decoded, "
+                f"over the {_MAX_DECODE_BYTES}-byte decode cap"
+            )
+        frames = payload.rgb_frames(None)
+    except (DecoderUnavailable, DecodeFailed) as exc:
+        raise ValueError(str(exc)) from exc
+    if len(frames) != len(stream.timestamps):
+        raise ValueError(
+            f"video decoded {len(frames)} frame(s) "
+            f"for {len(stream.timestamps)} timestamp(s)"
+        )
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=frames)})
 
 
 def _located(graded: GradedStream, channel: str | None) -> dict[str, MetricResult]:
@@ -382,8 +434,36 @@ def _inject_episode(
     *,
     policy: Policy,
     injections: _Injections,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    inject_cameras: bool = True,
 ) -> None:
-    """Inject every applicable defect into each stream of one sampled episode."""
+    """Inject every applicable defect into each stream of one sampled episode.
+
+    A camera defect goes into a video stream decoded into memory,
+    and is measured against that decoded copy graded clean,
+    so before and after read the same frames.
+    Without `inject_cameras` no video stream is decoded.
+    """
+
+    def grade(stream: Stream, target: Stream, category: str | None) -> GradedStream:
+        """Grade `target` in place of `stream` among the episode's streams."""
+
+        graded, _ = grade_stream(
+            stream=target,
+            policy=policy,
+            is_regular=stream.is_regular,
+            episode_id=episode.id,
+            category=category,
+            vision_samples=vision_samples,
+            episode_streams=[
+                target if other is stream else other for other in episode.streams
+            ],
+            full_frame_scan=full_frame_scan,
+            vision=vision,
+        )
+        return graded
 
     for stream, clean_stream in zip(episode.streams, clean.streams, strict=True):
         channel = (
@@ -392,11 +472,35 @@ def _inject_episode(
             else None
         )
         before = _located(clean_stream, channel)
+        decoded: tuple[Stream, dict[str, MetricResult]] | None = None
+        if (
+            inject_cameras
+            and isinstance(stream.payload, VideoPayload)
+            and not stream.channels
+        ):
+            try:
+                frames = _decoded(stream)
+            except ValueError as exc:
+                logger.debug(
+                    "%s: %s not decoded: %s", episode.id, stream.taxonomy_type, exc
+                )
+                for defect in _FRAME_DEFECTS:
+                    injections.errors[defect] = str(exc)
+            else:
+                decoded = (
+                    frames,
+                    _located(grade(stream, frames, clean_stream.category), channel),
+                )
         for defect in Defect:
-            if not _applies(defect, stream):
+            source, baseline = (
+                decoded
+                if defect in _FRAME_DEFECTS and decoded is not None
+                else (stream, before)
+            )
+            if not _applies(defect, source):
                 continue
             try:
-                injected = _inject(stream, channel or "", defect)
+                injected = _inject(source, channel or "", defect)
             except ValueError as exc:
                 logger.debug(
                     "%s: %s not injected into %s: %s",
@@ -409,15 +513,8 @@ def _inject_episode(
                 continue
             injections.ran.add(defect)
 
-            graded, _ = grade_stream(
-                stream=injected,
-                policy=policy,
-                is_regular=stream.is_regular,
-                episode_id=episode.id,
-                category=clean_stream.category,
-            )
-            after = _located(graded, channel)
-            for metric, result in before.items():
+            after = _located(grade(stream, injected, clean_stream.category), channel)
+            for metric, result in baseline.items():
                 if result.status != MetricStatus.GOOD:
                     continue
                 cell = injections.cells[(defect, metric)]
@@ -460,6 +557,10 @@ def benchmark_episodes(
     n_episodes: int | None,
     sample: int,
     tier: ExecutionTier = ExecutionTier.STANDARD,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    inject_cameras: bool = True,
 ) -> _Rates:
     """Grade every episode clean, and inject defects into an evenly spaced sample.
 
@@ -470,6 +571,16 @@ def benchmark_episodes(
         `None` samples the first `sample` episodes.
     sample : int
         The most episodes to inject defects into.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    full_frame_scan : bool
+        Whether frame metrics read every frame rather than a sample.
+    vision : VisionSpec or None
+        Decode caps, previews and exposure levels; the defaults when `None`.
+    inject_cameras : bool
+        Whether to decode video streams for camera defects.
+        A scope that does not grade vision could never count one,
+        so decoding up to a gigabyte a camera would buy nothing.
     """
 
     stride = max(1, n_episodes // sample) if n_episodes and sample else 1
@@ -487,6 +598,9 @@ def benchmark_episodes(
             adapter_confidence=1.0,
             policy=policy,
             dictionary=dictionary,
+            vision_samples=vision_samples,
+            full_frame_scan=full_frame_scan,
+            vision=vision,
             tier=tier,
         )
         _tally_clean(clean, tallies)
@@ -502,7 +616,15 @@ def benchmark_episodes(
                 "%s: injecting defects (sample %d/%d)", episode.id, sampled, planned
             )
             _inject_episode(
-                episode, clean, sampled - 1, policy=policy, injections=injections
+                episode,
+                clean,
+                sampled - 1,
+                policy=policy,
+                injections=injections,
+                vision_samples=vision_samples,
+                full_frame_scan=full_frame_scan,
+                vision=vision,
+                inject_cameras=inject_cameras,
             )
     logger.info("graded %d episode(s) clean, injected defects into %d", seen, sampled)
 
@@ -521,6 +643,8 @@ def benchmark_episodes(
         defect: (
             "metadata tier does not inject payload defects"
             if tier == ExecutionTier.METADATA
+            else "the scope does not grade vision"
+            if defect in _FRAME_DEFECTS and not inject_cameras
             else injections.errors.get(defect, "no stream it applies to")
         )
         for defect in Defect
@@ -599,7 +723,10 @@ def benchmark_dataset(
         selection.name,
         info.episode_count if info.episode_count is not None else "?",
     )
-    episode_policy = with_declared_limits(policy, info)
+    # Scoped as `kalanos grade` scopes it, so vision grades only when required.
+    episode_policy = scope_policy(
+        with_declared_limits(policy, info), config.requirements
+    )
 
     # Step 4: resolve the same bindings as grade, without buffering payloads.
     channels = config.bundle.binding.channels if config.bundle.binding else []
@@ -623,14 +750,23 @@ def benchmark_dataset(
             records.update(binding_records([bound]))
             yield bound
 
-    with use_tier(config.scope.tier):
-        rates = benchmark_episodes(
-            episodes=bound_episodes(),
-            policy=episode_policy,
-            n_episodes=info.episode_count,
-            sample=sample,
-            tier=config.scope.tier,
-        )
+    vision = config.vision
+    try:
+        with use_tier(config.scope.tier):
+            rates = benchmark_episodes(
+                episodes=bound_episodes(),
+                policy=episode_policy,
+                n_episodes=info.episode_count,
+                sample=sample,
+                tier=config.scope.tier,
+                vision_samples=vision.sample_frames,
+                full_frame_scan=vision.full_frame_scan,
+                vision=vision,
+                inject_cameras=grades_vision(config.requirements),
+            )
+    finally:
+        # Remote video stays open across episodes, as in `kalanos grade`.
+        close_remote_handles()
     check_matched(channels, matched_channels)
     unmatched = [o.feature for o in config.overrides if o.feature not in seen_features]
     if unmatched:
