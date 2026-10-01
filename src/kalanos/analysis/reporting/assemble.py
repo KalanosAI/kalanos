@@ -237,6 +237,7 @@ def grade_stream(
             metrics=stream_metrics,
             channels=graded_channels,
             source_field=stream.source_field,
+            source_identity=stream.source_identity,
             declared_channels=stream.channels if not graded_channels else [],
             clock=stream.clock,
             clock_info=stream.clock_info,
@@ -356,6 +357,7 @@ def assemble_report(
     run: RunInfo | None = None,
     inventory: Inventory | None = None,
     binding_conflicts: Sequence[BindingConflict] = (),
+    diagnostics_plan=None,
 ) -> Report:
     """Grade every analysed Episode and assemble the run's Report.
 
@@ -401,6 +403,10 @@ def assemble_report(
         alongside every skipped and unresolved file with its reason or evidence.
     """
 
+    from kalanos.analysis.diagnostics.runner import validate_review_plan
+
+    for item in analysed:
+        validate_review_plan(diagnostics_plan, item.policy)
     dictionary = load_default_dictionary()
     tier = scope.tier if scope is not None else ExecutionTier.STANDARD
     graded_episodes: list[GradedEpisode] = []
@@ -431,10 +437,6 @@ def assemble_report(
             "adapters": adapter_versions(item.adapter for item in analysed),
         }
     )
-    graded_episodes = [
-        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
-        for e in graded_episodes
-    ]
     findings = apply_calibration(
         findings,
         {item.episode.id: item.policy for item in analysed},
@@ -442,6 +444,32 @@ def assemble_report(
         scope,
         producer,
     )
+    diagnostic_results = {}
+    diagnostics = None
+    if diagnostics_plan is not None:
+        from kalanos.analysis.diagnostics.runner import (
+            episode_diagnostics,
+            review_findings,
+        )
+
+        diagnostic_results = episode_diagnostics(
+            [a.episode for a in analysed],
+            diagnostics_plan,
+            tier,
+            findings,
+            {item.episode.id: item.policy for item in analysed},
+        )
+        findings.extend(
+            review_findings([r for rs in diagnostic_results.values() for r in rs])
+        )
+        graded_episodes = [
+            e.model_copy(update={"diagnostics": diagnostic_results[e.id]})
+            for e in graded_episodes
+        ]
+    graded_episodes = [
+        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
+        for e in graded_episodes
+    ]
     decisions = decide_all(
         graded_episodes, findings, requirements=requirements, policy_id=scope.policy_id
     )
@@ -461,6 +489,22 @@ def assemble_report(
     counts = counts_of(decisions.values(), inventory)
     readiness = readiness_of(graded_episodes, decisions, counts)
     sufficiency = sufficiency_of(requirements, counts)
+    if diagnostics_plan is not None:
+        from kalanos.analysis.diagnostics.runner import finish_diagnostics
+
+        diagnostics = finish_diagnostics(
+            [a.episode for a in analysed],
+            diagnostics_plan,
+            diagnostic_results,
+            decisions,
+            tier,
+        )
+    if requirements.min_pass_windows:
+        from kalanos.analysis.diagnostics.validation import window_sufficiency
+
+        sufficiency = window_sufficiency(
+            sufficiency, diagnostics, decisions, inventory, requirements
+        )
 
     # Step 2: the dataset rollup and the gate, which now only derives.
     dataset_score = rollup(
@@ -493,9 +537,20 @@ def assemble_report(
                             "reason": "; ".join(row.reasons),
                         }
                     )
+    if diagnostics:
+        errors.extend(
+            {
+                "episode_id": r.episode_id or "dataset",
+                "metric": f"diagnostics.{r.kind}.{r.id}",
+                "reason": r.reason or "diagnostic failed",
+            }
+            for r in diagnostics.results
+            if r.availability.value == "error"
+        )
     if errors and run is not None:
         run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
     return Report(
+        diagnostics=diagnostics,
         operational_errors=errors,
         root=root,
         coverage=report_coverage(graded_episodes, inventory),

@@ -1,0 +1,25 @@
+schema_version: 1
+requirements:
+  id: sampled-visual-and-numeric-v1
+  required_capabilities: [sampled_video_quality]
+execution:
+  tier: standard
+diagnostics:
+  vision:
+    sample_frames: 96
+    max_decode_frames: 20000
+    max_pixels: 2097152
+  windows:
+    - id: train
+      anchor: {feature: observation.state, index: 0}
+      modalities:
+        - selector: {feature: observation.state, index: 0}
+          matching: previous
+          max_age_s: 0.025
+      sample_rate_hz: 50
+      history_steps: 10
+      prediction_steps: 20
+      stride: 1
+      max_gap_s: 0.025
+      max_windows: 10000
+      max_probes: 2000000

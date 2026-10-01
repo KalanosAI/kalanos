@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kalanos.analysis.models.calibration import CalibrationManifest
+from kalanos.analysis.models.diagnostics import DiagnosticReviewPolicy
 
 # Internal
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
@@ -315,6 +316,9 @@ class Policy(BaseModel):
     calibration_manifests: list[CalibrationManifest] = Field(default_factory=list)
     calibrated_metrics: dict[str, float | str] = Field(default_factory=dict)
     metrics: dict[str, MetricPolicy]
+    diagnostic_reviews: DiagnosticReviewPolicy = Field(
+        default_factory=DiagnosticReviewPolicy
+    )
     family_weights: dict[str, float] = Field(default_factory=dict)
     missing_family: Literal["skip"] = "skip"
     fail_penalty: float | None = Field(default=None, ge=0)

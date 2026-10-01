@@ -279,3 +279,21 @@ Two display rules hold in every format:
 - The CLI beyond `grade`, the plugin listings and `new` — namely `inspect`, `--fail-under` and `--sample`.
 
 The issue tracker holds the sequence. This document describes the design those issues implement.
+
+
+## Explicit diagnostic execution (0.7.0)
+
+The diagnostic extension needs configured stream pairs, bounded media access,
+window contracts and dataset populations, which the scalar metric registry does
+not represent. It therefore has a typed plan/result boundary and dedicated
+runners under `analysis/diagnostics`, orchestrated by `assemble_report`.
+
+Existing core findings are calibrated first. Diagnostic measurements then run;
+explicit policy triggers add review findings. Coverage and eligibility are
+calculated once, followed by dataset summaries and window sufficiency. Renderers
+consume the resulting report and cannot promote decisions. Dataset results are
+measurements of explicit cohorts, not a rollup of episode quality scores.
+
+No diagnostics plan means no additional decoding or dataset work. The new
+measurement implementation hashes participate in the conservative analysis
+identity, and optional plan/policy changes participate in their own run identities.

@@ -413,6 +413,7 @@ class Stream(BaseModel):
     payload: Payload | None = None
     source_path: AnyPath
     source_field: str | None = None
+    source_identity: str | None = None
     mapping_source: MappingSource | None = None
     clock: Clock = Clock.UNKNOWN
     clock_info: ClockInfo | None = None

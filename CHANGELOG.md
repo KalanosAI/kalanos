@@ -2,7 +2,7 @@
 
 ## 0.7.0
 
-The decision-integrity release. Report schema 7.0.0.
+The decision-integrity and optional deeper-diagnostics release. Report schema 7.0.0.
 
 ### Contextual noise evidence, real-data fixes and release packaging (R07-03, R07-08/09)
 
@@ -15,7 +15,40 @@ The decision-integrity release. Report schema 7.0.0.
 - Schema-7 publisher and Action companion updates ship alongside; package and
   CITATION versions agree; release metadata is checked before tagging. See
   `docs/RELEASE-0.7.0.md` and the real-data record in `docs/ACCEPTANCE-0.7.0.md`.
-- Deeper diagnostics and review/selection/export are planned for 0.7.1.
+- Review/selection/export and the training-reader pilot remain planned for 0.7.1.
+
+### Optional deeper diagnostics
+
+- Add explicit stream-pair timing and event-based offset/drift evidence; validated
+  absolute/delta/rate command response; a separate dimensionless motion metric.
+- Add bounded sampled video inspection, media-segment/count checks, frame-level
+  blur/exposure/repetition evidence, and full versus sampled visual coverage.
+- Count declared training windows with source support, missing evidence and work
+  budgets; evaluate minimum passing-window requirements separately from quality.
+- Execute dataset cohorts for occupancy, effective dimension, trajectory
+  repetition, reviewed phase balance, outliers and optional session uncertainty.
+- Keep review thresholds in decision policy and measurement/execution facts in
+  the diagnostic plan. Preserve default numeric behavior and calibration guards.
+- Expose identified diagnostics in JSON/YAML/HTML, inspect, terminal summaries
+  and comparison. Add draft-only study summaries and the numeric dependency extra.
+- See `docs/DIAGNOSTICS-0.7.0.md` and `docs/CAPABILITIES.md` for exact supported
+  inputs, conservative abstention, controls and remaining limits.
+
+### Diagnostic correctness fixes
+
+- Match the consumed channel before propagating findings into training windows;
+  a defect on an unused channel no longer changes those windows' status.
+- Use exact rational native-clock/grid comparisons for windows, including declared
+  clock transforms, age and gap limits. Preserve causal matching without an
+  epsilon that could admit future samples. Reported times remain JSON numbers.
+- Reconcile every episode-status count with recorded decisions and failed or
+  unresolved inventory. Reject duplicate episode IDs and incorrect published
+  eligible shares. Missing optional shares remain readable.
+- Reconcile window summaries with complete, uniquely addressed window records
+  and explicit unexamined-budget unknowns; reject contradictory imported evidence.
+- Clarify that missing diagnostic extras affect eligibility only when the
+  corresponding capability is required. Package and report schema versions stay
+  0.7.0 and 7.0.0 respectively.
 
 ### Contract (R07-01, R07-03 interfaces, R07-02/04/05 models)
 
@@ -24,7 +57,7 @@ The decision-integrity release. Report schema 7.0.0.
 - Task and dataset traits are descriptive; prevalence no longer exempts an episode from blocking.
 - Findings carry `consequence` and `route` separately from severity, and `support` (whole-episode or explicit half-open sample intervals).
 - `readiness` is `null` with reasons whenever any episode is `review` or `unknown`, the inventory is incomplete or empty, or a passing episode lacks a score. Formula id recorded.
-- `eligibility_counts` always published; `sufficiency` evaluated against explicit requirements (`min_pass_episodes` in this release).
+- `eligibility_counts` always published; `sufficiency` evaluated against explicit requirements (`min_pass_episodes` and `min_pass_windows` in this release).
 - `producer`, `run` (configuration identities with content digests, source evidence with explicit hash scope), `scope`, `inventory`, `binding_conflicts` recorded.
 - Removed `gate.pruned_grade` and `gate.train_ready_after_pruning`.
 - Domain: `ClockInfo` (origin incl. `publish` and `presentation`, origin evidence), `SourceOrder`, `ChannelBinding` with separate actuator kind, quantity, representation, unit and command semantics. Adapters populate these in R07-04/02.

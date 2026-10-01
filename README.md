@@ -33,8 +33,12 @@ The plain install reads text formats (CSV, JSON, JSONL, delimited text) and LeRo
 pip install 'kalanos[hf]'       # stream Hugging Face datasets
 pip install 'kalanos[hdf5]'     # HDF5 (robomimic, Isaac Lab)
 pip install 'kalanos[mcap]'     # MCAP / ROS 2
+pip install 'kalanos[numeric]'  # NumPy, for the optional deeper diagnostics
+pip install 'kalanos[video]'    # PyAV, for sampled video diagnostics
 pip install 'kalanos[all]'      # everything
 ```
+
+Missing optional dependencies leave the affected diagnostic unavailable, with the needed extra named in `diagnostics.results[].reason`. If its capability is listed in `requirements.required_capabilities`, the missing evidence makes the episode `unknown` unless a blocking finding takes precedence. Requesting a report-only diagnostic does not make its capability required. Adapter extras are still needed to read their respective formats.
 
 **2. Grade something.**
 
@@ -632,4 +636,28 @@ and [binding reference configuration](docs/PROFILES.md#noise-reference-evidence)
 Schema-7 integrations must preserve `scope`, `eligibility_counts`, `readiness`,
 `sufficiency`, and `coverage`. `readiness.score: null` means undefined, never zero.
 Use the matching publisher/Action migration before exposing these reports.
-Deeper diagnostics and review/selection/export are planned for **0.7.1**.
+### Deeper diagnostics (0.7.0)
+
+Optional diagnostic plans now measure stream-pair timing, declared command
+response, sampled video quality, dimensionless motion, training windows and
+comparable-cohort diversity/redundancy. Reports retain source locations,
+prerequisites, work budgets and unknown evidence. Measurements default to
+report-only; explicit decision-policy thresholds can request review. These new
+diagnostics do not authorize automatic blocking or modify source data.
+
+```bash
+pip install 'kalanos[numeric,video]'
+kalanos profiles validate docs/examples/diagnostics.yaml
+kalanos grade ./recording --profile docs/examples/diagnostics.yaml --report audit.json
+kalanos inspect audit.json
+kalanos diagnostics summarize-study labelled-outcomes.json
+```
+
+Adapt selectors and budgets to the recording before running the example. Sampled
+visual evidence is distinct from checking every frame. Minimum passing training
+windows belong in `requirements.min_pass_windows`; overlapping windows are not
+independent demonstrations. See [the diagnostic contract](docs/DIAGNOSTICS-0.7.0.md)
+and [supported capabilities](docs/CAPABILITIES.md) for prerequisites, policy
+examples, format limits and validation controls.
+
+Review/selection/export and the training-reader pilot remain planned for **0.7.1**.

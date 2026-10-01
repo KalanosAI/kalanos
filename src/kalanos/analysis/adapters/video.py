@@ -148,3 +148,73 @@ class VideoPayload:
                 self.end_s,
             )
         return frames
+
+    def iter_sampled(self, rows, *, max_decode_frames, max_pixels):
+        """Yield selected RGB frames and a final scan summary with bounded work.
+
+        Parameters
+        ----------
+        rows : sequence of int
+            Zero-based frame indices within this episode's media segment.
+        max_decode_frames : int
+            Hard cap on decoded frames, including seek preroll. RGB conversion
+            only occurs for selected frames; arrays are yielded one at a time.
+        max_pixels : int
+            Maximum selected-frame pixel count before RGB conversion.
+
+        Yields
+        ------
+        dict
+            A selected image with source row/PTS, or the final scan summary.
+            End detection and count reconciliation require reaching segment end.
+        """
+        av = _load_av()
+        if av is None:
+            raise DecoderUnavailable("bounded video sampling needs kalanos[video]")
+        wanted = set(rows)
+        decoded = segment = 0
+        complete = False
+        reason = None
+        with av.open(str(self.path)) as container:
+            stream = container.streams.video[0]
+            container.seek(int(self.start_s / stream.time_base), stream=stream)
+            iterator = iter(container.decode(stream))
+            while decoded < max_decode_frames:
+                try:
+                    frame = next(iterator)
+                except StopIteration:
+                    complete = True
+                    break
+                decoded += 1
+                if frame.time is None:
+                    reason = "decoded frame has no presentation timestamp"
+                    break
+                if frame.time < self.start_s:
+                    continue
+                if frame.time >= self.end_s:
+                    complete = True
+                    break
+                row = segment
+                segment += 1
+                if row not in wanted:
+                    continue
+                if frame.width * frame.height > max_pixels:
+                    reason = "selected frame exceeds max_pixels"
+                    break
+                yield {
+                    "source_row": row,
+                    "presentation_time_s": float(frame.time),
+                    "image": frame.to_ndarray(format="rgb24"),
+                }
+            if not complete and reason is None:
+                reason = "max_decode_frames reached before segment end"
+        yield {
+            "summary": {
+                "complete": complete,
+                "decoded_frames": decoded,
+                "segment_frames": segment,
+                "reason": reason,
+                "segment_start_s": self.start_s,
+                "segment_end_s": self.end_s,
+            }
+        }

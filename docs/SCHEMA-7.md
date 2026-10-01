@@ -2,6 +2,13 @@
 
 Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer must do, and what a legacy file can and cannot provide.
 
+Report loading rejects duplicate episode IDs and reconciles each status count
+against episode decisions, adding identified failures and unresolved inventory
+to unknown. A published eligible share must match those counts; an omitted share
+remains readable. Diagnostic window counts also reconcile with the recorded
+window statuses and explicit unexamined-budget unknowns. Valid report shapes are
+unchanged; contradictory summaries are rejected rather than silently repaired.
+
 ## New top-level fields
 
 | Field | Type | What it is |
@@ -99,3 +106,20 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 - `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
 - `producer.metrics` and `producer.adapters` identify built-in code and numerical runtime. Third-party implementation identity remains unknown and cannot authorize statistical promotion.
 - Additive fields stay under the ongoing schema-7 development version. Historical files are not rewritten.
+
+
+## Optional deeper diagnostics in 0.7.0
+
+`Report.diagnostics` is an optional version-1 diagnostic envelope with the plan,
+plan digest, implementation digest and addressed results. Each episode also
+retains its results in `episodes[].diagnostics`; validation requires agreement.
+Each result identifies its kind, configured id, episode/source subject,
+availability, measurements, evidence, support and report-only/review consequence.
+Window and visual counts reconcile; partial work is not silently complete.
+Existing schema-7 reports without these fields remain readable.
+
+The optional plan is part of execution identity; diagnostic review thresholds are
+part of policy identity. `Stream.source_identity` and its graded counterpart carry
+the adapter source scope even for cameras with no scalar channel bindings.
+`requirements.min_pass_windows` adds named dataset minimums. Diagnostic comparison
+changes appear separately in `Comparison.diagnostic_changes`.
