@@ -219,6 +219,18 @@ def test_the_jerk_metrics_are_report_only_until_they_are_dimensionless():
         assert _entry(policy, name).report_only is True, name
 
 
+def test_velocity_spike_and_dimensionless_jerk_are_report_only_with_no_band():
+    """Verify velocity_spike_pct and log_dimensionless_jerk measure but don't grade.
+
+    No band has been set against real recordings for either yet.
+    """
+
+    policy = load_default_policy()
+
+    for name in ("velocity_spike_pct", "log_dimensionless_jerk"):
+        assert _entry(policy, name).report_only is True, name
+
+
 def test_effective_hz_grades_relative_deviation_from_a_declared_nominal_rate():
     """Verify effective_hz uses abs_dev against a nominal_hz target, per the docs.
 

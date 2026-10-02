@@ -110,6 +110,8 @@ Whether the recorded motion is physically plausible. These need the taxonomy: je
 | Metric | Level | Requires | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
 | `mean_jerk_norm`, `max_abs_jerk` | STREAM | `proprio.joint_position` | normalised | Jerk is the third derivative of position: squared, averaged, and normalised by the motion's own scale. | **report-only** until dimensionless — see below; *candidate band kept on file: good < 0.1, bad > 0.5* |
+| `velocity_spike_pct` | CHANNEL | `proprio.joint_position` | % | Share of step-to-step position changes more than 6σ from the channel's own mean change: a jump no smooth motion makes, such as an encoder slip or a re-homed joint. Needs at least 40 samples, since one jump among fewer changes cannot reach 6σ. Evidence carries the source rows. | **report-only**; no band decided, waits on the detector benchmark's benign rate |
+| `log_dimensionless_jerk` | CHANNEL | `proprio.joint_position` | dimensionless | −ln(T⁵·∫jerk²dt / range²) over the whole channel. It does not change with playback speed or amplitude, and higher is smoother. Not applicable on a channel with nulls or one that never moves. Same estimator as the diagnostic `position_dimensionless_jerk_v1`, without its segmentation. | **report-only**; no band decided |
 | `action_chatter` | STREAM | `proprio.joint_velocity` | normalised | Average step-to-step change in velocity, normalised by its spread. | *to define* |
 | `vel_saturation_pct` | CHANNEL | `proprio.joint_velocity` + declared max | % | How often a joint ran above 90% of maximum velocity. A saturated joint clips, so the recording shows something other than what was commanded. | good < 1%; shipped metric measures against the channel's own observed maximum and stays report-only until a declared limit is supplied |
 | `limit_proximity_pct` | CHANNEL | `proprio.joint_position` + declared limits | % | Percentage of time a joint spent above 95% of its allowed range. | range adherence 99.8%; shipped metric measures against the channel's own observed range and stays report-only until declared limits are supplied |
@@ -122,7 +124,7 @@ Whether the recorded motion is physically plausible. These need the taxonomy: je
 
 `mean_jerk_norm` and `max_abs_jerk` divide each channel by its own standard deviation before taking the third difference. That removes amplitude but not time: the result still carries units of 1/s³, so it grows with the cube of how fast the robot moves. A perfectly smooth joint following a sine at frequency *f* measures about √2·(2π*f*)³ — roughly 0.35 at 0.1 Hz, 44 at 0.5 Hz and 180 at 0.8 Hz — against a candidate *bad* bound of 0.5. Graded against that band, any ordinary manipulation motion scores 0.
 
-So both metrics ship `report_only`: measured and shown in every report, not graded. The candidate band stays in `default.yaml` so the numbers are not lost. They return to grading once the measure is made dimensionless (normalised by the motion's duration as well as its amplitude, as log dimensionless jerk is) and a band is set against real recordings.
+So both metrics ship `report_only`: measured and shown in every report, not graded. The candidate band stays in `default.yaml` so the numbers are not lost. They return to grading once the measure is made dimensionless (normalised by the motion's duration as well as its amplitude, as log dimensionless jerk is) and a band is set against real recordings. `log_dimensionless_jerk` is that dimensionless measure, shipped as its own metric so these two keep their meaning. It is report-only for the same reason.
 
 Any metric with a precondition should skip the way `still_drift` does, by detecting the condition itself instead of relying on the policy to exclude it.
 
@@ -325,7 +327,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
 | `exposure_level` | default | — | — | reported, no band |
 
-Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
+Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 
 Family scores are weighted means of their metrics; the overall score is a weighted mean of family scores, renormalised over the families that ran, minus a capped penalty per distinct failing metric.
 
