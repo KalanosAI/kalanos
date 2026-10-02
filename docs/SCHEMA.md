@@ -88,6 +88,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 2. Gate CI on the exit code of `kalanos grade --fail-on ...`, or on `eligibility_counts` from `--json`.
 3. Show `scope.requirements_id` beside any number: a readiness is meaningless without its scope.
 4. To read a 6.x file, use `kalanos.analysis.models.legacy.load_any`; it returns a `LegacyReport` with the original data, its SHA-256, contradictions and the fields it cannot supply. Do not convert legacy values into schema-7 decisions.
+5. Keep showing `scope`, `eligibility_counts`, `readiness`, `sufficiency` and `coverage` together wherever readiness appears: a `readiness.score` of `null` means undefined.
 
 ## Fixtures
 
@@ -98,7 +99,9 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 ## Coverage, findings and calibration additions
 
 - Top-level and episode `coverage` ledgers; stream `coverage` rows. Earlier schema-7 files may omit these and must show missing coverage, not zero coverage. `gate.coverage` remains a legacy grading summary.
-- Metric `availability` is independent of graded `status`; `support` propagates to findings.
+- The ledger distinguishes `computed`, `not_applicable`, `unavailable`, `skipped`, `error` and `not_required`; a computed report-only metric still counts as evaluated. Eligible counts include unavailable, skipped and errored subjects but exclude genuinely inapplicable ones and optional capabilities — 700 computed torque channel-episodes out of 700 eligible is complete coverage even when the values are report-only. An unknown binding keeps that uncertainty rather than shrinking the denominator.
+- Semantic mapping, capture-origin evidence, visual analysis and behavioural diversity each keep their own coverage count. Capture-origin evidence alone does not establish a usable clock, and visual frame totals or training-window coverage stay unknown where nothing measured them. These counts describe loaded subjects only: a failed episode or a refused source stays explicit. Coverage is not a readiness percentage.
+- Metric `availability` is independent of graded `status`; `support` propagates to findings as evidence locations for a reader to check, never as instructions to delete the samples they name.
 - Finding `id`, `source_path`, `source_field`, `source_index`, `subject_level`, `evidence_strength` and `calibration` make subjects and promotion decisions inspectable. IDs identify a metric at a source subject; they are not waveform hashes.
 - `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
 - `producer.metrics` and `producer.adapters` identify built-in code and numerical runtime. Third-party implementation identity remains unknown and cannot authorize statistical promotion.

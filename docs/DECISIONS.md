@@ -47,6 +47,8 @@ A manifest must also be `accepted` by a named actor, not future-dated or expired
 
 Kalanos checks these declarations and digests; it does not authenticate the referenced validation report, the reviewer, or the labels behind `independent_episodes` and `real_fault_validation`. A matching accepted manifest is trusted configuration, not cryptographic proof. Any mismatch, revocation, expiry or missing acceptance leaves the finding at `review`.
 
+The report records the exact expected context and any mismatch on each candidate finding, and changing a matched input invalidates the old authorization. The initial gate's evidence must also be representative of the named operating scope: these describe what a manifest must demonstrate to be accepted, independent of how any particular release actually performs. `enforce_calibration: false` is rejected outright, and neither a synthetic benchmark result nor the legacy `calibrated_metrics` name list can grant approval on its own.
+
 ## Compatibility fields
 
 `episodes[].score.train_ready` mirrors eligibility exactly: `true` pass, `false` blocked, `null` review or unknown. A report whose `train_ready` contradicts its `eligibility` fails validation. Dataset-level `score.train_ready` is `true` only when every episode passed, `false` when any is blocked, `null` otherwise. Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) drive nothing.
@@ -86,9 +88,23 @@ Default scope is `numeric-core-v1`: readable numeric input under an explicit mis
 
 `--map` > `--map-file` > bundle `binding.features` > discovered `kalanos-map.yaml` > source declarations > inferred. Every displaced assertion is recorded in `binding_conflicts`. Two assertions at one priority that disagree are a configuration error (exit 2), including two `--map` flags for one feature, a duplicated key in a YAML file, and a disagreement at a level a higher level would have overridden. Precedence does not validate: an override outranks a sidecar and is still an assertion. `run.binding` identifies the *effective* mapping after precedence; `run.bundle` identifies the declared file.
 
+### Execution limits
+
+`execution.tier` changes what is attempted; it never reduces `requirements`. `execution.limits` adds `max_bytes` and `max_files` for remote sources, which can only tighten the environment or API limits; the effective budgets are recorded in the execution identity, and an unsupported budget key is a configuration error. Local files keep their existing unrestricted behaviour, and choosing the full tier implies no sampling or caching capability.
+
+### Policy resolution
+
+An explicit Python `policy=` argument wins over a bundle's `policy` section. Otherwise `policy.path` resolves relative to the bundle file, falling back to the configured or packaged default when no path is given. A relative `policy.path` inside an in-memory bundle, which has no file of its own to resolve against, is a configuration error.
+
+### Binding readiness
+
+`episodes[].streams[].channels[].channel.binding` carries a resolved channel's binding in the JSON report; `streams[].declared_channels[].binding` holds it for channels that were not graded. A binding records its origin, conflicts, and active and invalidated validation records, plus prerequisite readiness for numeric inspection, derivatives, limits and noise: whether the evidence a detector needs is in place, ahead of and separate from running that detector or granting calibration approval. Registered jerk and chatter calculations abstain when a channel's derivative prerequisites lack the required scoped binding evidence; generic numeric inspection continues regardless.
+
 ## CLI gate
 
 `--fail-on` (default `blocked,unknown`) names the statuses that make `kalanos grade` exit 1. An incomplete inventory — a refused source, or declared episodes that never loaded — counts under `unknown` without inventing an episode count, so the default gate fails an incomplete audit even when every loaded episode passed, or when none loaded at all. A training gate adds `review`. `blocked` alone is exploratory: it permits a partial audit, and prints a warning on stderr naming the refused sources and the undelivered episodes. Exit 2 is reserved for invalid configuration and operational failures and takes precedence.
+
+`kalanos compare` exits 1 when the two reports are not comparable and 2 for invalid inputs or an operational failure. `--hash-source` on `kalanos grade` records a complete local byte identity for later comparison: it reads every local file twice even at the metadata tier, refuses symlinks and nonlocal roots, and withholds the report if the two reads disagree, so write any report output outside the hashed directory to keep the next run's identity unchanged.
 
 ## Reading older reports
 

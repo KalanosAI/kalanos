@@ -61,7 +61,7 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `drop_rate` | STREAM | regular sampling + producer capture evidence | fraction | Missing-sample estimate against the observed cadence; expected count is duration ÷ median gap + 1. | good < 1%, bad > 5% |
 | `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
 
-**Clock provenance.** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered. HDF5's adapter-created grid is known generation.
+**Clock provenance.** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered; HDF5's adapter-created grid is known generation, and an existing damaged time column is preserved rather than repaired. MCAP uses a complete header time column with unknown origin where one exists, otherwise a distinguishable nonzero publish-time column, otherwise log time, never mixing these fields row by row; a header timestamp alone does not certify capture time. A camera stream backed by LeRobot metadata retains that metadata clock — decoded media PTS are not inspected.
 
 | Recorded-axis metric | Meaning | Decision behavior |
 | --- | --- | --- |
@@ -69,7 +69,9 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `recorded_dt_spread_ms` | Sample standard deviation of recorded intervals | Report-only by default; not sensor jitter |
 | `recorded_drop_estimate` | Estimated holes relative to recorded median cadence | Report-only by default; not verified sensor frame loss |
 
-Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval.
+Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval. A reordered third-party stream needs a source-row index map before any of these checks can run; without one they abstain.
+
+Reports carry `clock_info` and `source_order` for every stream, including metadata-only runs, so the origin, its evidence, the source field, native unit/dtype and any conversions are visible even where nothing was graded. A shared numeric epoch between two streams does not by itself establish clock synchronization.
 
 ---
 
@@ -371,6 +373,19 @@ A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published b
 **Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 
 Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
+
+## Benchmarking metrics
+
+```bash
+kalanos benchmark                                                    # the two pinned reference datasets, 30 sampled episodes each
+kalanos benchmark ./recording --profile acquisition.yaml --sample 10 --out benchmark.json
+```
+
+Measures, per dataset, the benign rate (how often a metric fires on the data as recorded) and the detection rate (how often it fires once a `kalanos.testing` defect is injected into a sample of episodes). With no `paths` it grades the two pinned reference datasets (`lerobot/pusht`, `lerobot/libero_10`, each pinned to a fixed revision); `--sample` sets how many episodes per dataset receive an injected defect, 30 by default. `--out FILE.md` renders the result table; `--out FILE.json` dumps the model; without `--out` the table prints to stdout.
+
+`benchmark` shares bundle loading, mapping precedence, binding resolution and configuration identities with `grade`, and accepts the same `--profile`, `--map`, `--map-file`, `--no-sidecar` and `--tier`. Metadata-tier benchmarking injects no payload defects. Camera defects (blur, clipping, frozen frames) go into a native-resolution copy of each sampled video stream, graded clean and then with the defect; a camera whose native frames would take more than 1 GiB is reported rather than injected. Vision metrics only grade in the benchmark when the scope requires `sampled_video_quality` or `video_quality`, as in `kalanos grade`; under any other scope no camera is decoded for injection.
+
+See [Calibration](#calibration) above for how benchmark results on the three LeRobot datasets there set the vision metric bands.
 
 ## Adding a metric
 

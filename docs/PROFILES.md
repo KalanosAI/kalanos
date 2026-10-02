@@ -19,6 +19,51 @@ An optional `name` asserts the expected source name; a mismatch is a configurati
 
 A channel's `validations` entries each record `property`, `value`, `validator`, `evidence`, `scope` and an optional `capability` (`validator` and `evidence` cannot be blank), and are active only once their `value` matches the resolved property and their `scope` matches the channel's resolved source identity — see [noise reference evidence](#noise-reference-evidence) below for a worked example. A capability such as `derivatives` or `noise` needs its own scoped evidence: validating `unit` alone does not validate `derivatives`, and evidence scoped to `derivatives` does not validate physical limits or a noise reference. Changing a resolved channel property invalidates its prior validation records; they stay in the report as invalidated, and newly supplied evidence can establish the replacement interpretation.
 
+## Binding channels individually
+
+A vector can contain joint positions, motor effort and discrete commands. Use `binding.channels` when its members mean different things:
+
+```yaml
+schema_version: 1
+binding:
+  id: acquisition-layout-v1
+  channels:
+    - feature: observation.state
+      index: 0
+      taxonomy_type: proprio.joint_position
+      actuator: joint
+      quantity: position
+      representation: continuous
+      unit: rad
+      command: none
+      device: left
+    - feature: observation.effort
+      index: 6
+      taxonomy_type: proprio.joint_torque
+      actuator: gripper
+      quantity: effort
+      representation: continuous
+      unit: Nm
+      command: none
+      device: left
+requirements:
+  id: numeric-core-v1
+policy:
+  id: default-decisions-v1
+execution:
+  tier: standard
+```
+
+Adapt the fields and indices to the recording's actual layout.
+
+```bash
+kalanos grade ./recording --profile acquisition.yaml --report report.json
+```
+
+A bundle applies to `kalanos benchmark` the same way it applies to `grade`, sharing bundle loading, mapping precedence, binding resolution and configuration identities. See [Benchmarking metrics](METRICS.md#benchmarking-metrics) for its flags and what it measures.
+
+Whole-feature mappings remain compatibility defaults: they cannot erase explicit channel semantics or make a partly recognized vector fully mapped, and such conflicts are recorded on each affected channel's binding. A gripper's effort channel stays effort; a name alone does not turn it into a gripper-position channel. Typed views retain source fields, original indices and values — they add no physical sensors of their own.
+
 ## Numeric data with required acquisition timing
 
 Save as `acquisition.yaml`:

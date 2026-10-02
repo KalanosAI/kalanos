@@ -78,10 +78,7 @@ kalanos grade dataset/ --report report.html    # a shareable page
 kalanos grade dataset/ --report report.json    # the full model as compact JSON
 ```
 
-JSON reports (`--report FILE.json` and `--json` stdout) use compact formatting
-to reduce file size. Every field, null, metric and evidence value is retained;
-only layout whitespace is removed. Existing JSON readers, including
-`kalanos inspect`, accept the compact output.
+JSON reports (`--report FILE.json` and `--json` stdout) use compact formatting to reduce file size. Every field, null, metric and evidence value is retained; only layout whitespace is removed. Existing JSON readers, including `kalanos inspect`, accept the compact output.
 
 That's the whole workflow. Everything below is detail.
 
@@ -132,7 +129,7 @@ How to read it, top to bottom:
 
 Every metric answers one of four questions, and none of them needs labels:
 
-- **What does the clock say?** Backwards and repeated timestamps, the recorded cadence, interval spread and gaps, and where each timestamp came from (captured, logged, generated from frame numbers, unknown). When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred. Kalanos reports what the recorded timeline shows, and only grades *capture* timing when the recording carries evidence that its timestamps are capture times; see [Clock provenance and recorded order](#clock-provenance-and-recorded-order).
+- **What does the clock say?** Backwards and repeated timestamps, the recorded cadence, interval spread and gaps, and where each timestamp came from (captured, logged, generated from frame numbers, unknown). When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred. Kalanos reports what the recorded timeline shows, and only grades *capture* timing when the recording carries evidence that its timestamps are capture times; see [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#timing).
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
@@ -148,12 +145,11 @@ So 42 passing episodes of 50, at quality 99.99, read 84: exactly the share of th
 
 Findings shared by every episode of a task, or by nearly every episode of the dataset, are reported as **traits** so you see the pattern, and any authorized blocking consequence remains in force: the report can't tell a recording convention from corruption in every episode, so it doesn't guess. A scoped policy rule can exempt such a finding explicitly. `language_conditioned` makes an episode without its task instruction blocking, for VLA training; `KALANOS_POLICY_PATH=legacy_0_5` grades with no dataset gate and no letter cap, reproducing 0.5's numbers, while every episode still carries its eligibility.
 
-Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them and they drive no decision. Since 0.7.0 every episode carries one `eligibility` (`pass`, `blocked`, `review`, `unknown`) under a named scope; see `docs/DECISIONS.md`.
+Letter grades are deprecated since 0.6.5: reports still carry the old letter fields for compatibility, but nothing presents them and they drive no decision. Since 0.7.0 every episode carries one `eligibility` (`pass`, `blocked`, `review`, `unknown`) under a named scope; see [docs/DECISIONS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md).
 
 ### How findings affect readiness
 
-Severity, coverage and the decision are separate. A diagnostic can be computed,
-reported and critical while its consequence remains review.
+Severity, coverage and the decision are separate. A diagnostic can be computed, reported and critical while its consequence remains review.
 
 | Situation | Report behavior | Eligibility/readiness impact |
 | --- | --- | --- |
@@ -165,11 +161,7 @@ reported and critical while its consequence remains review.
 | Timestamps have unknown or generated origin | Recorded rate/spread/gap estimates; acquisition checks abstain | No timing certification; other checks can still affect the result |
 | A metric or payload raises an unexpected exception | Error coverage and an operational error record | Unknown; CLI exits 2 even with a permissive gate |
 
-A rule affecting every episode does not become harmless through prevalence.
-Calibration authorizes a particular detector, thresholds, bindings and operating
-scope; it is not a universal approval. The default policy ships without accepted
-statistical calibration manifests. Existing SNR ratios remain diagnostic inputs;
-R07-03's noise-floor and applicability changes are deferred.
+A rule affecting every episode does not become harmless through prevalence. Calibration authorizes a particular detector, thresholds, bindings and operating scope; it is not a universal approval. The default policy ships without accepted statistical calibration manifests. See [Calibration](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md#calibration) for what a manifest must declare before a statistical finding can block.
 
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
@@ -240,16 +232,25 @@ kalanos --verbosity debug grade data/     # every discovery and inference decisi
 kalanos adapters      # formats you can read, and any that are missing an extra
 kalanos metrics       # every quality check
 kalanos plugins       # summary, plus anything that failed to load
+kalanos benchmark     # how often each check fires on reference data, clean and with an injected defect
 ```
 
 ```bash
-kalanos inspect report.json                  # scope, decision counts, readiness and reasons of a saved report
-kalanos inspect report.json --episode ID     # every reason on one episode
+kalanos inspect report.json                                  # scope, decision counts, readiness and reasons of a saved report
+kalanos inspect report.json --episode ID                     # every reason on one episode
+kalanos grade ./recording --hash-source --report new.json    # record a byte identity for later comparison
+kalanos compare old.json new.json --report comparison.json   # what changed between two graded runs
 ```
 
-`inspect` also reads reports written by 0.6 (schema 6.3–6.5) without changing them, and points out where their old fields contradict each other.
+`inspect` also reads reports written by 0.6 (schema 6.3–6.5) without changing them, and points out where their old fields contradict each other. `compare` aligns exact recorded subject identities and refuses a numeric readiness comparison when they're missing or incompatible; see [docs/DECISIONS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md#cli-gate) for its exit codes. Audit sampling remains planned.
 
-Report comparison is available with `kalanos compare`; audit sampling remains planned.
+**Measure a metric's benign and detection rates**
+
+```bash
+kalanos benchmark --sample 10 --out benchmark.md    # the two pinned reference datasets, 10 sampled episodes each
+```
+
+Grades each reference dataset as recorded, then again with a `kalanos.testing` defect injected into a sample of episodes, and reports how often every metric fired both times. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#benchmarking-metrics) for its flags and what the rates mean.
 
 ---
 
@@ -338,7 +339,7 @@ The same override can come from four places, merged per field:
 3. The `binding.features` section of a `--profile` bundle. From Python, `grade(path, bundle=...)`.
 4. A `kalanos-map.yaml` sidecar in the graded folder, or beside the graded file. `--no-sidecar` (or `sidecar=False`) ignores only this one.
 
-`--map` beats `--map-file`, which beats the bundle, which beats the sidecar. Two inputs at the same level that disagree stop the run with exit code 2; every lower-level assertion that lost is recorded in `report.binding_conflicts`. A map file or sidecar can only assert mappings. A bundle also carries the evaluation scope (`requirements`), the decision `policy` and the execution `tier`, each with its own identity recorded in `report.run`; see [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/SCHEMA.md](docs/SCHEMA.md). Map files and sidecars use this shape:
+`--map` beats `--map-file`, which beats the bundle, which beats the sidecar. Two inputs at the same level that disagree stop the run with exit code 2; every lower-level assertion that lost is recorded in `report.binding_conflicts`. A map file or sidecar can only assert mappings. A bundle also carries the evaluation scope (`requirements`), the decision `policy` and the execution `tier`, each with its own identity recorded in `report.run`; see [docs/DECISIONS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md) and [docs/SCHEMA.md](https://github.com/KalanosAI/kalanos/blob/main/docs/SCHEMA.md). Map files and sidecars use this shape:
 
 ```yaml
 schema_version: 1
@@ -350,168 +351,27 @@ features:
 
 Kalanos records the type as given and does not verify it. The report records every override applied, with where it came from, in `report.mapping_overrides`, and each stream's `mapping_source` says whether the dictionary, the format's declared channel names, or an override typed it.
 
-### Bind individual channels
+### Binding individual channels
 
-A vector can contain joint positions, motor effort and discrete commands. Use
-`binding.channels` when its members mean different things. `feature` identifies
-the original source field and `index` is its zero-based member index. For a scalar
-channel without a vector index, use `index: null`. LeRobot feature members retain
-their manifest indices, including a one-member feature at index `0`.
-
-```yaml
-schema_version: 1
-binding:
-  id: acquisition-layout-v1
-  channels:
-    - feature: observation.state
-      index: 0
-      taxonomy_type: proprio.joint_position
-      actuator: joint
-      quantity: position
-      representation: continuous
-      unit: rad
-      command: none
-      device: left
-    - feature: observation.effort
-      index: 6
-      taxonomy_type: proprio.joint_torque
-      actuator: gripper
-      quantity: effort
-      representation: continuous
-      unit: Nm
-      command: none
-      device: left
-requirements:
-  id: numeric-core-v1
-policy:
-  id: default-decisions-v1
-execution:
-  tier: standard
-```
-
-Adapt these fields and indices to the recording's actual layout. A selector that
-matches no input is an error. An optional `name` asserts the expected source
-channel name and rejects a mismatch. An optional `source_identity` restricts the
-selector to one dataset root/file URI as resolved by the adapter; omitting it
-applies the selector to matching fields throughout the run.
-
-```bash
-kalanos grade ./recording --profile acquisition.yaml --report report.json
-kalanos benchmark ./recording --profile acquisition.yaml --sample 10 --out benchmark.json
-```
-
-Both commands share bundle loading, mapping precedence, binding resolution and
-configuration identities. Benchmark also accepts `--map`, `--map-file`,
-`--no-sidecar` and `--tier`. Its JSON records the resolved configuration for each
-dataset. Metadata-tier benchmarking does not inject payload defects.
-Camera defects (blur, clipping, frozen frames) go into a native-resolution copy
-of each sampled video stream, and are measured against that copy graded clean.
-A camera whose native frames would take more than 1 GiB is reported, not injected.
-Vision metrics grade in the benchmark only when the scope requires
-`sampled_video_quality` or `video_quality`,
-as in `kalanos grade`; under any other scope no camera is decoded for injection.
-
-Whole-feature mappings remain compatibility defaults. They cannot erase explicit
-channel semantics or make a partly recognized vector fully mapped. Such conflicts
-are recorded on each affected channel's binding. A gripper's effort channel stays
-effort; a name alone does not turn it into a gripper-position channel. Typed views
-retain source fields, original indices and values. They are not additional physical
-sensors.
-
-Existing `kalanos-map.yaml` sidecars remain supported permanently and are never
-rewritten or automatically migrated. `--no-sidecar` disables only automatic
-sidecar discovery. Explicit map files and bundle bindings still apply.
+A vector field can bundle more than one kind of signal — joint position next to motor effort — and `binding.channels` assigns each member its own type and validation. See [docs/PROFILES.md](https://github.com/KalanosAI/kalanos/blob/main/docs/PROFILES.md).
 
 ### Requirements, evidence and execution
 
-The default `numeric-core-v1` scope does not require calibrated units, capture
-timing or video quality: its reports show the vision metrics, but they neither
-score nor block an episode. To require visual inspection, set
-`requirements.id: vision-imitation-v1`. It requires `video_quality`, which only
-a run that measured every camera frame satisfies (`--full-frame-scan` or
-`--tier full`). A sampled run satisfies `sampled_video_quality` instead.
-The bundle's `vision` section sets the sample (`sample_frames`, 10 by default),
-`full_frame_scan` and the decode caps; `KALANOS_VISION_SAMPLES` and
-`KALANOS_FULL_FRAME_SCAN` override it, and `--vision-samples` and
-`--full-frame-scan` override both. Under
-either capability the vision metrics grade against their bands; until a
-calibration manifest covers them, a critical result requests review rather than
-blocking. An episode whose cameras could not be read, or that has no camera, is
-**unknown** for the capability. Merely discovering a camera or choosing the full
-tier cannot establish a vision-training pass.
-
-A binding assertion and validated evidence are separate. Per-property validation
-records must match the property value and the resolved source scope. Changing a
-channel's interpretation invalidates its existing validation records; replacement
-evidence must be supplied explicitly. Capability-specific evidence applies only
-to that capability. These records are accountable attestations, not automatic
-verification of the referenced external document.
-
-JSON exposes bindings under `episodes[].streams[].channels[].channel.binding`.
-When channels were not graded, inspect `streams[].declared_channels[].binding`.
-Bindings record origins, conflicts, active and invalidated validation records, and
-prerequisite readiness for numeric inspection, derivatives, limits and noise.
-Prerequisite readiness is not a detector result or calibration approval. Existing
-SNR thresholds are unchanged by the binding work. Statistical blocking now requires the calibration matching described below.
-Registered jerk/chatter calculations now abstain when derivative prerequisites
-lack the required scoped binding evidence. Generic numeric inspection continues.
-
-`execution.tier` changes what is attempted; it does not reduce requirements.
-`execution.limits` supports `max_bytes` and `max_files` for remote source budgets.
-These caps can tighten the environment/API limits, and the effective budgets are
-included in the execution identity. Unsupported budget keys are rejected. Local
-files retain the existing unrestricted-source behavior. No sampling or caching
-capability is implied by the full tier.
-
-An explicit Python `policy=` wins over a bundle policy. Otherwise `policy.path`
-loads relative to the bundle file, followed by the configured/default policy when
-no path is supplied. A relative policy path in an in-memory bundle is rejected.
-
-See [the requirements profiles reference](docs/PROFILES.md) for the validation shape,
-test matrix, migration considerations and remaining release boundaries.
+A bundle's `requirements` section sets what a pass needs beyond raw numbers — physical units, capture timing, video quality — and `execution.tier` changes what Kalanos attempts without ever lowering them. See [docs/DECISIONS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md).
 
 ### Clock provenance and recorded order
 
-Reports include `clock_info` and `source_order` for every stream, including
-metadata-only runs. They describe the timestamp origin, its evidence, source
-field, native unit/dtype, known domain/epoch and conversions. Timestamp origin
-can be capture, receive, publish, log, presentation, generated, simulation or
-unknown. A shared numeric epoch does not establish clock synchronization.
+Every stream reports where its timestamps came from and whether its rows are still in source order, down to the native tick. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#timing).
 
-Grading preserves source row order. Backwards timestamps and repeated steps stay
-visible; grading does not repair them by sorting. Timing calculations retain
-native ticks internally and subtract integer ticks before converting to seconds.
-Null, NaN and infinite timestamps break adjacency and retain their source row
-addresses. A reordered third-party stream needs a source-row index map for
-ordering checks; without one those checks abstain.
+### Deeper diagnostics
 
-`recorded_hz`, `recorded_dt_spread_ms` and `recorded_drop_estimate` describe the
-recorded timeline and are report-only under the default policy. A generated
-50 Hz timeline can have measurable gaps without proving any sensor frame loss.
-The acquisition checks `effective_hz`, `dt_jitter_ms` and `drop_rate` require
-explicit producer evidence that timestamps represent capture time. Jitter alone
-does not provide that evidence, and a uniform producer-declared capture clock
-is not rejected just for being uniform.
+Optional diagnostic plans measure stream-pair timing, command response, sampled video quality, dimensionless motion, training windows and cohort diversity, report-only by default:
 
-LeRobot frame-index/rate matches are labelled inferred generation, even when rows
-are missing or out of order. An HDF5 grid created by the adapter is labelled known
-generation; an existing damaged time column is preserved. MCAP uses a complete
-header time column with unknown origin, otherwise a distinguishable nonzero
-publish-time column, otherwise log time; it never mixes these fields row by row.
-A header timestamp alone does not certify capture time. Camera streams backed by
-LeRobot metadata retain that metadata clock; decoded media PTS are not inspected
-by this slice.
+```bash
+pip install 'kalanos[numeric,video]'
+```
 
-Existing scores can change: unverified acquisition checks now abstain, and
-preserved row order can expose previously hidden defects. A higher score after
-removing unsupported checks is not evidence of improved recording quality.
-Previously saved reports are not rewritten. Adapters with an authoritative
-producer capture contract can supply explicit `ClockInfo`; there is no automatic
-clock promotion through a channel mapping or bundle declaration.
-
-See [the adapter clock contract](docs/ADAPTERS.md) for code changes, test cases,
-source-format limits and release checks.
-
+See [docs/DIAGNOSTICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DIAGNOSTICS.md).
 
 ---
 
@@ -541,7 +401,7 @@ uv run pytest
 
 ```plain
 ./
-├── docs/                       # ARCHITECTURE.md, METRICS.md, ADAPTERS.md
+├── docs/                       # ADAPTERS.md, ARCHITECTURE.md, DECISIONS.md, DIAGNOSTICS.md, METRICS.md, PROFILES.md, SCHEMA.md
 ├── src/kalanos/
 │   ├── cli.py                  # The `kalanos` command group
 │   ├── api.py                  # The library entry point
@@ -558,128 +418,6 @@ uv run pytest
 
 ---
 
-## Coverage, inspection and comparison (R07-05–R07-07)
-
-`coverage` and each episode's ledger distinguish `computed`, `not_applicable`,
-`unavailable`, `skipped`, `error` and `not_required`. Computed report-only metrics
-count as evaluated. Eligible counts include unavailable, skipped and errored
-subjects, but exclude genuinely inapplicable subjects and optional capabilities.
-For example, 700 computed torque channel-episodes out of 700 eligible torque
-channel-episodes is complete torque coverage even when their values are report-only.
-Unknown bindings retain uncertainty rather than silently shrinking that denominator.
-
-Semantic mapping, capture-origin evidence, visual analysis and behavioral diversity
-have separate counts. Capture-origin evidence alone does not establish a usable
-clock. Visual frame totals and training-window coverage remain unknown where no
-runner measured them. Counts describe loaded subjects; failed episodes and refused
-sources remain explicit. Coverage is not a new readiness percentage.
-
-Flatline and spike measurements carry zero-based, half-open source-row intervals.
-Spikes also name the wider filter-support interval. Null/nonfinite values break
-flatline adjacency. Spectrum and SNR measurements retain whole-episode support.
-These intervals are evidence locations, not instructions to delete samples.
-
-```bash
-kalanos profiles list
-kalanos profiles show vision-imitation-v1
-kalanos profiles validate acquisition.yaml
-kalanos inspect report.json --episode 'recording::episode_000000'
-kalanos grade ./recording --hash-source --report new.json
-kalanos compare old.json new.json --report comparison.json
-kalanos grade ./recording --fail-on blocked,review,unknown --report report.json
-```
-
-`profiles validate` checks configuration structure and referenced policy files;
-only grading verifies bindings against actual data. `compare` aligns exact recorded
-subject identities, lists identity and measurement changes, and refuses a numeric
-readiness comparison when identities are missing or incompatible. Exit 1 means
-incomparable reports; exit 2 means invalid inputs or an operational failure.
-Identified differences are possible causes, not proof of causality. Use
-`--hash-source` on each grade run (Python: `hash_source=True`) to record a complete
-local byte identity. This performs two full reads, rejects symlinks and
-nonlocal roots, and withholds the report if the before/after byte identities differ.
-It reads all local files even at metadata execution tier. Write report outputs
-outside the hashed input directory to avoid changing the next run’s identity. Without it,
-reports can receive an incomparable result with useful recorded differences.
-Historical schema-6 reports remain historical; comparison never manufactures
-schema-7 decisions for them.
-
-```python
-from kalanos import compare, load_report
-
-report = load_report("report.json")
-difference = compare("old.json", "new.json")
-print(difference.comparable, difference.reasons)
-```
-
-## Calibration enforcement
-
-Statistical blocking requires a structured, accepted manifest in the selected
-policy's `calibration_manifests` list. Matching covers the detector implementation
-and numerical runtime, metric thresholds/limits, effective bindings, requirements,
-execution, dictionary, adapter identity and decision-policy scope. The report
-records the exact expected context and any mismatch on each candidate finding.
-Changing these inputs invalidates old authorization. R07-03 changes will therefore
-require fresh validation of affected detectors.
-
-The initial promotion gate requires at least 600 independent valid episodes and
-100 real fault episodes, an exact one-sided 95% false-block upper bound at most
-0.5%, and a recall lower bound at least 90%. Session separation, real-fault evidence,
-combined-policy validation and accountable acceptance must be declared. Evidence
-must be representative of the named operating scope. These are acceptance
-requirements, not claimed performance of this release.
-
-The manifest records an external validation report reference and digest. Kalanos
-checks the declared evidence and matching identities; it does not authenticate the
-reviewer or independently relabel the corpus. Synthetic benchmark results and the
-legacy `calibrated_metrics` name list never grant approval. `enforce_calibration:
-false` is rejected. Missing, revoked, expired, mismatched or insufficient evidence
-leaves the candidate at review. See [Calibration](docs/DECISIONS.md#calibration)
-for manifest fields, test cases and release checks.
-
-The default `--fail-on blocked,unknown` permits review. Use
-`--fail-on blocked,review,unknown` before unattended training. Quality measurements
-can still change without authorizing a block; readiness is undefined while review
-or required unknown evidence remains.
-
 ## License
 
 [Apache-2.0](https://github.com/KalanosAI/kalanos/blob/main/LICENSE).
-
-
-### Contextual noise evidence (0.7.0)
-
-0.7.0 adds contextual SNR evidence and a validated native-scale noise
-reference. Quiet holds within that reference retain measurements without an SNR
-penalty. Missing reference evidence leaves a diagnostic review candidate; it
-cannot authorize a statistical block. Boolean flags receive missing-value checks
-and remain excluded from SNR. See [the noise-floor reference](docs/METRICS.md)
-and [binding reference configuration](docs/PROFILES.md#noise-reference-evidence).
-
-Schema-7 integrations must preserve `scope`, `eligibility_counts`, `readiness`,
-`sufficiency`, and `coverage`. `readiness.score: null` means undefined, never zero.
-Use the matching publisher/Action migration before exposing these reports.
-### Deeper diagnostics (0.7.0)
-
-Optional diagnostic plans now measure stream-pair timing, declared command
-response, sampled video quality, dimensionless motion, training windows and
-comparable-cohort diversity/redundancy. Reports retain source locations,
-prerequisites, work budgets and unknown evidence. Measurements default to
-report-only; explicit decision-policy thresholds can request review. These new
-diagnostics do not authorize automatic blocking or modify source data.
-
-```bash
-pip install 'kalanos[numeric,video]'
-kalanos profiles validate docs/examples/diagnostics.yaml
-kalanos grade ./recording --profile docs/examples/diagnostics.yaml --report audit.json
-kalanos inspect audit.json
-kalanos diagnostics summarize-study labelled-outcomes.json
-```
-
-Adapt selectors and budgets to the recording before running the example. Sampled
-visual evidence is distinct from checking every frame. Minimum passing training
-windows belong in `requirements.min_pass_windows`; overlapping windows are not
-independent demonstrations. See [the diagnostic contract](docs/DIAGNOSTICS.md)
-for prerequisites, policy examples, format limits and validation controls.
-
-Review/selection/export and the training-reader pilot remain planned for **0.7.1**.
