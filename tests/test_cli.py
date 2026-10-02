@@ -143,6 +143,7 @@ def test_json_flag_prints_the_model_with_no_card():
 
     assert result.exit_code in (0, 1)
     assert "OVERALL" not in result.stdout
+    assert len(result.stdout.splitlines()) == 1
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
 
@@ -157,8 +158,10 @@ def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
     )
 
     assert result.exit_code in (0, 1)
+    assert "\n" not in destination.read_text()
     report = Report.model_validate_json(destination.read_text())
     assert report.episodes
+    assert runner.invoke(app, ["inspect", str(destination)]).exit_code == 0
 
 
 def test_report_yaml_writes_a_file_that_parses_back_into_the_model(tmp_path):
