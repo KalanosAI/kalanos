@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import json
 import logging
 
 # External
@@ -887,6 +888,26 @@ def test_report_round_trips_through_json():
     report = _sample_report()
 
     assert Report.model_validate_json(render_json(report)) == report
+
+
+def test_compact_json_preserves_all_fields_and_evidence():
+    """Layout removal must preserve nulls, numeric precision and string content."""
+
+    report = _sample_report()
+    report.findings[0].evidence = {
+        "instruction": 'Grasp  the towel — 左手\nHold\t"still"',
+        "samples": [None, 0, False, 0.12345678901234567, 1e-20],
+        "empty": {},
+    }
+    before = report.model_dump(mode="json")
+    pretty = report.model_dump_json(indent=2)
+
+    compact = render_json(report)
+
+    assert "\n" not in compact
+    assert len(compact.encode("utf-8")) < len(pretty.encode("utf-8"))
+    assert json.loads(compact) == json.loads(pretty) == before
+    assert report.model_dump(mode="json") == before
 
 
 def test_write_report_writes_a_json_file_that_parses_back_into_the_model(tmp_path):

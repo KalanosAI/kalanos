@@ -164,7 +164,7 @@ def _stream_finding_counts(
 
 @reporter(name="json", extensions=(".json",))
 def render_json(report: Report) -> str:
-    """Render a Report as indented, parseable JSON.
+    """Render a Report as compact, parseable JSON without omitting any fields.
 
     Parameters
     ----------
@@ -177,7 +177,7 @@ def render_json(report: Report) -> str:
         The report as JSON text, matching `Report`'s own field names.
     """
 
-    return report.model_dump_json(indent=2)
+    return report.model_dump_json()
 
 
 @reporter(name="yaml", extensions=(".yaml", ".yml"))

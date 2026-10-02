@@ -75,8 +75,13 @@ Full details of each sample are in [`tests/fixtures/README.md`](https://github.c
 
 ```bash
 kalanos grade dataset/ --report report.html    # a shareable page
-kalanos grade dataset/ --report report.json    # the full model, for scripts
+kalanos grade dataset/ --report report.json    # the full model as compact JSON
 ```
+
+JSON reports (`--report FILE.json` and `--json` stdout) use compact formatting
+to reduce file size. Every field, null, metric and evidence value is retained;
+only layout whitespace is removed. Existing JSON readers, including
+`kalanos inspect`, accept the compact output.
 
 That's the whole workflow. Everything below is detail.
 
