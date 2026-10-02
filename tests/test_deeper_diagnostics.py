@@ -717,7 +717,7 @@ def test_video_missing_decoder_is_unavailable_not_pass_or_operational_failure(
 ):
     from kalanos.analysis.adapters.video import VideoPayload
 
-    monkeypatch.setattr("kalanos.analysis.adapters.video.load_av", lambda: None)
+    monkeypatch.setattr("kalanos.analysis.adapters.video.av", None)
     cam = camera()
     cam.payload = VideoPayload(UPath("camera.mp4"), 10, 0, 1)
     r = audit(

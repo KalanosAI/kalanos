@@ -93,15 +93,6 @@ def _video_stream(payload: VideoPayload, frames: int) -> Stream:
     )
 
 
-def _fixture_stream() -> Stream:
-    """The fixture's second episode, six frames starting mid-file."""
-
-    payload = VideoPayload(
-        path=LEROBOT_VIDEO, frame_count=6, start_s=8 / 30, end_s=14 / 30
-    )
-    return _video_stream(payload, 6)
-
-
 def _moving_actions(samples: int) -> Stream:
     """A 30 Hz action stream whose sine channels move throughout."""
 
@@ -174,6 +165,16 @@ def _empty_vision_cache():
     vision.clear_cache()
 
 
+@pytest.fixture
+def _fixture_stream() -> Stream:
+    """The second episode of `LEROBOT_VIDEO`, six frames starting mid-file."""
+
+    payload = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=6, start_s=8 / 30, end_s=14 / 30
+    )
+    return _video_stream(payload, 6)
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -201,7 +202,7 @@ def test_a_corrupt_video_is_not_applicable_and_the_stream_still_grades(tmp_path)
     assert graded.metrics["sharpness_score"].availability == Availability.UNAVAILABLE
 
 
-def test_frame_count_vs_timebase_catches_a_truncated_video():
+def test_frame_count_vs_timebase_catches_a_truncated_video(_fixture_stream):
     """A segment whose mp4 ends two frames early reads as a deviation."""
 
     truncated = _video_stream(
@@ -211,7 +212,7 @@ def test_frame_count_vs_timebase_catches_a_truncated_video():
 
     check_metric(
         frame_count_vs_timebase,
-        clean=stream_context(_fixture_stream(), is_regular=True),
+        clean=stream_context(_fixture_stream, is_regular=True),
         defective=stream_context(truncated, is_regular=True),
         policy=load_default_policy(),
     )
@@ -246,13 +247,15 @@ def test_vision_metrics_skip_what_is_not_camera_footage(func, stream):
 
 
 @pytest.mark.parametrize("func", VISION_METRICS, ids=lambda func: func.__name__)
-def test_vision_metrics_without_the_decoder_name_the_extra(monkeypatch, func):
+def test_vision_metrics_without_the_decoder_name_the_extra(
+    monkeypatch, func, _fixture_stream
+):
     """With PyAV missing, each metric says which extra to install."""
 
-    monkeypatch.setattr(video, "load_av", lambda: None)
+    monkeypatch.setattr(video, "av", None)
 
     reason = _assert_not_applicable(
-        func(stream_context(_fixture_stream(), is_regular=True))
+        func(stream_context(_fixture_stream, is_regular=True))
     )
     assert "kalanos[video]" in reason
 
@@ -260,7 +263,7 @@ def test_vision_metrics_without_the_decoder_name_the_extra(monkeypatch, func):
 def test_frozen_frame_pct_without_the_decoder_names_the_extra(monkeypatch):
     """With PyAV missing, a stream long enough to window says which extra to install."""
 
-    monkeypatch.setattr(video, "load_av", lambda: None)
+    monkeypatch.setattr(video, "av", None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=60, start_s=0.0, end_s=2.0)
     ctx = stream_context(
         _video_stream(payload, 60), episode_streams=[_moving_actions(60)]
@@ -425,11 +428,11 @@ def test_a_flat_frame_reads_as_fully_blurred():
     assert sharpness_score(stream_context(stream)).value == 0.0
 
 
-def test_a_graded_video_stream_serializes_to_json():
+def test_a_graded_video_stream_serializes_to_json(_fixture_stream):
     """Every vision value and evidence entry is a plain Python type."""
 
     graded, _findings = grade_stream(
-        _fixture_stream(),
+        _fixture_stream,
         policy=load_default_policy(),
         is_regular=True,
         episode_id="episode_0",
@@ -624,7 +627,7 @@ def test_exposure_level_reports_crushed_and_clipped_pixels(level, share):
     assert result.evidence[share] == 1
 
 
-def test_the_metadata_tier_reads_no_frames(monkeypatch):
+def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
     """Under the metadata tier every vision metric is skipped before any decode."""
 
     monkeypatch.setattr(
@@ -641,7 +644,7 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch):
     )
 
     graded, _findings = grade_stream(
-        _fixture_stream(),
+        _fixture_stream,
         policy=load_default_policy(),
         is_regular=True,
         episode_id="episode_0",

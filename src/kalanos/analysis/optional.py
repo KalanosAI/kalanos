@@ -23,15 +23,6 @@ def load_numpy() -> ModuleType | None:
         return None
 
 
-def load_av() -> ModuleType | None:
-    """Import PyAV, or return `None` when the video extra is not installed."""
-
-    try:
-        return importlib.import_module("av")
-    except ImportError:
-        return None
-
-
 def load_huggingface_hub() -> ModuleType | None:
     """Import huggingface_hub, or return `None` when the `hf` extra is not installed."""
 

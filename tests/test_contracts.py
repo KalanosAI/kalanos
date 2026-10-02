@@ -83,16 +83,9 @@ _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."
 _TAXEL_PRESSURE = "extero.taxel_pressure"
 
 
-# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
-# ░░█░░█▀▀░▀▀█░░█░░▀▀█
-# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
-
-
-@pytest.fixture(autouse=True)
-def _empty_vision_cache():
-    """Start every test with no frames sampled, so no test reads another's."""
-
-    vision.clear_cache()
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _built_in_entries():
@@ -104,6 +97,23 @@ def _built_in_entries():
         for entry in registered_metrics(level)
         if entry.module.startswith(_BUILT_IN_MODULE_PREFIX)
     ]
+
+
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture(autouse=True)
+def _empty_vision_cache():
+    """Start every test with no frames sampled, so no test reads another's."""
+
+    vision.clear_cache()
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
 
 
 def test_every_built_in_metric_declares_the_defect_it_fires_on():

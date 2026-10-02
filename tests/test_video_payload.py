@@ -114,7 +114,7 @@ def remote_video():
 def test_fetch_without_the_decoder_raises_naming_the_extra(monkeypatch):
     """Verify a missing decoder raises DecoderUnavailable naming the install extra."""
 
-    monkeypatch.setattr(video, "load_av", lambda: None)
+    monkeypatch.setattr(video, "av", None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
 
     with pytest.raises(DecoderUnavailable, match=r"kalanos\[video\]"):
@@ -127,7 +127,7 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
     The stream's own timing metrics must still run.
     """
 
-    monkeypatch.setattr(video, "load_av", lambda: None)
+    monkeypatch.setattr(video, "av", None)
     monkeypatch.setattr(registry, "_REGISTRY", list(registry._REGISTRY))
 
     @registry.metric(level=Level.STREAM, family=Family.VISION)
@@ -348,7 +348,7 @@ def test_sampling_and_counting_read_a_remote_path(remote_video):
 def test_reading_without_the_decoder_raises_naming_the_extra(monkeypatch, read):
     """Verify every read raises DecoderUnavailable without PyAV."""
 
-    monkeypatch.setattr(video, "load_av", lambda: None)
+    monkeypatch.setattr(video, "av", None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
 
     with pytest.raises(DecoderUnavailable, match=r"kalanos\[video\]"):

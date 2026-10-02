@@ -23,18 +23,33 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from upath import UPath
 
 # Internal
-from kalanos.analysis.optional import load_av, load_numpy
+from kalanos.analysis.entry_points import MissingDependency
+from kalanos.analysis.optional import load_numpy
 
 
 if TYPE_CHECKING:
     import numpy as np
 
+# Dependencies added by the video extra
+# A missing decoder fails only the reads that need it, not the import:
+# every LeRobot dataset loads through this module, video or not.
+try:
+    import av
+    import av.error
+except ImportError:
+    av = None
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+
+logger = logging.getLogger(__name__)
+
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
-
-logger = logging.getLogger(__name__)
 
 # Opening a remote video re-reads its index through many small range requests,
 # and many payloads may share one file. So remote files stay open across payloads,
@@ -47,8 +62,25 @@ _REMOTE_HANDLES: "OrderedDict[str, Any]" = OrderedDict()
 _REMOTE_LOCK = threading.Lock()
 
 
-class DecoderUnavailable(RuntimeError):
-    """Raised when a video payload is fetched without the decoder installed."""
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+class DecoderUnavailable(MissingDependency):
+    """Raised when a video payload is decoded without the decoder installed."""
+
+    def __init__(self, path: UPath) -> None:
+        """Name the payload that could not be decoded and the extra that decodes it.
+
+        Parameters
+        ----------
+        path : UPath
+            The video file the read was asked for.
+        """
+
+        super().__init__("kalanos", "video")
+        self.msg = f"{path}: decoding a video payload needs PyAV; add {self.target}"
 
 
 class DecodeFailed(RuntimeError):
@@ -135,87 +167,6 @@ class SampledFrames(Protocol):
         ...
 
 
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
-
-
-def _remote_handle(path: UPath) -> Any:
-    """Return an open, block-cached file object for `path`, reusing a cached one.
-
-    The caller holds `_REMOTE_LOCK`.
-    """
-
-    key = str(path)
-    if key in _REMOTE_HANDLES:
-        _REMOTE_HANDLES.move_to_end(key)
-        return _REMOTE_HANDLES[key]
-
-    handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
-    _REMOTE_HANDLES[key] = handle
-    while len(_REMOTE_HANDLES) > _MAX_REMOTE_HANDLES:
-        _key, evicted = _REMOTE_HANDLES.popitem(last=False)
-        evicted.close()
-    return handle
-
-
-def close_remote_handles() -> None:
-    """Close and forget every cached remote file object, at the end of a run."""
-
-    with _REMOTE_LOCK:
-        for handle in _REMOTE_HANDLES.values():
-            handle.close()
-        _REMOTE_HANDLES.clear()
-
-
-def _forget_remote_handle(path: UPath) -> None:
-    """Close and forget the cached file object for `path`, if there is one."""
-
-    with _REMOTE_LOCK:
-        handle = _REMOTE_HANDLES.pop(str(path), None)
-        if handle is not None:
-            handle.close()
-
-
-def decoder_available() -> bool:
-    """Whether a video payload can be decoded in this process.
-
-    Returns
-    -------
-    bool
-        Whether PyAV imports successfully.
-    """
-
-    return load_av() is not None
-
-
-def _luminance(frame: Any) -> "np.ndarray":
-    """The frame's native-resolution luminance, the Y plane itself for planar YUV."""
-
-    numpy = load_numpy()
-    assert numpy is not None
-
-    pixel_format = frame.format
-    # A deeper format stores each Y sample in two bytes,
-    # so only an 8-bit plane reads as is.
-    if (
-        pixel_format.name.startswith("yuv")
-        and pixel_format.is_planar
-        and pixel_format.components[0].bits == 8
-    ):
-        plane = frame.planes[0]
-        rows = numpy.frombuffer(plane, dtype=numpy.uint8).reshape(
-            plane.height, plane.line_size
-        )
-        return rows[:, : plane.width].copy()
-    return frame.reformat(format="gray").to_ndarray().copy()
-
-
-# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
-# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
-# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
-
-
 @dataclass(frozen=True)
 class VideoPayload:
     """A video stream's frames, decoded only when `fetch` is called.
@@ -247,16 +198,6 @@ class VideoPayload:
         """
 
         return self.frame_count
-
-    def _av(self) -> ModuleType:
-        """Import PyAV, raising `DecoderUnavailable` when it is not installed."""
-
-        av = load_av()
-        if av is None:
-            raise DecoderUnavailable(
-                f"{self.path}: decoding a video payload needs PyAV; add kalanos[video]"
-            )
-        return av
 
     @contextmanager
     def _open(self, av: ModuleType) -> Generator[Any, None, None]:
@@ -431,7 +372,8 @@ class VideoPayload:
         A `pixel_format` of `None` yields each frame unresized, as RGB.
         """
 
-        av = self._av()
+        if av is None:
+            raise DecoderUnavailable(self.path)
         decoded = 0
         try:
             with self._open(av) as container:
@@ -491,7 +433,8 @@ class VideoPayload:
             or has no frame rate to place the segment by.
         """
 
-        av = self._av()
+        if av is None:
+            raise DecoderUnavailable(self.path)
         count = 0
         try:
             with self._open(av) as container:
@@ -526,17 +469,18 @@ class VideoPayload:
         ------
         DecoderUnavailable
             If PyAV is not installed in this process.
+        DecodeFailed
+            If the video stream has no time base to seek by.
         """
 
-        av = load_av()
         if av is None:
-            raise DecoderUnavailable(
-                f"{self.path}: decoding a video payload needs PyAV; add kalanos[video]"
-            )
+            raise DecoderUnavailable(self.path)
 
         container = av.open(str(self.path))
         try:
             stream = container.streams.video[0]
+            if stream.time_base is None:
+                raise DecodeFailed(f"{self.path}: the video stream has no time base")
             container.seek(int(self.start_s / stream.time_base), stream=stream)
             # end_s is the exclusive upper bound: it is the next segment's own start_s,
             # so a frame landing exactly on it belongs there, not here.
@@ -564,3 +508,67 @@ class VideoPayload:
                 self.end_s,
             )
         return frames
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _remote_handle(path: UPath) -> Any:
+    """Return an open, block-cached file object for `path`, reusing a cached one.
+
+    The caller holds `_REMOTE_LOCK`.
+    """
+
+    key = str(path)
+    if key in _REMOTE_HANDLES:
+        _REMOTE_HANDLES.move_to_end(key)
+        return _REMOTE_HANDLES[key]
+
+    handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
+    _REMOTE_HANDLES[key] = handle
+    while len(_REMOTE_HANDLES) > _MAX_REMOTE_HANDLES:
+        _key, evicted = _REMOTE_HANDLES.popitem(last=False)
+        evicted.close()
+    return handle
+
+
+def close_remote_handles() -> None:
+    """Close and forget every cached remote file object, at the end of a run."""
+
+    with _REMOTE_LOCK:
+        for handle in _REMOTE_HANDLES.values():
+            handle.close()
+        _REMOTE_HANDLES.clear()
+
+
+def _forget_remote_handle(path: UPath) -> None:
+    """Close and forget the cached file object for `path`, if there is one."""
+
+    with _REMOTE_LOCK:
+        handle = _REMOTE_HANDLES.pop(str(path), None)
+        if handle is not None:
+            handle.close()
+
+
+def _luminance(frame: Any) -> "np.ndarray":
+    """The frame's native-resolution luminance, the Y plane itself for planar YUV."""
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    pixel_format = frame.format
+    # A deeper format stores each Y sample in two bytes,
+    # so only an 8-bit plane reads as is.
+    if (
+        pixel_format.name.startswith("yuv")
+        and pixel_format.is_planar
+        and pixel_format.components[0].bits == 8
+    ):
+        plane = frame.planes[0]
+        rows = numpy.frombuffer(plane, dtype=numpy.uint8).reshape(
+            plane.height, plane.line_size
+        )
+        return rows[:, : plane.width].copy()
+    return frame.reformat(format="gray").to_ndarray().copy()
