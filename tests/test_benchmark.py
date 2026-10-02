@@ -72,6 +72,17 @@ def _tables(markdown: str) -> list[list[str]]:
     return tables
 
 
+def _camera_episodes(count: int = 3) -> list[Episode]:
+    camera = clean_frames(frames=100, hz=30.0)
+    actions = clean_recording(
+        hz=30.0, samples=100, taxonomy_type="action.joint_position_command"
+    ).model_copy(update={"is_regular": True})
+    return [
+        Episode(id=f"episode_{index}", streams=[camera, actions])
+        for index in range(count)
+    ]
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -211,17 +222,6 @@ def test_the_cli_benchmarks_a_lerobot_dataset_into_json(tmp_path: Path):
     # The default scope does not grade vision, so no camera is decoded for injection.
     for defect in (Defect.BLUR, Defect.CLIPPED, Defect.FROZEN_FRAMES):
         assert dataset.not_injected[defect] == "the scope does not grade vision"
-
-
-def _camera_episodes(count: int = 3) -> list[Episode]:
-    camera = clean_frames(frames=100, hz=30.0)
-    actions = clean_recording(
-        hz=30.0, samples=100, taxonomy_type="action.joint_position_command"
-    ).model_copy(update={"is_regular": True})
-    return [
-        Episode(id=f"episode_{index}", streams=[camera, actions])
-        for index in range(count)
-    ]
 
 
 def test_blur_and_clipping_are_injected_into_in_memory_frames():

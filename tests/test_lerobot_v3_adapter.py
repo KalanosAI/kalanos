@@ -170,7 +170,7 @@ def test_a_camera_stream_is_never_fully_decoded_while_grading(monkeypatch):
 def test_a_video_stream_carries_frames_it_has_not_read(monkeypatch):
     """Verify a video payload's length costs nothing, with the decoder patched out."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: pytest.fail("_load_av() was called"))
+    monkeypatch.setattr(video, "load_av", lambda: pytest.fail("load_av() was called"))
 
     [first, _] = _episodes()
     [video_stream] = [s for s in first.streams if s.kind == Kind.VIDEO]

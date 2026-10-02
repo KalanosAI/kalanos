@@ -92,7 +92,7 @@ _TAXEL_PRESSURE = "extero.taxel_pressure"
 def _empty_vision_cache():
     """Start every test with no frames sampled, so no test reads another's."""
 
-    vision._clear_cache()
+    vision.clear_cache()
 
 
 def _built_in_entries():

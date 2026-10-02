@@ -161,6 +161,7 @@ class CameraFrame(BaseModel):
     Attributes
     ----------
     source_row : int
+        The frame's row in the stream.
     presentation_time_s : float or None
         The container's presentation time, `None` where it has none.
     shape : list of int
@@ -193,6 +194,7 @@ class CameraFrames(BaseModel):
     frames : list of CameraFrame
         One per examined frame, in order.
     decoded_frames : int
+        The frames the read decoded inside its windows, seek preroll excluded.
     adjacent_pairs_examined : int
         Neighbouring frame pairs the freeze read compared.
     identical_adjacent_pairs : list of list of int

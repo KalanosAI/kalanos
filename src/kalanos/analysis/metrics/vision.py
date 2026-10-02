@@ -1,22 +1,27 @@
 """The vision family.
 
-sharpness_score, exposure_shift_pct, exposure_level, frame_count_vs_timebase
-and frozen_frame_pct.
-Blur and exposure measure `StreamContext.vision_samples` evenly spaced frames
-of a camera stream (10 by default);
-each judges one episode by itself,
+Five metrics grade camera footage:
+
+- sharpness_score, exposure_shift_pct and exposure_level measure
+  `StreamContext.vision_samples` evenly spaced frames of a camera stream
+  (10 by default);
+- frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
+  and needs an action stream in the same episode;
+- frame_count_vs_timebase counts the container's packets, decoding nothing,
+  under a full scan too.
+
+Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
-frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
-and needs an action stream in the same episode.
-Under `StreamContext.full_frame_scan`, all three read every frame.
-The three share one decode: when frozen_frame_pct will run,
-the sampled frames are taken from inside its windows,
-and otherwise only the sampled frames are decoded.
-Each frame is decoded as a 128x128 gray image for exposure and freezes,
-and each sampled frame also at native resolution for blur;
-every frame is measured and dropped, so a full scan runs in flat memory.
-frame_count_vs_timebase counts the container's packets when sampling,
-and the frames decoded under a full scan.
+Under `StreamContext.full_frame_scan`, blur, exposure and freezes read every frame.
+
+The three share one decode:
+
+- when frozen_frame_pct runs, the sampled frames are taken from inside its
+  windows, and otherwise only the sampled frames are decoded;
+- each frame is decoded as a 128x128 gray image for exposure and freezes,
+  and each sampled frame also at native resolution for blur;
+- every frame is measured and dropped, so a full scan runs in flat memory.
+
 `camera_frames` publishes the shared read as evidence,
 which the `vision` diagnostic reads.
 """
@@ -67,25 +72,29 @@ from kalanos.assets.dictionary import load_dictionary
 if TYPE_CHECKING:
     import numpy as np
 
-    # id(payload), the windows read from it, the frames sampled, the evidence frames,
-    # then the dark and bright levels and the two decode caps.
+    # The frame cache's key: what was read, and how it was read.
     _Key = tuple[
-        int,
-        tuple[tuple[int, int], ...],
-        tuple[int, ...],
-        tuple[int, ...],
-        int,
-        int,
-        int | None,
-        int,
+        int,  # id(payload)
+        tuple[tuple[int, int], ...],  # the [start, end) windows read
+        tuple[int, ...],  # the sampled frame positions
+        tuple[int, ...],  # the evidence frame positions
+        int,  # VisionSpec.dark_level
+        int,  # VisionSpec.bright_level
+        int | None,  # the max_decode_frames cap, None under a full scan
+        int,  # VisionSpec.max_pixels
     ]
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+
+logger = logging.getLogger(__name__)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
-
-logger = logging.getLogger(__name__)
 
 # Small enough to convert cheaply, large enough for exposure and freeze thumbnails
 # (rda's size).
@@ -144,6 +153,11 @@ _CACHE_SIZE = 8
 _CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Frames | MetricResult]]" = (
     OrderedDict()
 )
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 @dataclass(frozen=True)
@@ -205,6 +219,17 @@ class _Frames:
     requested: list[int]
     evidence_positions: list[int]
     stopped: tuple[Availability, str] | None = None
+
+
+@dataclass(frozen=True)
+class _Exposure:
+    """exposure_shift_pct's verdict on each sampled frame."""
+
+    counts: dict[str, int]
+    bad: list[int]
+    worst_index: int | None
+    typical_mean: float
+    typical_white: float
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -551,7 +576,7 @@ def _read(
     )
 
 
-def _clear_cache() -> None:
+def clear_cache() -> None:
     """Empty the frame cache."""
 
     _CACHE.clear()
@@ -604,17 +629,6 @@ def _stopped_result(stopped: tuple[Availability, str]) -> MetricResult:
         availability=availability,
         evidence={"reason": reason},
     )
-
-
-@dataclass(frozen=True)
-class _Exposure:
-    """exposure_shift_pct's verdict on each sampled frame."""
-
-    counts: dict[str, int]
-    bad: list[int]
-    worst_index: int | None
-    typical_mean: float
-    typical_white: float
 
 
 def _exposure(frames: _Frames) -> _Exposure:

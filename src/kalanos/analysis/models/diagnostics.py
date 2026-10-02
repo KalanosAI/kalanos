@@ -249,8 +249,18 @@ class DiagnosticPlan(StrictModel):
 
     Attributes
     ----------
+    timing : list[TimingSpec]
+        The stream pairs whose timing is compared.
+    tracking : list[TrackingSpec]
+        The command/state channel pairs whose tracking error is measured.
+    motion : list[MotionSpec]
+        The position channels whose motion is checked against physical limits.
     vision : bool
         Whether to publish each camera's read as a `vision` diagnostic result.
+    windows : list[WindowSpec]
+        The training grids whose windows are built and checked.
+    cohorts : list[CohortSpec]
+        The comparable task/robot cohorts compared at dataset level.
     """
 
     timing: list[TimingSpec] = Field(default_factory=list)

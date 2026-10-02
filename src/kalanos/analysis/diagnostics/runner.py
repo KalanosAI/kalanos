@@ -106,8 +106,23 @@ def episode_diagnostics(episodes, plan, tier, findings, policies, graded):
 
     Parameters
     ----------
+    episodes : list[Episode]
+        The loaded episodes to run the diagnostics on.
+    plan : DiagnosticPlan
+        The diagnostics to run.
+    tier : ExecutionTier
+        The run's execution tier; the metadata tier skips every payload diagnostic.
+    findings : list[Finding]
+        The run's findings so far, which the window diagnostics anchor on.
+    policies : Mapping[str, Policy]
+        Each episode's policy, by id; its `diagnostic_reviews` set the review triggers.
     graded : Mapping[str, GradedEpisode]
         Each episode graded, by id; the vision diagnostic reads its camera reads.
+
+    Returns
+    -------
+    dict[str, list[DiagnosticResult]]
+        Each episode's diagnostic results, by id.
     """
     results = {}
     for episode in episodes:

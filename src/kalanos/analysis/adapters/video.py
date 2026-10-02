@@ -10,11 +10,10 @@ optional decoder.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
-import importlib
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from types import ModuleType
@@ -24,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from upath import UPath
 
 # Internal
-from kalanos.analysis.optional import load_numpy
+from kalanos.analysis.optional import load_av, load_numpy
 
 
 if TYPE_CHECKING:
@@ -37,10 +36,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Opening a remote mp4 re-reads its index through many small range requests,
-# about 1.5 s a time on lerobot/pusht, and every episode of a LeRobot v3 dataset
-# shares one file. So remote files stay open across payloads, keyed on their URL,
-# which assumes a remote file does not change during a run.
+# Opening a remote video re-reads its index through many small range requests,
+# and many payloads may share one file. So remote files stay open across payloads,
+# keyed on their URL, which assumes a remote file does not change during a run.
 # Each handle's block cache holds at most 32 blocks (fsspec's default) of this size.
 _REMOTE_BLOCK_SIZE = 1 << 20
 _MAX_REMOTE_HANDLES = 4
@@ -97,23 +95,27 @@ class SampledFrames(Protocol):
             Ascending, non-overlapping ranges of the payload's own frames.
         size : int
             The side of each yielded square image, in pixels.
-        native : frozenset of int
+        native : frozenset[int]
             The frame indices within the payload
             that also come back at native resolution.
-        max_decode_frames : int or None
+        max_decode_frames : int | None
             The most frames the read may decode, seek preroll included.
-        max_pixels : int or None
+        max_pixels : int | None
             The most pixels a frame in `native` may hold.
 
         Yields
         ------
-        tuple of (int, numpy.ndarray, numpy.ndarray or None, float or None)
-            The window's position in `windows`, one `(size, size)` uint8 frame,
-            the frame's `(height, width)` uint8 luminance
-            when its index is in `native` and `None` otherwise,
-            and its presentation time in seconds when the container has one,
-            in window order and frame order within each window;
-            a window is cut short only where decoding runs out before the segment ends.
+        tuple[int, numpy.ndarray, numpy.ndarray | None, float | None]
+            One frame, in window order and frame order within each window:
+
+            - the window's position in `windows`;
+            - the frame as a `(size, size)` uint8 image;
+            - the frame's `(height, width)` uint8 luminance
+              when its index is in `native`, `None` otherwise;
+            - its presentation time in seconds when the container has one,
+              `None` otherwise.
+
+            A window is cut short only where decoding runs out before the segment ends.
 
         Raises
         ------
@@ -136,15 +138,6 @@ class SampledFrames(Protocol):
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
-
-
-def _load_av() -> ModuleType | None:
-    """Import PyAV, or return `None` when the video extra is not installed."""
-
-    try:
-        return importlib.import_module("av")
-    except ImportError:
-        return None
 
 
 def _remote_handle(path: UPath) -> Any:
@@ -193,7 +186,7 @@ def decoder_available() -> bool:
         Whether PyAV imports successfully.
     """
 
-    return _load_av() is not None
+    return load_av() is not None
 
 
 def _luminance(frame: Any) -> "np.ndarray":
@@ -258,7 +251,7 @@ class VideoPayload:
     def _av(self) -> ModuleType:
         """Import PyAV, raising `DecoderUnavailable` when it is not installed."""
 
-        av = _load_av()
+        av = load_av()
         if av is None:
             raise DecoderUnavailable(
                 f"{self.path}: decoding a video payload needs PyAV; add kalanos[video]"
@@ -266,7 +259,7 @@ class VideoPayload:
         return av
 
     @contextmanager
-    def _open(self, av: ModuleType) -> Iterator[Any]:
+    def _open(self, av: ModuleType) -> Generator[Any, None, None]:
         """Open `path` as a PyAV container, local or remote, and close it on exit.
 
         A remote file object outlives the container, cached for the next payload.
@@ -331,22 +324,27 @@ class VideoPayload:
             `0 <= start < end <= frame_count`.
         size : int
             The side of each returned square image, in pixels.
-        native : frozenset of int
+        native : frozenset[int]
             The frame indices within this segment
             that also come back at native resolution.
-        max_decode_frames : int or None
+        max_decode_frames : int | None
             The most frames the read may decode, seek preroll included.
-        max_pixels : int or None
+        max_pixels : int | None
             The most pixels a frame in `native` may hold.
 
         Yields
         ------
-        tuple of (int, numpy.ndarray, numpy.ndarray or None, float or None)
-            The window's position in `windows`, one frame,
-            its native `(height, width)` luminance when its index is in `native`,
-            and its presentation time in seconds,
-            in window order;
-            a window is cut short only where decoding runs out before the segment ends.
+        tuple[int, numpy.ndarray, numpy.ndarray | None, float | None]
+            One frame, in window order and frame order within each window:
+
+            - the window's position in `windows`;
+            - the frame as a `(size, size)` uint8 image;
+            - the frame's native `(height, width)` luminance
+              when its index is in `native`, `None` otherwise;
+            - its presentation time in seconds when the container has one,
+              `None` otherwise.
+
+            A window is cut short only where decoding runs out before the segment ends.
 
         Raises
         ------
@@ -530,7 +528,7 @@ class VideoPayload:
             If PyAV is not installed in this process.
         """
 
-        av = _load_av()
+        av = load_av()
         if av is None:
             raise DecoderUnavailable(
                 f"{self.path}: decoding a video payload needs PyAV; add kalanos[video]"

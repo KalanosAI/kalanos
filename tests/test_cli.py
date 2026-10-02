@@ -174,7 +174,7 @@ def test_frame_flags_reach_every_camera_stream(monkeypatch, flags, expected):
         return layout(ctx, full_frame_scan)
 
     monkeypatch.setattr(vision, "_layout", recording)
-    vision._clear_cache()
+    vision.clear_cache()
 
     result = runner.invoke(app, ["grade", str(LEROBOT_FIXTURE), "--json", *flags])
 

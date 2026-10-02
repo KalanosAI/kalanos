@@ -77,13 +77,6 @@ ACTION_TYPE = "action.joint_position_command"
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-@pytest.fixture(autouse=True)
-def _empty_vision_cache():
-    """Start every test with no frames sampled, so no test reads another's."""
-
-    vision._clear_cache()
-
-
 def _video_stream(payload: VideoPayload, frames: int) -> Stream:
     """Build a `Kind.VIDEO` stream with `frames` timestamps over `payload`."""
 
@@ -169,6 +162,18 @@ def _assert_not_applicable(result) -> str:
     return reason
 
 
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture(autouse=True)
+def _empty_vision_cache():
+    """Start every test with no frames sampled, so no test reads another's."""
+
+    vision.clear_cache()
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -244,7 +249,7 @@ def test_vision_metrics_skip_what_is_not_camera_footage(func, stream):
 def test_vision_metrics_without_the_decoder_name_the_extra(monkeypatch, func):
     """With PyAV missing, each metric says which extra to install."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
 
     reason = _assert_not_applicable(
         func(stream_context(_fixture_stream(), is_regular=True))
@@ -255,7 +260,7 @@ def test_vision_metrics_without_the_decoder_name_the_extra(monkeypatch, func):
 def test_frozen_frame_pct_without_the_decoder_names_the_extra(monkeypatch):
     """With PyAV missing, a stream long enough to window says which extra to install."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=60, start_s=0.0, end_s=2.0)
     ctx = stream_context(
         _video_stream(payload, 60), episode_streams=[_moving_actions(60)]
@@ -376,7 +381,10 @@ def test_a_dim_camera_is_not_read_as_frozen():
 def test_a_freeze_in_dim_footage_is_still_found():
     """Scaling a dim camera's differences leaves its real repeats frozen."""
 
-    assert _full_scan_freeze(_flickering(0.2, freeze=(40, 70))).value > 0
+    result = _full_scan_freeze(_flickering(0.2, freeze=(40, 70)))
+
+    assert result.value is not None
+    assert result.value > 0
 
 
 def test_a_blank_pair_is_never_frozen():

@@ -104,6 +104,11 @@ def _camera(
     ]
 
 
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
 def test_a_blurred_episode_is_flagged_against_its_camera():
     """A 3x3-blurred episode's variance falls below its camera's and is flagged."""
 

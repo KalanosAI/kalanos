@@ -68,6 +68,44 @@ def _windows(payload: VideoPayload, windows, size: int) -> list:
     return grouped
 
 
+def _write_b_frame_video(path: UPath, frames: int) -> None:
+    """Encode `frames` flat gray frames of level `4 * k`, reordered by B-frames.
+
+    x264 only reorders frames of 64 pixels or more.
+    """
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=30, options={"bf": "3"})
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    for k in range(frames):
+        pixels = numpy.full((64, 64, 3), 4 * k, dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture
+def remote_video():
+    """Copy the fixture mp4 into memory, closing cached remote handles afterwards."""
+
+    remote = UPath("memory://videos/file-000.mp4")
+    remote.write_bytes(LEROBOT_VIDEO.read_bytes())
+    yield remote
+    video.close_remote_handles()
+    remote.unlink()
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -76,7 +114,7 @@ def _windows(payload: VideoPayload, windows, size: int) -> list:
 def test_fetch_without_the_decoder_raises_naming_the_extra(monkeypatch):
     """Verify a missing decoder raises DecoderUnavailable naming the install extra."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
 
     with pytest.raises(DecoderUnavailable, match=r"kalanos\[video\]"):
@@ -89,7 +127,7 @@ def test_a_frame_metric_degrades_to_not_applicable(monkeypatch):
     The stream's own timing metrics must still run.
     """
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     monkeypatch.setattr(registry, "_REGISTRY", list(registry._REGISTRY))
 
     @registry.metric(level=Level.STREAM, family=Family.VISION)
@@ -297,17 +335,6 @@ def test_counting_a_segment_past_the_end_of_the_file_finds_fewer_frames():
     assert payload.count_frames() == 6
 
 
-@pytest.fixture
-def remote_video():
-    """Copy the fixture mp4 into memory, closing cached remote handles afterwards."""
-
-    remote = UPath("memory://videos/file-000.mp4")
-    remote.write_bytes(LEROBOT_VIDEO.read_bytes())
-    yield remote
-    video.close_remote_handles()
-    remote.unlink()
-
-
 def test_sampling_and_counting_read_a_remote_path(remote_video):
     """Verify a non-local path is opened through its own file object."""
 
@@ -321,7 +348,7 @@ def test_sampling_and_counting_read_a_remote_path(remote_video):
 def test_reading_without_the_decoder_raises_naming_the_extra(monkeypatch, read):
     """Verify every read raises DecoderUnavailable without PyAV."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
 
     with pytest.raises(DecoderUnavailable, match=r"kalanos\[video\]"):
@@ -338,28 +365,6 @@ def test_reading_a_corrupt_file_raises_decode_failed(tmp_path, read):
 
     with pytest.raises(DecodeFailed):
         read(payload)
-
-
-def _write_b_frame_video(path: UPath, frames: int) -> None:
-    """Encode `frames` flat gray frames of level `4 * k`, reordered by B-frames.
-
-    x264 only reorders frames of 64 pixels or more.
-    """
-
-    av = pytest.importorskip("av")
-    numpy = pytest.importorskip("numpy")
-
-    container = av.open(str(path), "w")
-    stream = container.add_stream("libx264", rate=30, options={"bf": "3"})
-    stream.width = stream.height = 64
-    stream.pix_fmt = "yuv420p"
-    for k in range(frames):
-        pixels = numpy.full((64, 64, 3), 4 * k, dtype=numpy.uint8)
-        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
-            container.mux(packet)
-    for packet in stream.encode():
-        container.mux(packet)
-    container.close()
 
 
 @pytest.mark.parametrize("start", [0, 20, 40])

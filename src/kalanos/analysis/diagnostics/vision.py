@@ -27,13 +27,32 @@ def vision(
 
     Parameters
     ----------
-    frames : CameraFrames or None
+    episode : Episode
+        The episode the camera stream belongs to.
+    stream : Stream
+        The camera stream.
+    frames : CameraFrames | None
         The stream's shared read, `None` when the stream was not read.
-    segment_frames : int or None
+    identifier : str
+        The result's id.
+    review : DiagnosticReviewPolicy | None
+        The review triggers, the defaults when `None`.
+    segment_frames : int | None
         The frames frame_count_vs_timebase found in the segment,
         `None` when it did not compute.
-    reason : str or None
+    reason : str | None
         Why the stream was not read, when `frames` is `None`.
+
+    Returns
+    -------
+    DiagnosticResult
+        The stream's vision result, unavailable or error when its read was.
+
+    Raises
+    ------
+    Unavailable
+        If the stream's source order was not preserved,
+        it was not read or it declares no frames.
     """
     review = review or DiagnosticReviewPolicy()
     if (
@@ -140,12 +159,12 @@ def vision(
         else "report_only",
     )
     if missing or frames.availability == Availability.UNAVAILABLE:
-        measured.availability = "unavailable"
+        measured.availability = Availability.UNAVAILABLE
         measured.reason = (
             frames.reason
             or "not all selected frames and segment boundaries were evaluated"
         )
     if frames.availability == Availability.ERROR:
-        measured.availability = "error"
+        measured.availability = Availability.ERROR
         measured.reason = frames.reason or "the camera read failed"
     return measured

@@ -528,7 +528,7 @@ def test_a_sample_cannot_satisfy_video_quality():
 def test_the_vision_preset_cannot_pass_without_a_graded_camera(monkeypatch):
     """With no frame decodable, video quality was not evaluated: unknown, not a pass."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     bundle = Bundle(requirements=RequirementsSection(id="vision-imitation-v1"))
     report = grade(FIXTURE, bundle=bundle)
 
@@ -583,7 +583,7 @@ def test_a_completed_sample_satisfies_sampled_video_quality_and_grades_vision():
 def test_sampled_video_quality_without_the_decoder_is_unknown(monkeypatch):
     """With no frame decodable, not even a sample was taken."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: None)
+    monkeypatch.setattr(video, "load_av", lambda: None)
     bundle = Bundle(
         requirements=RequirementsSection(
             required_capabilities=["sampled_video_quality"]

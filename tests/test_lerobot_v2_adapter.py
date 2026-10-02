@@ -91,7 +91,7 @@ def test_each_episode_is_its_own_parquet():
 def test_a_camera_mp4_holds_exactly_its_own_episode(monkeypatch):
     """Verify each episode's video payload spans only its own frames."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: pytest.fail("_load_av() was called"))
+    monkeypatch.setattr(video, "load_av", lambda: pytest.fail("load_av() was called"))
 
     first, second = _episodes(LEROBOT_V2_0_FIXTURE)
     [first_video] = [s for s in first.streams if s.kind == Kind.VIDEO]

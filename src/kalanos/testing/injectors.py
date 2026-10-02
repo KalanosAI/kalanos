@@ -134,6 +134,38 @@ class SyntheticFrames:
         Resized by nearest-index sampling; a window is clipped to the frame list.
         A frame whose index is in `native` also comes back as its full-size luma.
         The presentation time is always `None`: a frame list has no container clock.
+
+        Parameters
+        ----------
+        windows : Sequence[tuple[int, int]]
+            The `[start, end)` ranges of frames to yield, in order.
+        size : int
+            The side of each yielded square image, in pixels.
+        native : frozenset[int]
+            The frame indices that also come back at full size.
+        max_decode_frames : int | None
+            The most frames the read may yield.
+        max_pixels : int | None
+            The most pixels a frame in `native` may hold.
+
+        Yields
+        ------
+        tuple[int, numpy.ndarray, numpy.ndarray | None, None]
+            One frame, in window order and frame order within each window:
+
+            - the window's position in `windows`;
+            - the frame as a `(size, size)` uint8 luma image;
+            - the frame's full-size uint8 luma when its index is in `native`,
+              `None` otherwise;
+            - `None` for the presentation time.
+
+        Raises
+        ------
+        RuntimeError
+            If numpy is not installed.
+        DecodeLimitReached
+            If the read would pass `max_decode_frames`,
+            or a frame in `native` holds more than `max_pixels`.
         """
 
         numpy = load_numpy()
@@ -174,7 +206,18 @@ class SyntheticFrames:
                 yield position, small, full, None
 
     def rgb_frame(self, index: int) -> "np.ndarray":
-        """Return the frame at `index`, unchanged."""
+        """Return the frame at `index`, unchanged.
+
+        Parameters
+        ----------
+        index : int
+            The frame's position in `frames`.
+
+        Returns
+        -------
+        numpy.ndarray
+            The frame as stored.
+        """
 
         return self.frames[index]
 
