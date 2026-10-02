@@ -18,30 +18,38 @@ from typing import cast
 # External
 from upath import UPath
 
+# Internal
+from kalanos.analysis.adapters.video import SampledFrames
 from kalanos.analysis.calibration import apply_calibration
 from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
 from kalanos.analysis.identities import adapter_versions, detector_versions
-
-# Internal
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
     run_episode_metrics,
     run_stream_metrics,
 )
+from kalanos.analysis.metrics.vision import camera_frames, is_camera_footage, thumbnail
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
+    SAMPLED_VIDEO_QUALITY_CAPABILITY,
+    VIDEO_QUALITY_CAPABILITY,
     BindingConflict,
     EvaluationScope,
     RequirementsSection,
 )
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import Episode, Stream
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
+    DEFAULT_VISION_SAMPLES,
     ChannelContext,
     EpisodeContext,
+    Family,
     Level,
+    MetricResult,
+    MetricStatus,
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
@@ -63,6 +71,7 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
+from kalanos.analysis.scoring.cameras import compare_cameras
 from kalanos.analysis.scoring.eligibility import (
     counts_of,
     dataset_train_ready,
@@ -81,10 +90,44 @@ from kalanos.assets.dictionary import load_default_dictionary
 
 logger = logging.getLogger(__name__)
 
+# The vision metrics that point at a worst frame, and the evidence key that names it.
+_THUMBNAIL_INDEX = {
+    "sharpness_score": "worst_index",
+    "exposure_shift_pct": "worst_index",
+    "frozen_frame_pct": "first_run_index",
+}
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _attach_thumbnails(
+    stream_metrics: dict[str, MetricResult], stream_ctx: StreamContext
+) -> dict[str, MetricResult]:
+    """Add the worst frame's thumbnail to each vision result graded warning or worse."""
+
+    payload = stream_ctx.payload
+    if not isinstance(payload, SampledFrames):
+        return stream_metrics
+    attached = dict(stream_metrics)
+    for name, key in _THUMBNAIL_INDEX.items():
+        result = attached.get(name)
+        if result is None or result.status not in (
+            MetricStatus.WARNING,
+            MetricStatus.CRITICAL,
+        ):
+            continue
+        index = result.evidence.get(key)
+        if index is None:
+            continue
+        image = thumbnail(payload, index, stream_ctx.vision.preview_size)
+        if image is not None:
+            attached[name] = result.model_copy(
+                update={"evidence": {**result.evidence, "thumbnail_png_base64": image}}
+            )
+    return attached
 
 
 def grade_stream(
@@ -94,6 +137,10 @@ def grade_stream(
     is_regular: bool,
     episode_id: str,
     category: str | None,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    episode_streams: Sequence[Stream] | None = None,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
@@ -111,6 +158,15 @@ def grade_stream(
         for addressing any finding it or its channels raise.
     category : str or None
         The dictionary category of the stream's taxonomy type, `None` when unmapped.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    episode_streams : Sequence[Stream] or None
+        Every stream of the episode `stream` belongs to, itself included,
+        for a metric that reads one stream against another.
+    full_frame_scan : bool
+        Whether frame metrics read every frame rather than a sample.
+    vision : VisionSpec or None
+        Decode caps, previews and exposure levels; the defaults when `None`.
 
     Returns
     -------
@@ -137,6 +193,11 @@ def grade_stream(
         if tier == ExecutionTier.METADATA
         else stream,
         is_regular=is_regular,
+        vision_samples=vision_samples,
+        episode_streams=list(episode_streams) if episode_streams is not None else None,
+        full_frame_scan=full_frame_scan,
+        reads_payloads=tier != ExecutionTier.METADATA,
+        vision=vision or VisionSpec(),
     )
     stream_results = run_stream_metrics(stream_ctx)
     stream_metrics, own_score, stream_findings = score_metrics(
@@ -147,6 +208,7 @@ def grade_stream(
         location=location,
     )
     findings.extend(stream_findings)
+    stream_metrics = _attach_thumbnails(stream_metrics, stream_ctx)
 
     # Step 2: fetch the payload only when there is a channel to grade with it,
     # and only when the execution tier reads payloads at all. Whatever
@@ -243,6 +305,9 @@ def grade_stream(
             clock_info=stream.clock_info,
             source_order=stream.source_order,
             evaluation=evaluation,
+            frames=camera_frames(stream_ctx)
+            if is_camera_footage(stream.kind.value, stream.taxonomy_type)
+            else None,
         ),
         findings,
     )
@@ -255,6 +320,9 @@ def grade_episode(
     adapter_confidence: float,
     policy: Policy,
     dictionary: Dictionary,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
@@ -271,6 +339,12 @@ def grade_episode(
         The loaded grading policy.
     dictionary : Dictionary
         The dictionary each stream's category is looked up in.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    full_frame_scan : bool
+        Whether frame metrics read every frame rather than a sample.
+    vision : VisionSpec or None
+        Decode caps, previews and exposure levels; the defaults when `None`.
 
     Returns
     -------
@@ -292,6 +366,10 @@ def grade_episode(
             is_regular=stream.is_regular,
             episode_id=episode.id,
             category=dictionary.category_of(stream.taxonomy_type),
+            vision_samples=vision_samples,
+            episode_streams=episode.streams,
+            full_frame_scan=full_frame_scan,
+            vision=vision,
             tier=tier,
         )
         graded_streams.append(graded_stream)
@@ -340,6 +418,36 @@ def grade_episode(
     )
 
 
+def grades_vision(requirements: RequirementsSection) -> bool:
+    """Whether the scope requires a video capability, so the vision family grades."""
+
+    required = requirements.required_capabilities
+    return (
+        VIDEO_QUALITY_CAPABILITY in required
+        or SAMPLED_VIDEO_QUALITY_CAPABILITY in required
+    )
+
+
+def scope_policy(policy: Policy, requirements: RequirementsSection) -> Policy:
+    """Make the vision metrics report-only unless the scope requires a video capability.
+
+    A scope that asks for neither sampled nor full video quality,
+    numeric-core among them, must not let a camera decide or score an episode,
+    so its vision results are measured and shown but never graded.
+    """
+
+    if grades_vision(requirements):
+        return policy
+    prefix = f"{Family.VISION.value}."
+    metrics = {
+        key: entry.model_copy(update={"report_only": True})
+        if key.startswith(prefix)
+        else entry
+        for key, entry in policy.metrics.items()
+    }
+    return policy.model_copy(update={"metrics": metrics})
+
+
 def assemble_report(
     *,
     root: UPath,
@@ -350,6 +458,9 @@ def assemble_report(
     duration_s: float | None = None,
     source: SourceInfo | None = None,
     datasets: Sequence[DatasetInfo] = (),
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
     mapping_overrides: Sequence[MappingOverride] = (),
     requirements: RequirementsSection | None = None,
     scope: EvaluationScope | None = None,
@@ -382,6 +493,12 @@ def assemble_report(
         What `root` was resolved from, if the caller resolved it.
     datasets : Sequence[DatasetInfo]
         What the adapter declared about each path it read, in walk order.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    full_frame_scan : bool
+        Whether frame metrics read every frame rather than a sample.
+    vision : VisionSpec or None
+        Decode caps, previews and exposure levels; the defaults when `None`.
     mapping_overrides : Sequence[MappingOverride]
         The per-run overrides the pipeline applied.
     requirements : RequirementsSection or None
@@ -409,6 +526,8 @@ def assemble_report(
         validate_review_plan(diagnostics_plan, item.policy)
     dictionary = load_default_dictionary()
     tier = scope.tier if scope is not None else ExecutionTier.STANDARD
+    requirements = requirements or RequirementsSection()
+    policy = scope_policy(policy, requirements)
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
     for item in analysed:
@@ -416,8 +535,11 @@ def assemble_report(
             item.episode,
             adapter=item.adapter,
             adapter_confidence=item.adapter_confidence,
-            policy=item.policy,
+            policy=scope_policy(item.policy, requirements),
             dictionary=dictionary,
+            vision_samples=vision_samples,
+            full_frame_scan=full_frame_scan,
+            vision=vision,
             tier=tier,
         )
         graded_episodes.append(graded_episode)
@@ -425,7 +547,6 @@ def assemble_report(
 
     # Step 1: decide eligibility once, now that every metric has run. Every
     # count, the gate and the compatibility booleans derive from this.
-    requirements = requirements or RequirementsSection()
     scope = scope or EvaluationScope(
         requirements_id=requirements.id, policy_id="default-decisions-v1"
     )
@@ -458,6 +579,7 @@ def assemble_report(
             tier,
             findings,
             {item.episode.id: item.policy for item in analysed},
+            {e.id: e for e in graded_episodes},
         )
         findings.extend(
             review_findings([r for rs in diagnostic_results.values() for r in rs])
@@ -466,6 +588,10 @@ def assemble_report(
             e.model_copy(update={"diagnostics": diagnostic_results[e.id]})
             for e in graded_episodes
         ]
+    cameras, camera_findings = compare_cameras(
+        graded_episodes, grades_vision=grades_vision(requirements)
+    )
+    findings.extend(camera_findings)
     graded_episodes = [
         e.model_copy(update={"coverage": episode_coverage(e, requirements)})
         for e in graded_episodes
@@ -574,4 +700,5 @@ def assemble_report(
         eligibility_counts=counts,
         sufficiency=sufficiency,
         binding_conflicts=list(binding_conflicts),
+        cameras=cameras,
     )

@@ -113,9 +113,13 @@ class MotionSpec(StrictModel):
 
 
 class VisionSpec(StrictModel):
-    """Bound actual decoder work separately from the number of selected frames."""
+    """How camera footage is read.
 
-    sample_frames: int = Field(default=96, ge=2, le=10000)
+    Sample size, full scan, decode caps, previews and exposure levels.
+    """
+
+    sample_frames: int = Field(default=10, ge=1, le=10000)
+    full_frame_scan: bool = False
     max_decode_frames: int = Field(default=20000, ge=2, le=1000000)
     max_pixels: int = Field(default=2097152, ge=64)
     preview_frames: int = Field(default=8, ge=0, le=32)
@@ -241,12 +245,28 @@ class CohortSpec(StrictModel):
 
 
 class DiagnosticPlan(StrictModel):
-    """Optional requested diagnostics; requirements remain a separate contract."""
+    """Optional requested diagnostics; requirements remain a separate contract.
+
+    Attributes
+    ----------
+    timing : list[TimingSpec]
+        The stream pairs whose timing is compared.
+    tracking : list[TrackingSpec]
+        The command/state channel pairs whose tracking error is measured.
+    motion : list[MotionSpec]
+        The position channels whose motion is checked against physical limits.
+    vision : bool
+        Whether to publish each camera's read as a `vision` diagnostic result.
+    windows : list[WindowSpec]
+        The training grids whose windows are built and checked.
+    cohorts : list[CohortSpec]
+        The comparable task/robot cohorts compared at dataset level.
+    """
 
     timing: list[TimingSpec] = Field(default_factory=list)
     tracking: list[TrackingSpec] = Field(default_factory=list)
     motion: list[MotionSpec] = Field(default_factory=list)
-    vision: VisionSpec | None = None
+    vision: bool = False
     windows: list[WindowSpec] = Field(default_factory=list)
     cohorts: list[CohortSpec] = Field(default_factory=list)
 

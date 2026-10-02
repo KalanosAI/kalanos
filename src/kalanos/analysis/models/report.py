@@ -21,6 +21,7 @@ and a path is a real filesystem path.
 import math
 from collections import Counter
 from enum import Enum
+from typing import Any, Literal
 
 # External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -30,8 +31,8 @@ from kalanos.analysis.models.binding import (
     BindingConflict,
     EvaluationScope,
 )
+from kalanos.analysis.models.coverage import Availability, CoverageRow
 from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
-from kalanos.analysis.models.coverage import CoverageRow
 
 # Internal
 from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
@@ -154,6 +155,72 @@ class StreamEvaluation(BaseModel):
     n_channels_graded: int = 0
 
 
+class CameraFrame(BaseModel):
+    """One frame of a camera stream's shared read.
+
+    Attributes
+    ----------
+    source_row : int
+        The frame's row in the stream.
+    presentation_time_s : float or None
+        The container's presentation time, `None` where it has none.
+    shape : list of int
+        The native luminance's `[height, width]`.
+    blur_score : float
+        The native luminance's Laplacian variance.
+    clipped_fraction : float
+        The share of pixels crushed black plus the share clipped white.
+    luma_sha256 : str or None
+        SHA-256 of the native luminance, set only on an evidence frame.
+    """
+
+    source_row: int
+    presentation_time_s: float | None = None
+    shape: list[int]
+    blur_score: float
+    clipped_fraction: float
+    luma_sha256: str | None = None
+
+
+class CameraFrames(BaseModel):
+    """What one camera stream's shared read examined, as evidence.
+
+    Attributes
+    ----------
+    requested_rows : list of int
+        The rows the sample asked for.
+    missing_rows : list of int
+        Requested rows the read did not measure.
+    frames : list of CameraFrame
+        One per examined frame, in order.
+    decoded_frames : int
+        The frames the read decoded inside its windows, seek preroll excluded.
+    adjacent_pairs_examined : int
+        Neighbouring frame pairs the freeze read compared.
+    identical_adjacent_pairs : list of list of int
+        `[row, row + 1]` for each compared pair with no difference at all.
+    sample_plan : str
+        `evenly_spaced_v1` for a sample, `full_scan_v1` for every frame.
+    parameters : dict
+        The `VisionSpec` the read ran under.
+    availability : Availability
+        `computed`, or why the read stopped early.
+    reason : str or None
+        What stopped the read, when it stopped.
+    """
+
+    requested_rows: list[int]
+    missing_rows: list[int]
+    frames: list[CameraFrame]
+    decoded_frames: int
+    adjacent_pairs_examined: int
+    identical_adjacent_pairs: list[list[int]]
+    sample_plan: Literal["evenly_spaced_v1", "full_scan_v1"]
+    parameters: dict[str, Any]
+    availability: Availability
+    reason: str | None = None
+
+
 class GradedStream(BaseModel):
     """One Stream with its own rolled-up score.
 
@@ -179,6 +246,9 @@ class GradedStream(BaseModel):
     evaluation : StreamEvaluation
         Whether the payload was read. Requirements decide eligibility from
         this, not from whether some other stream produced a result.
+    frames : CameraFrames or None
+        The camera's shared read: the rows examined and their per-frame evidence.
+        `None` when the stream was not read as camera footage.
     """
 
     taxonomy_type: str
@@ -199,6 +269,7 @@ class GradedStream(BaseModel):
     clock_info: ClockInfo | None = None
     source_order: SourceOrder = Field(default_factory=SourceOrder)
     evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
+    frames: CameraFrames | None = None
 
 
 class GradedEpisode(BaseModel):
@@ -310,6 +381,45 @@ class DatasetTrait(BaseModel):
     finding: str
     n_episodes: int
     n_with_finding: int
+
+
+class CameraSummary(BaseModel):
+    """One camera compared across the episodes it appears in.
+
+    Attributes
+    ----------
+    camera : str
+        The camera's key: its source field, else its taxonomy type and instance.
+    stream : str
+        The camera's taxonomy type.
+    instance, source_field : str or None
+        Mirror the camera's `GradedStream`.
+    n_episodes : int
+        How many episodes the camera appears in.
+    compared : bool
+        Whether enough episodes had a blur or an exposure value to compare them.
+    reason : str or None
+        Which of the two had too few episodes to compare.
+    laplacian_var, exposure_level : float or None
+        The medians over the camera's episodes, `None` where none computed.
+    trait : {"dark", "white"} or None
+        How the camera is exposed in every compared episode: descriptive.
+    blur_outliers, exposure_outliers : list[str]
+        The episodes flagged as blurrier, or exposed unlike, the camera.
+    """
+
+    camera: str
+    stream: str
+    instance: str | None = None
+    source_field: str | None = None
+    n_episodes: int
+    compared: bool
+    reason: str | None = None
+    laplacian_var: float | None = None
+    exposure_level: float | None = None
+    trait: Literal["dark", "white"] | None = None
+    blur_outliers: list[str] = Field(default_factory=list)
+    exposure_outliers: list[str] = Field(default_factory=list)
 
 
 class NotObservable(BaseModel):
@@ -453,6 +563,9 @@ class Report(BaseModel):
         Whether the eligible set meets the scope's explicit requirements.
     binding_conflicts : list[BindingConflict]
         Every feature where two mapping sources disagreed, and which won.
+    cameras : list[CameraSummary]
+        Each camera compared across the episodes it appears in:
+        descriptive, and the source of the cross-episode vision findings.
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
@@ -484,6 +597,7 @@ class Report(BaseModel):
     eligibility_counts: EligibilityCounts | None = None
     sufficiency: Sufficiency | None = None
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
+    cameras: list[CameraSummary] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":

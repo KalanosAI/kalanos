@@ -145,32 +145,63 @@ this first implementation because no robot-model loader is supplied.
 
 ## Sampled video
 
-The shared `VideoPayload.iter_sampled` interface scans the selected episode segment
-and yields one selected RGB image at a time. It counts decoded frames, including
-seek preroll, and enforces `max_decode_frames` and a pixel limit before selected
-RGB conversion. The pixel limit does not promise a cap on a decoder's internal
-codec allocation. No unbounded `fetch()` fallback is used.
+The `vision` diagnostic decodes nothing of its own: it publishes the vision
+metrics' shared read of each camera, recorded on the graded stream as
+`GradedStream.frames`, so a diagnostic run and a normal run measure the same
+frames the same way. Set `diagnostics.vision: true` to publish it. How every
+camera is read is configured once, in the bundle's top-level `vision` section:
 
-Sampling chooses deterministic stratified adjacent pairs, or endpoints for a
-two-frame budget. Evidence records requested rows, examined rows, image shape,
-RGB digest, presentation time, Laplacian-variance blur and clipped-pixel fraction.
-Repeated adjacent images are recorded as candidates; a static scene is not
+```yaml
+vision:
+  sample_frames: 10        # evenly spaced frames per camera
+  full_frame_scan: false   # read every frame instead
+  max_decode_frames: 20000
+  max_pixels: 2097152
+diagnostics:
+  vision: true
+```
+
+`--vision-samples` and `--full-frame-scan` override `KALANOS_VISION_SAMPLES`
+and `KALANOS_FULL_FRAME_SCAN`, which override the bundle; `--tier full` always
+reads every frame. The resolved settings, command line and environment included,
+are part of the execution identity when they differ from the defaults. Depth
+streams are not cameras and get no `vision` result.
+
+A sampled read counts decoded frames, including seek preroll, and stops at
+`max_decode_frames`; a full scan reads every frame. Any read stops before
+measuring a frame larger than `max_pixels`. The pixel limit does not promise a
+cap on a decoder's internal codec allocation. A stopped read keeps the frames
+it already measured: a cap leaves the result unavailable, and a decoder failure
+after the first frame makes it an operational error. A file that fails before
+any frame decodes leaves the result unavailable.
+A stream whose rows the adapter reordered is not decoded.
+
+Evidence records requested, examined and missing rows, the sample plan
+(`evenly_spaced_v1` or `full_scan_v1`), presentation time, native-luminance
+Laplacian-variance blur, the share of pixels at or below `dark_level` plus the
+share at or above `bright_level`, and the luminance `shape` as
+`[height, width]`. Frames the sample would examine, and frames
+`exposure_shift_pct` judged bad, carry `luma_sha256`, a SHA-256 of their native
+luminance. Identical adjacent pairs come from the frozen-frame read: a pair with
+no difference at all is recorded as a candidate; a static scene is not
 automatically a camera failure.
 
-A complete segment scan can reconcile decoded segment count against the declared
-frame count. Selected-frame PTS interval differences are compared with recorded
-intervals; this is not acquisition alignment. Shape/count anomalies can request
-review under `review_video_integrity`. Blur/exposure require explicit policy
-thresholds. Decoder exceptions preserve already examined frame evidence and
-produce operational error. Budget exhaustion retains partial measurements and
-unavailable coverage.
+`segment_frames` is `frame_count_vs_timebase`'s count of the container's packets,
+on every read. It is reconciled against
+the declared frame count. Selected-frame PTS interval differences are compared
+with recorded intervals; this is not acquisition alignment. Shape/count
+anomalies can request review under `review_video_integrity`. Blur/exposure
+require explicit policy thresholds. `vision_min_blur_score` compares each frame's
+raw Laplacian variance with one fixed value, and that variance differs by two
+orders of magnitude between cameras (6 to 1821 on the calibration datasets in
+`docs/METRICS.md`), so one value rarely fits more than one camera.
 
 `sampled_video_quality` requires all discovered cameras to finish their requested
 sampled audit. Existing `video_quality` requires **every declared frame** to have
 been examined. A small sample cannot satisfy the full-visual requirement.
 Unsupported embedded-image payloads report unavailable until their adapter
-implements the bounded sampling interface; initial built-in support is the
-LeRobot video payload used for separate and shared files.
+implements the `SampledFrames` interface; built-in support is the video payload
+used for separate, shared and remote files.
 
 ## Motion shape and limits
 

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 from upath import UPath
 
+from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import (
     resolve_taxonomy,
     taxonomy_and_channels,
@@ -34,6 +35,7 @@ from kalanos.analysis.models.binding import (
     Validation,
     ValidationStatus,
 )
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import (
     Channel,
     Episode,
@@ -44,15 +46,22 @@ from kalanos.analysis.models.domain import (
 )
 from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
-from kalanos.analysis.models.metrics import ChannelContext, Requires, StreamContext
-from kalanos.analysis.models.provenance import ExecutionTier
+from kalanos.analysis.models.metrics import (
+    ChannelContext,
+    MetricStatus,
+    Requires,
+    StreamContext,
+)
+from kalanos.analysis.models.provenance import ExecutionTier, content_digest
 from kalanos.analysis.reporting.assemble import grade_episode
+from kalanos.analysis.scoring.cameras import camera_key
 from kalanos.api import grade
-from kalanos.assets.bundle import prepare_configuration
+from kalanos.assets.bundle import prepare_configuration, resolve_vision
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 from kalanos.benchmark import benchmark_dataset
 from kalanos.cli import app
+from kalanos.core.settings import Settings
 
 
 FIXTURE = Path(__file__).parent / "fixtures/lerobot_v3_tiny"
@@ -468,14 +477,124 @@ def test_sidecar_is_permanent_read_only_and_explicit_flags_win(tmp_path):
     assert len(list(root.glob("*.yaml"))) == 1
 
 
-def test_vision_preset_cannot_pass_by_skipping_unimplemented_video_checks():
+def _vision_reasons(episode) -> list[str]:
+    """The ids of an episode's eligibility reasons that concern its cameras."""
+
+    return [
+        r.id
+        for r in episode.eligibility.reasons
+        if ".vision." in r.id
+        or r.id in ("capability:video_quality", "capability:sampled_video_quality")
+    ]
+
+
+def test_the_default_scope_shows_vision_results_without_grading_them():
+    """numeric-core never lets a camera decide or score an episode."""
+
+    report = grade(FIXTURE)
+
+    for episode in report.episodes:
+        assert _vision_reasons(episode) == []
+        assert "vision" not in episode.score.families
+        camera = next(s for s in episode.streams if "images" in s.taxonomy_type)
+        assert camera.metrics["sharpness_score"].status.value == "report_only"
+
+
+def test_each_camera_is_summarised_and_too_few_episodes_are_not_compared():
+    """The fixture's 2 episodes are too few to compare its camera across them."""
+
+    report = grade(FIXTURE)
+
+    cameras = {
+        camera_key(s) for e in report.episodes for s in e.streams if s.kind == "video"
+    }
+    assert sorted(c.camera for c in report.cameras) == sorted(cameras)
+    assert all(not c.compared and c.n_episodes == 2 for c in report.cameras)
+
+
+def test_a_sample_cannot_satisfy_video_quality():
+    """Under vision-imitation, a sampled run leaves video_quality unknown."""
+
+    bundle = Bundle(requirements=RequirementsSection(id="vision-imitation-v1"))
+    # The fixture's episodes hold 8 and 6 frames; the default 10 would read them all.
+    report = grade(FIXTURE, bundle=bundle, vision_samples=2)
+
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.pass_count == 0
+    for episode in report.episodes:
+        assert "capability:video_quality" in _vision_reasons(episode)
+
+
+def test_the_vision_preset_cannot_pass_without_a_graded_camera(monkeypatch):
+    """With no frame decodable, video quality was not evaluated: unknown, not a pass."""
+
+    monkeypatch.setattr(video, "av", None)
     bundle = Bundle(requirements=RequirementsSection(id="vision-imitation-v1"))
     report = grade(FIXTURE, bundle=bundle)
+
     assert all(
-        any(r.id == "capability:video_quality" for r in e.eligibility.reasons)
+        "capability:video_quality" in _vision_reasons(e) for e in report.episodes
+    )
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.pass_count == 0
+
+
+def test_a_full_scan_satisfies_video_quality_and_vision_requests_review():
+    """Reading every frame satisfies video_quality; critical vision asks for review."""
+
+    bundle = Bundle(requirements=RequirementsSection(id="vision-imitation-v1"))
+    report = grade(FIXTURE, bundle=bundle, full_frame_scan=True)
+
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 0
+    assert report.eligibility_counts.review == len(report.episodes)
+    for episode in report.episodes:
+        reasons = _vision_reasons(episode)
+        assert "capability:video_quality" not in reasons
+        assert any(r.endswith(".vision.sharpness_score") for r in reasons)
+
+
+def test_a_sample_covering_every_frame_satisfies_video_quality():
+    """A sample larger than the episode reads every frame, which is a full read."""
+
+    bundle = Bundle(requirements=RequirementsSection(id="vision-imitation-v1"))
+    report = grade(FIXTURE, bundle=bundle, vision_samples=100)
+
+    for episode in report.episodes:
+        assert "capability:video_quality" not in _vision_reasons(episode)
+
+
+def test_a_completed_sample_satisfies_sampled_video_quality_and_grades_vision():
+    """sampled_video_quality needs only a sample, and lets the vision family grade."""
+
+    bundle = Bundle(
+        requirements=RequirementsSection(
+            required_capabilities=["sampled_video_quality"]
+        )
+    )
+    report = grade(FIXTURE, bundle=bundle, vision_samples=2)
+
+    for episode in report.episodes:
+        assert "capability:sampled_video_quality" not in _vision_reasons(episode)
+        camera = next(s for s in episode.streams if s.kind == "video")
+        assert camera.metrics["sharpness_score"].status != MetricStatus.REPORT_ONLY
+
+
+def test_sampled_video_quality_without_the_decoder_is_unknown(monkeypatch):
+    """With no frame decodable, not even a sample was taken."""
+
+    monkeypatch.setattr(video, "av", None)
+    bundle = Bundle(
+        requirements=RequirementsSection(
+            required_capabilities=["sampled_video_quality"]
+        )
+    )
+    report = grade(FIXTURE, bundle=bundle)
+
+    assert all(
+        "capability:sampled_video_quality" in _vision_reasons(e)
         for e in report.episodes
     )
-    assert report.eligibility_counts.pass_count == 0
 
 
 def test_relative_bundle_policy_is_shared_by_grade_and_benchmark(tmp_path):
@@ -497,6 +616,71 @@ def test_explicit_policy_wins_consistently_over_bundle_policy(tmp_path):
         UPath(tmp_path), policy=explicit, bundle=profile
     )
     assert loaded is explicit
+
+
+def test_vision_settings_follow_cli_then_environment_then_bundle():
+    """The command line beats KALANOS_*, which beats the bundle; the full tier scans."""
+
+    bundle = VisionSpec(sample_frames=7, max_pixels=4096)
+    unset = Settings(vision_samples=None, full_frame_scan=None)
+    environment = Settings(vision_samples=5, full_frame_scan=True)
+
+    def resolve(
+        settings, samples=None, full_frame_scan=None, tier=ExecutionTier.STANDARD
+    ):
+        return resolve_vision(
+            bundle,
+            settings,
+            samples=samples,
+            full_frame_scan=full_frame_scan,
+            tier=tier,
+        )
+
+    assert (resolve(unset).sample_frames, resolve(unset).full_frame_scan) == (7, False)
+    assert resolve(unset).max_pixels == 4096
+    assert (
+        resolve(environment).sample_frames,
+        resolve(environment).full_frame_scan,
+    ) == (
+        5,
+        True,
+    )
+    cli = resolve(environment, samples=3, full_frame_scan=False)
+    assert (cli.sample_frames, cli.full_frame_scan) == (3, False)
+    assert resolve(unset, tier=ExecutionTier.FULL).full_frame_scan
+
+
+def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
+    """Only a changed vision section enters the execution digest."""
+
+    def configuration(bundle):
+        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
+
+    default = configuration(Bundle(vision=VisionSpec()))
+    changed = configuration(Bundle(vision=VisionSpec(max_pixels=4096)))
+
+    assert default.execution_id.digest == content_digest(
+        {
+            "tier": default.scope.tier.value,
+            "limits": {
+                "max_bytes": default.limits.max_bytes,
+                "max_files": default.limits.max_files,
+            },
+        }
+    )
+    assert changed.execution_id.digest != default.execution_id.digest
+
+
+@pytest.mark.parametrize("override", [{"full_frame_scan": True}, {"vision_samples": 3}])
+def test_a_command_line_vision_override_changes_the_execution_identity(
+    tmp_path, override
+):
+    """A full scan or another sample count is a different run to compare."""
+
+    default = prepare_configuration(UPath(tmp_path), bundle=Bundle())[2]
+    overridden = prepare_configuration(UPath(tmp_path), bundle=Bundle(), **override)[2]
+
+    assert overridden.execution_id.digest != default.execution_id.digest
 
 
 def test_benchmark_cli_accepts_profile_and_rejects_conflicting_maps(tmp_path):

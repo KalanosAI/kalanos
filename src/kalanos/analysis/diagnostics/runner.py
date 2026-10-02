@@ -11,6 +11,7 @@ from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.vision import vision
 from kalanos.analysis.diagnostics.windows import windows
 from kalanos.analysis.identities import analysis_digest
+from kalanos.analysis.metrics.vision import is_camera_footage
 from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.scoring import Finding
@@ -86,8 +87,43 @@ def review_findings(results):
     return findings
 
 
-def episode_diagnostics(episodes, plan, tier, findings, policies):
-    """Run signal and visual work before windows, without changing source arrays."""
+def _graded_camera(graded_episode, stream):
+    """The graded stream of one episode that `stream` was graded as, or `None`."""
+    if graded_episode is None:
+        return None
+    for graded in graded_episode.streams:
+        if (graded.source_field, graded.instance, graded.source_path) == (
+            stream.source_field,
+            stream.instance,
+            str(stream.source_path),
+        ):
+            return graded
+    return None
+
+
+def episode_diagnostics(episodes, plan, tier, findings, policies, graded):
+    """Run signal and visual work before windows, without changing source arrays.
+
+    Parameters
+    ----------
+    episodes : list[Episode]
+        The loaded episodes to run the diagnostics on.
+    plan : DiagnosticPlan
+        The diagnostics to run.
+    tier : ExecutionTier
+        The run's execution tier; the metadata tier skips every payload diagnostic.
+    findings : list[Finding]
+        The run's findings so far, which the window diagnostics anchor on.
+    policies : Mapping[str, Policy]
+        Each episode's policy, by id; its `diagnostic_reviews` set the review triggers.
+    graded : Mapping[str, GradedEpisode]
+        Each episode graded, by id; the vision diagnostic reads its camera reads.
+
+    Returns
+    -------
+    dict[str, list[DiagnosticResult]]
+        Each episode's diagnostic results, by id.
+    """
     results = {}
     for episode in episodes:
         items = []
@@ -112,7 +148,7 @@ def episode_diagnostics(episodes, plan, tier, findings, policies):
                 )
         if plan.vision:
             for stream in episode.streams:
-                if stream.kind.value not in ("video", "image"):
+                if not is_camera_footage(stream.kind.value, stream.taxonomy_type):
                     continue
                 subject = {
                     "feature": stream.source_field,
@@ -121,13 +157,30 @@ def episode_diagnostics(episodes, plan, tier, findings, policies):
                 }
                 identifier = "camera_" + content_digest(subject)[:16]
                 spec = SimpleNamespace(id=identifier)
+                camera = _graded_camera(graded.get(episode.id), stream)
+                frames = camera.frames if camera is not None else None
+                count = (
+                    camera.metrics.get("frame_count_vs_timebase") if camera else None
+                )
+                sharpness = camera.metrics.get("sharpness_score") if camera else None
                 items.append(
                     execute(
                         "vision",
                         spec,
                         episode,
                         partial(
-                            vision, episode, stream, plan.vision, identifier, review
+                            vision,
+                            episode,
+                            stream,
+                            frames,
+                            identifier,
+                            review,
+                            segment_frames=count.evidence.get("present")
+                            if count is not None
+                            else None,
+                            reason=sharpness.evidence.get("reason")
+                            if frames is None and sharpness is not None
+                            else None,
                         ),
                         skipped=skip,
                         subject=subject,
@@ -211,7 +264,7 @@ def validate_review_plan(plan, policy):
         review.vision_max_clipped_fraction is not None
         or review.vision_min_blur_score is not None
         or review.review_video_integrity
-    ) and (plan is None or plan.vision is None):
+    ) and (plan is None or not plan.vision):
         raise MappingOverrideError(
             "visual review policy requires an explicit vision plan"
         )

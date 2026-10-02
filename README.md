@@ -205,7 +205,7 @@ kalanos grade hf://datasets/lerobot/pusht@<commit>                  # pin a revi
 kalanos grade https://huggingface.co/datasets/lerobot/pusht         # the page URL works too
 ```
 
-The dataset is pinned to one commit and streamed. Anything listing more than 20 GB or 10,000 files is refused before a byte is read; raise the limit for one run with `--max-remote-gb 50` or `--max-remote-files 20000`. For private or gated datasets, set `HF_TOKEN`.
+The dataset is pinned to one commit and streamed. Anything listing more than 20 GB or 10,000 files is refused before a byte is read; raise the limit for one run with `--max-remote-gb 50` or `--max-remote-files 20000`. `--full-frame-scan` downloads every video segment, where the default reads only a sample of frames. `--tier full` implies it. For private or gated datasets, set `HF_TOKEN`.
 
 **Use it in CI or a script**
 
@@ -319,6 +319,8 @@ Environment variables:
 | `KALANOS_REPORTS_DIR` | current directory | Where a relative `--report` path is written |
 | `KALANOS_REMOTE_MAX_BYTES` | `20000000000` (20 GB) | Largest remote dataset to stream; `--max-remote-gb` overrides per run |
 | `KALANOS_REMOTE_MAX_FILES` | `10000` | Most files in a remote dataset; `--max-remote-files` overrides per run |
+| `KALANOS_VISION_SAMPLES` | unset | Frames each camera samples, over the bundle's `vision` section; `--vision-samples` sets it per run |
+| `KALANOS_FULL_FRAME_SCAN` | unset | Frame metrics read every frame instead of a sample, over the bundle's `vision` section; `--full-frame-scan` sets it per run |
 | `HF_TOKEN` | unset | Opens private or gated Hugging Face datasets |
 
 ### Typing a field for one run
@@ -402,6 +404,12 @@ Both commands share bundle loading, mapping precedence, binding resolution and
 configuration identities. Benchmark also accepts `--map`, `--map-file`,
 `--no-sidecar` and `--tier`. Its JSON records the resolved configuration for each
 dataset. Metadata-tier benchmarking does not inject payload defects.
+Camera defects (blur, clipping, frozen frames) go into a native-resolution copy
+of each sampled video stream, and are measured against that copy graded clean.
+A camera whose native frames would take more than 1 GiB is reported, not injected.
+Vision metrics grade in the benchmark only when the scope requires
+`sampled_video_quality` or `video_quality`,
+as in `kalanos grade`; under any other scope no camera is decoded for injection.
 
 Whole-feature mappings remain compatibility defaults. They cannot erase explicit
 channel semantics or make a partly recognized vector fully mapped. Such conflicts
@@ -417,10 +425,20 @@ sidecar discovery. Explicit map files and bundle bindings still apply.
 ### Requirements, evidence and execution
 
 The default `numeric-core-v1` scope does not require calibrated units, capture
-timing or video quality. To require visual inspection, set
-`requirements.id: vision-imitation-v1`. Its required `video_quality` capability is
-currently unavailable, so it contributes an **unknown** reason. Merely discovering
-a camera or choosing the full tier cannot establish a vision-training pass.
+timing or video quality: its reports show the vision metrics, but they neither
+score nor block an episode. To require visual inspection, set
+`requirements.id: vision-imitation-v1`. It requires `video_quality`, which only
+a run that measured every camera frame satisfies (`--full-frame-scan` or
+`--tier full`). A sampled run satisfies `sampled_video_quality` instead.
+The bundle's `vision` section sets the sample (`sample_frames`, 10 by default),
+`full_frame_scan` and the decode caps; `KALANOS_VISION_SAMPLES` and
+`KALANOS_FULL_FRAME_SCAN` override it, and `--vision-samples` and
+`--full-frame-scan` override both. Under
+either capability the vision metrics grade against their bands; until a
+calibration manifest covers them, a critical result requests review rather than
+blocking. An episode whose cameras could not be read, or that has no camera, is
+**unknown** for the capability. Merely discovering a camera or choosing the full
+tier cannot establish a vision-training pass.
 
 A binding assertion and validated evidence are separate. Per-property validation
 records must match the property value and the resolved source scope. Changing a

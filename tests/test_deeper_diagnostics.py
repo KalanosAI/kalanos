@@ -12,7 +12,6 @@ from kalanos.analysis.diagnostics.dataset import cohort
 from kalanos.analysis.diagnostics.runner import execute
 from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.validation import summarize_study
-from kalanos.analysis.diagnostics.vision import vision
 from kalanos.analysis.diagnostics.windows import windows
 from kalanos.analysis.models.binding import (
     Bundle,
@@ -47,6 +46,8 @@ from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.analysis.reporting.render import render_html
 from kalanos.assets.policy import load_default_policy
 from kalanos.cli import app, failing_statuses, parse_fail_on
+from kalanos.testing import clean_recording
+from kalanos.testing.injectors import SyntheticFrames
 
 
 def signal(feature="state", values=None, times=None, command="none"):
@@ -124,11 +125,14 @@ def episode(*streams, identifier="e"):
     return Episode(id=identifier, streams=list(streams), tasks=["fixture task"])
 
 
-def audit(episodes, plan=None, requirements=None, tier="standard", review=None):
+def audit(
+    episodes, plan=None, requirements=None, tier="standard", review=None, vision=None
+):
     """Exercise the real assembly, coverage and single eligibility calculation."""
     policy = load_default_policy()
     if review:
         policy.diagnostic_reviews = review
+    vision = vision or VisionSpec()
     return assemble_report(
         root=UPath("fixture"),
         analysed=[
@@ -139,6 +143,9 @@ def audit(episodes, plan=None, requirements=None, tier="standard", review=None):
         ],
         policy=policy,
         diagnostics_plan=plan,
+        vision_samples=vision.sample_frames,
+        full_frame_scan=vision.full_frame_scan,
+        vision=vision,
         requirements=requirements,
         scope=EvaluationScope(requirements_id="test", policy_id="test", tier=tier),
     )
@@ -401,35 +408,6 @@ def test_window_sufficiency_never_counts_review_episodes():
     assert audit([e], None, req).sufficiency.status.value == "unknown"
 
 
-class Images:
-    """Fixture payload that forbids eager fetch and implements bounded sampling."""
-
-    def __init__(self, images):
-        self.images = images
-
-    def __len__(self):
-        return len(self.images)
-
-    def fetch(self):
-        raise AssertionError("unbounded fetch is forbidden")
-
-    def iter_sampled(self, rows, *, max_decode_frames, max_pixels):
-        for row in rows:
-            if row < max_decode_frames:
-                yield {
-                    "source_row": row,
-                    "presentation_time_s": row / 10,
-                    "image": self.images[row],
-                }
-        yield {
-            "summary": {
-                "complete": len(self.images) < max_decode_frames,
-                "decoded_frames": min(len(self.images), max_decode_frames),
-                "segment_frames": min(len(self.images), max_decode_frames),
-            }
-        }
-
-
 def camera(count=10):
     """Return a deterministic nonuniform static image sequence."""
     image = np.indices((16, 16)).sum(axis=0).astype(np.uint8) * 10
@@ -442,8 +420,13 @@ def camera(count=10):
         source_field="camera",
         timestamps=pl.Series(np.arange(count) / 10),
         timestamp_dtype="float64",
-        payload=Images([rgb.copy() for _ in range(count)]),
+        payload=SyntheticFrames(frames=[rgb.copy() for _ in range(count)]),
     )
+
+
+def camera_read(report):
+    """The vision diagnostic result of a report graded with one camera."""
+    return next(x for x in report.diagnostics.results if x.kind == "vision")
 
 
 def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
@@ -451,18 +434,18 @@ def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
     e = episode(signal(), cam)
     r = audit(
         [e],
-        DiagnosticPlan(vision=VisionSpec(sample_frames=4)),
+        DiagnosticPlan(vision=True),
         RequirementsSection(required_capabilities=["video_quality"]),
+        vision=VisionSpec(sample_frames=4),
     )
     assert r.coverage.decoded_frames_examined == 4
     assert r.eligibility_counts.unknown == 1
-    vr = next(x for x in r.diagnostics.results if x.kind == "vision")
-    assert vr.measurements["identical_adjacent_pairs"]
-    assert vr.consequence == "report_only"
+    assert camera_read(r).consequence == "report_only"
     sampled = audit(
         [e],
-        DiagnosticPlan(vision=VisionSpec(sample_frames=4)),
+        DiagnosticPlan(vision=True),
         RequirementsSection(required_capabilities=["sampled_video_quality"]),
+        vision=VisionSpec(sample_frames=4),
     )
     assert sampled.eligibility_counts.unknown == 0
 
@@ -470,37 +453,49 @@ def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
 def test_full_visual_evaluation_satisfies_required_capability():
     r = audit(
         [episode(signal(), camera())],
-        DiagnosticPlan(vision=VisionSpec(sample_frames=10)),
+        DiagnosticPlan(vision=True),
         RequirementsSection(required_capabilities=["video_quality"]),
+        vision=VisionSpec(sample_frames=10),
     )
     assert r.eligibility_counts.unknown == 0
     assert r.coverage.decoded_frames_examined == 10
+    # A static scene repeats every frame, which stays a candidate, not a fault.
+    vr = camera_read(r)
+    assert vr.measurements["identical_adjacent_pairs"]
+    assert vr.consequence == "report_only"
 
 
 def test_dark_frame_threshold_is_configured_and_review_only():
     cam = camera()
-    cam.payload.images[3] = np.zeros((16, 16, 3), dtype=np.uint8)
-    r = vision(
-        episode(cam),
-        cam,
-        VisionSpec(sample_frames=10),
-        "camera",
-        DiagnosticReviewPolicy(vision_max_clipped_fraction=0.9),
+    cam.payload.frames[3] = np.zeros((16, 16, 3), dtype=np.uint8)
+    r = camera_read(
+        audit(
+            [episode(cam)],
+            DiagnosticPlan(vision=True),
+            review=DiagnosticReviewPolicy(vision_max_clipped_fraction=0.9),
+            vision=VisionSpec(sample_frames=10),
+        )
     )
     assert r.consequence == "review"
     assert any(x.start == 3 for x in r.support.intervals)
 
 
 def test_video_budget_never_claims_complete_scan():
-    r = vision(
-        episode(camera()),
-        camera(),
-        VisionSpec(sample_frames=2, max_decode_frames=3),
-        "camera",
+    # Moving actions make the frozen-frame read take every frame, past the budget.
+    actions = clean_recording(
+        hz=10.0, samples=10, taxonomy_type="action.joint_position_command"
+    )
+    r = camera_read(
+        audit(
+            [episode(camera(), actions)],
+            DiagnosticPlan(vision=True),
+            vision=VisionSpec(sample_frames=2, max_decode_frames=3),
+        )
     )
     assert r.availability.value == "unavailable"
     assert r.measurements["segment_frames"] is None
     assert r.evidence["missing_rows"]
+    assert not r.evidence["scan"]["complete"]
 
 
 def cohort_spec():
@@ -687,49 +682,17 @@ def test_nonfinite_computed_output_is_an_error():
     assert r.availability.value == "error"
 
 
-def test_real_video_segment_sampler_stops_at_boundaries_and_budget(tmp_path):
-    av = pytest.importorskip("av")
-    from kalanos.analysis.adapters.video import VideoPayload
+def test_video_decoder_failure_preserves_already_examined_frames(monkeypatch):
+    from kalanos.analysis.adapters.video import DecodeFailed
 
-    path = tmp_path / "shared.mkv"
-    with av.open(str(path), mode="w") as output:
-        stream = output.add_stream("ffv1", rate=10)
-        stream.width = 16
-        stream.height = 16
-        stream.pix_fmt = "bgr0"
-        for i in range(12):
-            frame = av.VideoFrame.from_ndarray(
-                np.full((16, 16, 3), i * 15, dtype=np.uint8), format="rgb24"
-            )
-            for packet in stream.encode(frame):
-                output.mux(packet)
-        for packet in stream.encode():
-            output.mux(packet)
-    payload = VideoPayload(UPath(path), 4, 0.2, 0.6)
-    items = list(payload.iter_sampled([0, 3], max_decode_frames=100, max_pixels=256))
-    samples = [x for x in items if "image" in x]
-    assert [x["source_row"] for x in samples] == [0, 3]
-    assert [x["presentation_time_s"] for x in samples] == pytest.approx([0.2, 0.5])
-    assert samples[0]["image"][0, 0, 0] == 30
-    assert items[-1]["summary"]["segment_frames"] == 4
-    assert items[-1]["summary"]["complete"]
-    limited = list(payload.iter_sampled([0, 3], max_decode_frames=1, max_pixels=256))
-    assert not limited[-1]["summary"]["complete"]
-    assert limited[-1]["summary"]["decoded_frames"] == 1
-    oversized = list(payload.iter_sampled([0], max_decode_frames=100, max_pixels=64))
-    assert not oversized[-1]["summary"]["complete"]
-    assert "max_pixels" in oversized[-1]["summary"]["reason"]
+    gray_windows = SyntheticFrames.gray_windows
 
+    def broken(self, windows, size, native=frozenset(), **caps):
+        yield next(gray_windows(self, windows, size, native, **caps))
+        raise DecodeFailed("corrupt packet")
 
-def test_video_decoder_failure_preserves_already_examined_frames():
-    class BrokenImages(Images):
-        def iter_sampled(self, rows, **kwargs):
-            yield {"source_row": 0, "presentation_time_s": 0, "image": self.images[0]}
-            raise RuntimeError("corrupt packet")
-
-    cam = camera()
-    cam.payload = BrokenImages(cam.payload.images)
-    r = vision(episode(cam), cam, VisionSpec(), "camera")
+    monkeypatch.setattr(SyntheticFrames, "gray_windows", broken)
+    r = camera_read(audit([episode(camera())], DiagnosticPlan(vision=True)))
     assert r.availability.value == "error"
     assert r.measurements["examined_frames"] == 1
     assert r.evidence["frames"][0]["source_row"] == 0
@@ -737,13 +700,13 @@ def test_video_decoder_failure_preserves_already_examined_frames():
 
 def test_video_shape_change_requests_review_and_records_shapes():
     cam = camera()
-    cam.payload.images[2] = np.zeros((8, 8, 3), dtype=np.uint8)
-    r = vision(
-        episode(cam),
-        cam,
-        VisionSpec(),
-        "camera",
-        DiagnosticReviewPolicy(review_video_integrity=True),
+    cam.payload.frames[2] = np.zeros((8, 8, 3), dtype=np.uint8)
+    r = camera_read(
+        audit(
+            [episode(cam)],
+            DiagnosticPlan(vision=True),
+            review=DiagnosticReviewPolicy(review_video_integrity=True),
+        )
     )
     assert r.measurements["distinct_image_shapes"] == 2
     assert r.consequence == "review"
@@ -754,12 +717,12 @@ def test_video_missing_decoder_is_unavailable_not_pass_or_operational_failure(
 ):
     from kalanos.analysis.adapters.video import VideoPayload
 
-    monkeypatch.setattr("kalanos.analysis.adapters.video._load_av", lambda: None)
+    monkeypatch.setattr("kalanos.analysis.adapters.video.av", None)
     cam = camera()
     cam.payload = VideoPayload(UPath("camera.mp4"), 10, 0, 1)
     r = audit(
         [episode(signal(), cam)],
-        DiagnosticPlan(vision=VisionSpec()),
+        DiagnosticPlan(vision=True),
         RequirementsSection(required_capabilities=["video_quality"]),
     )
     assert r.eligibility_counts.unknown == 1
@@ -814,7 +777,9 @@ def test_window_visual_sampling_leaves_unsampled_training_windows_unknown():
     cam = camera()
     s = signal(values=np.arange(10, dtype=float), times=np.arange(10) / 10)
     e = episode(s, cam)
-    vr = vision(e, cam, VisionSpec(sample_frames=2), "camera")
+    vr = camera_read(
+        audit([e], DiagnosticPlan(vision=True), vision=VisionSpec(sample_frames=2))
+    )
     spec = window_spec()
     from kalanos.analysis.models.diagnostics import ModalitySpec
 
@@ -859,7 +824,7 @@ def test_camera_source_scope_survives_channel_free_binding_resolution():
         camera(), dictionary=load_default_dictionary(), source_identity="dataset-root"
     )
     assert cam.channels == [] and scope_of(cam) == "dataset-root"
-    r = audit([episode(signal(), cam)], DiagnosticPlan(vision=VisionSpec()))
+    r = audit([episode(signal(), cam)], DiagnosticPlan(vision=True))
     assert (
         next(s for s in r.episodes[0].streams if s.kind == "video").source_identity
         == "dataset-root"
@@ -955,19 +920,27 @@ def test_visual_previews_are_bounded_and_can_be_disabled():
     import struct
 
     cam = camera()
-    r = vision(
-        episode(cam), cam, VisionSpec(preview_frames=2, preview_size=16), "camera"
+    r = camera_read(
+        audit(
+            [episode(cam)],
+            DiagnosticPlan(vision=True),
+            vision=VisionSpec(preview_frames=2, preview_size=16),
+        )
     )
     previews = [f for f in r.evidence["frames"] if "thumbnail_png_base64" in f]
     assert len(previews) == 2
     png = base64.b64decode(previews[0]["thumbnail_png_base64"])
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     assert struct.unpack(">II", png[16:24]) == (16, 16)
-    off = vision(episode(cam), cam, VisionSpec(preview_frames=0), "camera")
-    assert not any("thumbnail_png_base64" in f for f in off.evidence["frames"])
-    page = render_html(
-        audit([episode(signal(), cam)], DiagnosticPlan(vision=VisionSpec()))
+    off = camera_read(
+        audit(
+            [episode(cam)],
+            DiagnosticPlan(vision=True),
+            vision=VisionSpec(preview_frames=0),
+        )
     )
+    assert not any("thumbnail_png_base64" in f for f in off.evidence["frames"])
+    page = render_html(audit([episode(signal(), cam)], DiagnosticPlan(vision=True)))
     assert "data:image/png;base64," in page
 
 

@@ -15,7 +15,7 @@ type it was handed.
 
 # Built-in
 import math
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -25,6 +25,7 @@ import polars as pl
 from upath import UPath
 
 # Internal
+from kalanos.analysis.adapters.video import DecodeLimitReached
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -36,7 +37,12 @@ from kalanos.analysis.models.domain import (
     Stream,
     TimestampDtype,
 )
-from kalanos.analysis.models.metrics import ChannelContext, MetricInput, StreamContext
+from kalanos.analysis.models.metrics import (
+    DEFAULT_VISION_SAMPLES,
+    ChannelContext,
+    MetricInput,
+    StreamContext,
+)
 from kalanos.analysis.optional import load_numpy
 
 
@@ -66,6 +72,8 @@ class Defect(str, Enum):
     DEAD_TAXEL    = "dead_taxel"
     HYSTERESIS    = "hysteresis"
     REPEATED_TIMESTAMPS = "repeated_timestamps"
+    BLUR          = "blur"
+    CLIPPED       = "clipped"
     # fmt: on
 
 
@@ -110,6 +118,108 @@ class SyntheticFrames:
         """
 
         return self.frames
+
+    def gray_windows(
+        self,
+        windows: Sequence[tuple[int, int]],
+        size: int,
+        native: frozenset[int] = frozenset(),
+        max_decode_frames: int | None = None,
+        max_pixels: int | None = None,
+    ) -> (
+        "Generator[tuple[int, np.ndarray, np.ndarray | None, float | None], None, None]"
+    ):
+        """Yield each window's position with its frames as `(size, size)` BT.601 luma.
+
+        Resized by nearest-index sampling; a window is clipped to the frame list.
+        A frame whose index is in `native` also comes back as its full-size luma.
+        The presentation time is always `None`: a frame list has no container clock.
+
+        Parameters
+        ----------
+        windows : Sequence[tuple[int, int]]
+            The `[start, end)` ranges of frames to yield, in order.
+        size : int
+            The side of each yielded square image, in pixels.
+        native : frozenset[int]
+            The frame indices that also come back at full size.
+        max_decode_frames : int | None
+            The most frames the read may yield.
+        max_pixels : int | None
+            The most pixels a frame in `native` may hold.
+
+        Yields
+        ------
+        tuple[int, numpy.ndarray, numpy.ndarray | None, None]
+            One frame, in window order and frame order within each window:
+
+            - the window's position in `windows`;
+            - the frame as a `(size, size)` uint8 luma image;
+            - the frame's full-size uint8 luma when its index is in `native`,
+              `None` otherwise;
+            - `None` for the presentation time.
+
+        Raises
+        ------
+        RuntimeError
+            If numpy is not installed.
+        DecodeLimitReached
+            If the read would pass `max_decode_frames`,
+            or a frame in `native` holds more than `max_pixels`.
+        """
+
+        numpy = load_numpy()
+        if numpy is None:
+            raise RuntimeError(
+                "gray_windows needs numpy; install it with pip install 'kalanos[video]'"
+            )
+
+        yielded = 0
+        for position, (start, end) in enumerate(windows):
+            for index in range(max(start, 0), min(end, len(self.frames))):
+                if max_decode_frames is not None and yielded >= max_decode_frames:
+                    raise DecodeLimitReached("max_decode_frames reached")
+                frame = self.frames[index].astype(numpy.float64)
+                if (
+                    max_pixels is not None
+                    and index in native
+                    and frame.shape[0] * frame.shape[1] > max_pixels
+                ):
+                    raise DecodeLimitReached("frame exceeds max_pixels")
+                luma = (
+                    0.299 * frame[..., 0]
+                    + 0.587 * frame[..., 1]
+                    + 0.114 * frame[..., 2]
+                )
+                full = (
+                    numpy.clip(luma.round(), 0, 255).astype(numpy.uint8)
+                    if index in native
+                    else None
+                )
+                height, width = luma.shape
+                if (height, width) != (size, size):
+                    rows = numpy.linspace(0, height - 1, size).round().astype(int)
+                    cols = numpy.linspace(0, width - 1, size).round().astype(int)
+                    luma = luma[numpy.ix_(rows, cols)]
+                small = numpy.clip(luma.round(), 0, 255).astype(numpy.uint8)
+                yielded += 1
+                yield position, small, full, None
+
+    def rgb_frame(self, index: int) -> "np.ndarray":
+        """Return the frame at `index`, unchanged.
+
+        Parameters
+        ----------
+        index : int
+            The frame's position in `frames`.
+
+        Returns
+        -------
+        numpy.ndarray
+            The frame as stored.
+        """
+
+        return self.frames[index]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -254,10 +364,26 @@ def clean_taxels(
     )
 
 
-def stream_context(stream: Stream, *, is_regular: bool = True) -> StreamContext:
-    """Wrap a Stream in the context a stream-level metric function is handed."""
+def stream_context(
+    stream: Stream,
+    *,
+    is_regular: bool = True,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    episode_streams: Sequence[Stream] | None = None,
+    full_frame_scan: bool = False,
+) -> StreamContext:
+    """Wrap a Stream in the context a stream-level metric function is handed.
 
-    return StreamContext(stream=stream, is_regular=is_regular)
+    Every argument lands on the `StreamContext` field of the same name.
+    """
+
+    return StreamContext(
+        stream=stream,
+        is_regular=is_regular,
+        vision_samples=vision_samples,
+        episode_streams=list(episode_streams) if episode_streams is not None else None,
+        full_frame_scan=full_frame_scan,
+    )
 
 
 def _channel_frame(stream: Stream) -> pl.DataFrame:
@@ -832,11 +958,14 @@ def clean_frames(
     width: int = 8,
     taxonomy_type: str = "unmapped.camera",
     instance: str | None = None,
+    seed: int = 0,
 ) -> Stream:
     """Build a regularly sampled `Kind.IMAGE` Stream of distinct synthetic frames.
 
-    Each frame's fill value is derived from its index, so no two consecutive
-    frames are identical and a freeze reads as a real change against them.
+    Each frame is uniform noise seeded from `seed` plus its index:
+    no two consecutive frames are identical, so a freeze reads as a change,
+    and every frame is textured and mid-range on average,
+    so a blur or clipping injection does too.
 
     Parameters
     ----------
@@ -852,6 +981,8 @@ def clean_frames(
         The stream's taxonomy type.
     instance : str or None
         Which subject this stream belongs to.
+    seed : int
+        The seed frame 0 draws from; frame `i` draws from `seed + i`.
 
     Returns
     -------
@@ -874,7 +1005,9 @@ def clean_frames(
     timestamps = pl.Series("time_s", [index / hz for index in range(frames)])
     payload = SyntheticFrames(
         frames=[
-            numpy.full((height, width, 3), fill_value=index % 256, dtype=numpy.uint8)
+            numpy.random.default_rng(seed + index).integers(
+                0, 256, (height, width, 3), dtype=numpy.uint8
+            )
             for index in range(frames)
         ]
     )
@@ -943,6 +1076,90 @@ def freeze_frames(stream: Stream, *, start: int = 10, length: int = 10) -> Strea
         frames[index] = frozen_frame.copy()
 
     return stream.model_copy(update={"payload": SyntheticFrames(frames=frames)})
+
+
+def _synthetic_frames(stream: Stream) -> SyntheticFrames:
+    """Return the stream's `SyntheticFrames` payload, or raise `ValueError`."""
+
+    if not isinstance(stream.payload, SyntheticFrames):
+        raise ValueError(
+            f"stream must carry a SyntheticFrames payload; "
+            f"got {type(stream.payload).__name__}"
+        )
+    return stream.payload
+
+
+def blur_frames(stream: Stream) -> Stream:
+    """Replace every frame with its 5x5 box mean, as a defocused camera would.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` with every frame blurred.
+        Frame count, timestamps and frame shape are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the payload is not a `SyntheticFrames`.
+    """
+
+    payload = _synthetic_frames(stream)
+    numpy = load_numpy()
+    assert numpy is not None
+
+    blurred = []
+    for frame in payload.frames:
+        height, width = frame.shape[:2]
+        padded = numpy.pad(
+            frame.astype(numpy.float64), ((2, 2), (2, 2), (0, 0)), mode="edge"
+        )
+        total = sum(
+            padded[dy : dy + height, dx : dx + width]
+            for dy in range(5)
+            for dx in range(5)
+        )
+        blurred.append(numpy.round(total / 25).astype(numpy.uint8))
+
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=blurred)})
+
+
+def clip_frames(stream: Stream, *, gain: float = 4.0) -> Stream:
+    """Multiply every frame by `gain` and clip at white, as an overexposed camera would.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged.
+    gain : float
+        The factor each pixel is multiplied by before clipping to 255.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` with every frame overexposed.
+        Frame count, timestamps and frame shape are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the payload is not a `SyntheticFrames`.
+    """
+
+    payload = _synthetic_frames(stream)
+    numpy = load_numpy()
+    assert numpy is not None
+
+    clipped = [
+        numpy.clip(frame.astype(numpy.float64) * gain, 0, 255).astype(numpy.uint8)
+        for frame in payload.frames
+    ]
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=clipped)})
 
 
 def _unhandled_defect(defect: NoReturn) -> NoReturn:
@@ -1041,6 +1258,10 @@ def apply_defect(ctx: MetricInput, defect: Defect) -> MetricInput:
             injected = kill_taxels(stream)
         case Defect.HYSTERESIS:
             injected = skew_unloading(stream)
+        case Defect.BLUR:
+            injected = blur_frames(stream)
+        case Defect.CLIPPED:
+            injected = clip_frames(stream)
         case _:
             _unhandled_defect(defect)
 
@@ -1050,6 +1271,6 @@ def apply_defect(ctx: MetricInput, defect: Defect) -> MetricInput:
         return ChannelContext(
             channel=ctx.channel,
             values=new_frame[channel],
-            stream=StreamContext(stream=injected, is_regular=ctx.stream.is_regular),
+            stream=ctx.stream.model_copy(update={"stream": injected}),
         )
-    return StreamContext(stream=injected, is_regular=ctx.is_regular)
+    return ctx.model_copy(update={"stream": injected})

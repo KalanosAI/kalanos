@@ -23,11 +23,18 @@ from typer.testing import CliRunner
 # `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
 # so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
+from kalanos.analysis.metrics import vision
 from kalanos.analysis.models.report import Report
 from kalanos.cli import app
 
 # Local
-from helpers import CSV_FIXTURE, FIXTURES_DIR, ScoreAttributeCollector, score_attr
+from helpers import (
+    CSV_FIXTURE,
+    FIXTURES_DIR,
+    LEROBOT_FIXTURE,
+    ScoreAttributeCollector,
+    score_attr,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -146,6 +153,35 @@ def test_json_flag_prints_the_model_with_no_card():
     assert len(result.stdout.splitlines()) == 1
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], (10, False)),
+        (["--vision-samples", "3"], (3, False)),
+        (["--full-frame-scan"], (10, True)),
+    ],
+    ids=["defaults", "vision_samples", "full_frame_scan"],
+)
+def test_frame_flags_reach_every_camera_stream(monkeypatch, flags, expected):
+    """Verify --vision-samples and --full-frame-scan reach the vision metrics' read."""
+
+    seen = []
+    layout = vision._layout
+
+    def recording(ctx, full_frame_scan):
+        seen.append((ctx.vision_samples, ctx.full_frame_scan))
+        return layout(ctx, full_frame_scan)
+
+    monkeypatch.setattr(vision, "_layout", recording)
+    vision.clear_cache()
+
+    result = runner.invoke(app, ["grade", str(LEROBOT_FIXTURE), "--json", *flags])
+
+    assert result.exit_code == 0
+    assert seen
+    assert set(seen) == {expected}
 
 
 def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):

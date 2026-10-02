@@ -29,6 +29,7 @@ from kalanos.analysis.bindings import binding_identity, check_matched, resolve_e
 from kalanos.analysis.discovery.walk import walk_folder
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.discovery import (
     SkippedSource,
     SkipReason,
@@ -38,6 +39,7 @@ from kalanos.analysis.models.discovery import (
 from kalanos.analysis.models.domain import Episode, MappingSource
 from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride
+from kalanos.analysis.models.metrics import DEFAULT_VISION_SAMPLES
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import (
     ExecutionTier,
@@ -255,6 +257,9 @@ def run(
     *,
     policy: Policy,
     source: SourceInfo | None = None,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
     overrides: Sequence[MappingOverride] = (),
     config: RunConfiguration | None = None,
     producer: Producer | None = None,
@@ -271,6 +276,12 @@ def run(
         The loaded grading policy to score every metric against.
     source : SourceInfo or None
         What `root` was resolved from, recorded on the Report as given.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    full_frame_scan : bool
+        Whether frame metrics read every frame rather than a sample.
+    vision : VisionSpec or None
+        Decode caps, previews and exposure levels; the defaults when `None`.
     overrides : Sequence[MappingOverride]
         Per-run mapping overrides, already merged and checked against the dictionary.
         Each retypes every stream whose `source_field` equals its `feature`.
@@ -500,6 +511,9 @@ def run(
         duration_s=perf_counter() - start,
         source=source,
         datasets=datasets,
+        vision_samples=vision_samples,
+        full_frame_scan=full_frame_scan,
+        vision=vision,
         mapping_overrides=list(overrides),
         requirements=config.requirements if config else None,
         scope=(

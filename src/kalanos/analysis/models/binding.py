@@ -27,7 +27,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Internal
-from kalanos.analysis.models.diagnostics import DiagnosticPlan
+from kalanos.analysis.models.diagnostics import DiagnosticPlan, VisionSpec
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.provenance import ExecutionTier
@@ -44,6 +44,12 @@ BUNDLE_SCHEMA_VERSION = 1
 # more. It does not silently demand physical units, capture timing or video.
 DEFAULT_REQUIREMENTS_ID = "numeric-core-v1"
 DEFAULT_POLICY_ID = "default-decisions-v1"
+# Every camera frame read. A scope that requires it, or the sampled one below,
+# lets the vision family grade, and so decide an episode.
+VIDEO_QUALITY_CAPABILITY = "video_quality"
+# Camera footage sampled, not every frame read. Lets the vision family grade,
+# but never stands in for `VIDEO_QUALITY_CAPABILITY`.
+SAMPLED_VIDEO_QUALITY_CAPABILITY = "sampled_video_quality"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -504,7 +510,7 @@ class RequirementsSection(BaseModel):
         if isinstance(data, dict) and data.get("id") == "vision-imitation-v1":
             data = dict(data)
             data["required_capabilities"] = sorted(
-                set(data.get("required_capabilities", [])) | {"video_quality"}
+                set(data.get("required_capabilities", [])) | {VIDEO_QUALITY_CAPABILITY}
             )
         return data
 
@@ -557,6 +563,9 @@ class Bundle(BaseModel):
     requirements : RequirementsSection
     policy : PolicySection
     execution : ExecutionSection
+    diagnostics : DiagnosticPlan or None
+    vision : VisionSpec
+        How every camera stream is read, by the vision metrics and the diagnostic alike.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -567,6 +576,7 @@ class Bundle(BaseModel):
     policy: PolicySection = Field(default_factory=PolicySection)
     execution: ExecutionSection = Field(default_factory=ExecutionSection)
     diagnostics: DiagnosticPlan | None = None
+    vision: VisionSpec = Field(default_factory=VisionSpec)
 
     def feature_assertions(self, path: AnyPath | None = None) -> list[FeatureAssertion]:
         """The binding section's whole-feature assertions, at bundle precedence."""
