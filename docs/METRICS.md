@@ -2,13 +2,7 @@
 
 The catalogue. This file is the source of truth for what Kalanos computes; `policy.yaml` holds the thresholds and weights that grade it.
 
-The registered metric catalogue below includes implemented core metrics and
-older design proposals. The explicit **0.7.0 diagnostic plan** now supplies
-stream-pair timing, command response, sampled vision, dimensionless motion,
-training-window and cohort execution. Its definitions, prerequisites and policy
-behavior are authoritative in [DIAGNOSTICS-0.7.0.md](DIAGNOSTICS-0.7.0.md).
-Proposed thresholds and formulas in the historical tables do not configure that
-runner. FK/Jacobian and learned transition checks remain unimplemented.
+The registered metric catalogue below includes implemented core metrics and older design proposals. The explicit **0.7.0 diagnostic plan** now supplies stream-pair timing, command response, sampled vision, dimensionless motion, training-window and cohort execution. Its definitions, prerequisites and policy behavior are authoritative in [DIAGNOSTICS.md](DIAGNOSTICS.md). Proposed thresholds and formulas in the historical tables do not configure that runner. FK/Jacobian and learned transition checks remain unimplemented.
 
 Thresholds marked *to define* are undecided. They must be settled against real recordings rather than filled in with a plausible number: once written down, an invented threshold is indistinguishable from a decided one, and it will be implemented as though it were one.
 
@@ -67,7 +61,7 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `drop_rate` | STREAM | regular sampling + producer capture evidence | fraction | Missing-sample estimate against the observed cadence; expected count is duration ÷ median gap + 1. | good < 1%, bad > 5% |
 | `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
 
-**Clock provenance (R07-04).** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered. HDF5's adapter-created grid is known generation.
+**Clock provenance.** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered. HDF5's adapter-created grid is known generation.
 
 | Recorded-axis metric | Meaning | Decision behavior |
 | --- | --- | --- |
@@ -75,7 +69,7 @@ From the clock alone. Weighted heaviest, because broken timing invalidates every
 | `recorded_dt_spread_ms` | Sample standard deviation of recorded intervals | Report-only by default; not sensor jitter |
 | `recorded_drop_estimate` | Estimated holes relative to recorded median cadence | Report-only by default; not verified sensor frame loss |
 
-Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval. See [R07-04](R07-04.md) for migration and acceptance tests.
+Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval.
 
 ---
 
@@ -85,7 +79,7 @@ Universal. Computed for every numeric channel whether or not its type was identi
 
 | Metric | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|
-| `missing_pct` | CHANNEL | % | Share of null or NaN values. | *candidate: good < 0.5%, bad > 5%* |
+| `missing_pct` | CHANNEL | % | Share of null or NaN values. Boolean-dtype channels count toward this check as well as numeric ones; Boolean data stays outside SNR regardless. | *candidate: good < 0.5%, bad > 5%* |
 | `flatline_pct` | CHANNEL | % | Percentage of finite adjacent pairs that do not change. This alone does not establish a stuck sensor. Evidence carries source-row intervals and the longest run. | *candidate: good < 50%, bad > 90%* (revised against real 50 Hz teleoperation, where joints hold still for 20–45% of an episode; a stuck sensor is unchanged for nearly all of it). A channel that **never changes at all** in an episode grades as a **warning** at the middle of the band, never critical: it is an unused joint or a disconnected sensor, which the data cannot tell apart, and it does not show the episode is worse than the others (on `lerobot/berkeley_fanuc_manipulation` a state dimension constant in 158 of 415 episodes capped the dataset at D). A channel that moves and then **freezes partway** is the stuck sensor, and stays critical; reward signals exempt (they flatline legitimately until success), and action commands exempt (not sensors: a pause, an idle arm or an unused action dimension holds a command still legitimately — on real LeRobot datasets action channels hit this band in nearly every episode of five datasets out of six) |
 | `spike_pct` | CHANNEL | % | Percentage of samples beyond 6σ of a local window. | *candidate: good < 0.1%, bad > 2%* (default and joint velocity) |
 | `drift` | CHANNEL | unit/min | Slow trend where the signal should be stationary. Evidence carries the fitted slope and r². | motor and joint temperature: Δ < 15 °C over an episode; other types graded only where the policy marks the signal stationary |
@@ -100,6 +94,8 @@ The window `spike_pct` takes its 6σ over is *to define*: the threshold is settl
 The shipped metric carries the window it actually used in `evidence`, as `window_samples`, so the undecided parameter stays visible in every report rather than buried in code.
 
 **Switch channels.** A channel that takes exactly two values over an episode — a gripper open/close command, a done flag, a contact bit — is a switch, not a sampled signal. Holding one value for most of the episode is the switch doing its job, so `flatline_pct`, `spike_pct` and `snr_db` return `not_applicable` for it, with the reason in `evidence`. A channel stuck on a *single* value is still measured, since that can be a dead sensor, and a switch with a glitch on it (a third value) is measured again.
+
+**Noise-floor reference.** In addition to the switch-channel exemption above, `snr_db` excludes known reward, annotation and metadata signals and channels declared binary or discrete; its evidence retains the component signal and residual standard deviations, the smoothing window, and the valid and invalid sample counts. A channel's `ChannelBinding.noise_floor` can supply a residual standard-deviation reference in the channel's native scale, validated against the current binding's identity, quantity, unit and sample rate (see [noise reference evidence](PROFILES.md#noise-reference-evidence) for the binding shape and validation requirements). Within a validated reference, the result stays report-only with no SNR penalty: a quiet robot hold does not read as a noise fault when its measured residual sits inside the verified reference, while a trace with real corruption keeps its residual evidence visible — a within-reference result is not proof of sensor health, and other checks keep their own findings. Without a usable reference the ratio stays diagnostic; above the reference, a critical result stays at review until an accepted calibration manifest matches the detector, thresholds, binding and operating scope (see *Calibration* in [docs/DECISIONS.md](DECISIONS.md)) — a matching manifest alone cannot promote an unassessed ratio to a statistical block.
 
 ---
 
@@ -344,10 +340,7 @@ Review or unknown episodes leave readiness undefined.
 readiness = sum of contributions / expected episode count
 ```
 
-Only an authorized blocking consequence blocks an episode. Critical severity alone
-does not supply that authorization. `passing_quality` describes passing episodes;
-when none pass it is null. Review and required missing evidence cannot be converted
-into a high readiness score by averaging the remaining episodes.
+Only an authorized blocking consequence blocks an episode. Critical severity alone does not supply that authorization. `passing_quality` describes passing episodes; when none pass it is null. Review and required missing evidence cannot be converted into a high readiness score by averaging the remaining episodes.
 
 Readiness is an index of technical readiness under the evaluated checks, not a prediction of training success.
 
@@ -375,13 +368,7 @@ A mean lets a minority of bad episodes hide: eight glitched episodes in fifty st
 
 A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
 
-**Context and reference evidence (0.7.0).** `snr_db` is a smooth/residual
-diagnostic, not a sensor-health measurement. Known discrete/reward/annotation
-signals do not qualify. A validated native-scale residual reference permits a
-within-reference result to remain report-only without an SNR penalty. Missing
-reference evidence leaves critical candidates at review even if a manifest
-matches. See [the 0.7.0 release contract](RELEASE-0.7.0.md) for applicability, sample/window handling and
-physical-reference prerequisites.
+**Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 
 Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
 
@@ -402,4 +389,4 @@ Metric `availability` records computation separately from graded `status`. A rep
 
 Flatline evaluation no longer bridges null, NaN or infinite values; this can change its measured fraction. Spike intervals identify scored source samples and their wider 51-sample support. Neither SNR nor spectrum measurements invent intervals.
 
-Severity thresholds still describe measurements. Statistical critical findings require matching accepted calibration to block; otherwise their consequence is review. Existing SNR applicability and noise-floor improvements are deferred to R07-03. No new calibrated-performance claim accompanies these changes.
+Severity thresholds still describe measurements. Statistical critical findings require matching accepted calibration to block; otherwise their consequence is review. No new calibrated-performance claim accompanies these changes.

@@ -12,16 +12,9 @@ An adapter teaches Kalanos to read a format. It is the main extension point, and
 
 ## Clock and row-order contract
 
-Preserve recorded row order and timestamp/payload alignment. Use `clock_info`
-to state origin, source field, native unit/dtype, known epoch/domain and transforms;
-leave unknown facts unset. `native_timestamps` retains numeric source ticks for
-precise differencing. For frame counters with a known rate, `tick_period_s` states
-seconds per native tick. These raw arrays stay inside the analysis stream.
+Preserve recorded row order and timestamp/payload alignment. Use `clock_info` to state origin, source field, native unit/dtype, known epoch/domain and transforms; leave unknown facts unset. `native_timestamps` retains numeric source ticks for precise differencing. For frame counters with a known rate, `tick_period_s` states seconds per native tick. These raw arrays stay inside the analysis stream.
 
-Use `origin=capture` with `origin_evidence=producer` only when the producer's
-schema or acquisition contract establishes capture semantics. A timestamp-like
-field name, jitter, a populated ROS header or a legacy `Clock.CAPTURE` label is
-insufficient. For example, an adapter for a documented capture-time field can set:
+Use `origin=capture` with `origin_evidence=producer` only when the producer's schema or acquisition contract establishes capture semantics. A timestamp-like field name, jitter, a populated ROS header or a legacy `Clock.CAPTURE` label is insufficient. For example, an adapter for a documented capture-time field can set:
 
 ```python
 ClockInfo(
@@ -33,16 +26,11 @@ ClockInfo(
 )
 ```
 
-This is an adapter declaration, not authentication of external evidence. Generic
-built-in readers remain conservative where their source format provides no such
-contract. Do not assign a shared physical clock domain solely because streams
-have equal timestamp values or units.
+This is an adapter declaration, not authentication of external evidence. Generic built-in readers remain conservative where their source format provides no such contract. Do not assign a shared physical clock domain solely because streams have equal timestamp values or units.
 
-If a downstream view reorders rows, set `source_order.preserved=False` and provide
-`original_index` as the source row index of each current row. Without that map,
-source-order timing checks abstain. Validate source fidelity with format-specific
-fixtures: the generic contract helper cannot know which ordering existed in a
-file it does not parse independently.
+A clock the adapter builds itself, such as a grid derived from index and a declared rate, carries `origin=generated` with `origin_evidence=adapter`; one the adapter only pattern-matches, such as a recorded column that lines up with `frame_index / fps`, is `origin_evidence=inferred` instead. Neither authorizes acquisition-timing metrics, which need `origin=capture` with `origin_evidence=producer`.
+
+If a downstream view reorders rows, set `source_order.preserved=False` and provide `original_index` as the source row index of each current row. Without that map, source-order timing checks abstain. Validate source fidelity with format-specific fixtures: the generic contract helper cannot know which ordering existed in a file it does not parse independently.
 
 ## The protocol
 

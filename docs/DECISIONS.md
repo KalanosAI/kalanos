@@ -33,11 +33,19 @@ A metric's bands assign a **severity** (`warning`, `critical`): an assessment of
 A `block` names its **route**:
 
 - `contract` — a declared invariant was violated with direct evidence (unreadable required payload, impossible shape, forbidden non-finite values). No calibration needed.
-- `statistical` — a threshold detector fired. It may block only when an accepted calibration manifest covers the metric's scope; otherwise it resolves to `review`. R07-07 enforces this by default and refuses disabling it. The legacy `calibrated_metrics` list is not authorization; accepted structured manifests must match the actual detector, thresholds, bindings and scope.
+- `statistical` — a threshold detector fired. It may block only when an accepted calibration manifest covers the metric's scope; otherwise it resolves to `review`. Calibration enforcement is always on and cannot be disabled. The legacy `calibrated_metrics` list is not authorization; accepted structured manifests must match the actual detector, thresholds, bindings and scope.
 
 ### Prevalence exempts nothing
 
 A blocking finding on every episode of a task is reported as a task trait; one on nearly every episode of the dataset as a dataset trait. Both are descriptive. The episodes stay blocked. The report cannot tell a recording convention from corruption in every episode; a scoped policy rule may exempt a finding explicitly.
+
+## Calibration
+
+A `statistical` block needs a manifest in the policy's `calibration_manifests` list, matched against the finding's exact run context: metric id and taxonomy type, the detector implementation and numerical runtime digest, the complete metric-policy thresholds digest, the effective binding digest after configuration resolution, and a scope digest covering requirements, execution, dictionary, the declared evaluation scope and adapter versions, and the decision policy itself (the manifest list and the deprecated `calibrated_metrics` name list are excluded from that digest, so it never matches against itself).
+
+A manifest must also be `accepted` by a named actor, not future-dated or expired, and declare independent episodes, real-fault validation, combined-policy validation and at least one validation session. The initial gate additionally requires at least 600 independent valid episodes and 100 real fault episodes, an exact one-sided 95% upper confidence bound on false blocks of at most 0.5%, and a recall lower confidence bound of at least 90%.
+
+Kalanos checks these declarations and digests; it does not authenticate the referenced validation report, the reviewer, or the labels behind `independent_episodes` and `real_fault_validation`. A matching accepted manifest is trusted configuration, not cryptographic proof. Any mismatch, revocation, expiry or missing acceptance leaves the finding at `review`.
 
 ## Compatibility fields
 

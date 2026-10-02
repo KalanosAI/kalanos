@@ -2,12 +2,7 @@
 
 Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer must do, and what a legacy file can and cannot provide.
 
-Report loading rejects duplicate episode IDs and reconciles each status count
-against episode decisions, adding identified failures and unresolved inventory
-to unknown. A published eligible share must match those counts; an omitted share
-remains readable. Diagnostic window counts also reconcile with the recorded
-window statuses and explicit unexamined-budget unknowns. Valid report shapes are
-unchanged; contradictory summaries are rejected rather than silently repaired.
+Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
 
 ## New top-level fields
 
@@ -32,7 +27,7 @@ unchanged; contradictory summaries are rejected rather than silently repaired.
 | `episodes[].streams[].frames` | A camera stream's shared read: rows requested, examined and missing, the sample plan and its parameters, and per frame its presentation time, shape, blur, clipped share and, for evidence frames, `luma_sha256`. `null` for a stream not read as camera footage. |
 | `findings[].consequence` | `block`, `review` or `report_only`. |
 | `findings[].route` | `contract` or `statistical` when `consequence` is `block`. |
-| `findings[].support` | `kind` (`whole_episode` or `intervals`), `index_space`, `intervals[]` with zero-based half-open `start`/`end_exclusive` and optional wider `support_start`/`support_end_exclusive`. Metrics that measure the whole episode carry `whole_episode`; no interval is ever invented. R07-05 localises flatline and spike evidence in source rows; SNR/spectral results retain `whole_episode`. |
+| `findings[].support` | `kind` (`whole_episode` or `intervals`), `index_space`, `intervals[]` with zero-based half-open `start`/`end_exclusive` and optional wider `support_start`/`support_end_exclusive`. Metrics that measure the whole episode carry `whole_episode`; no interval is ever invented. Flatline and spike evidence is localised in source rows; SNR/spectral results retain `whole_episode`. |
 
 ## Changed semantics
 
@@ -42,7 +37,7 @@ unchanged; contradictory summaries are rejected rather than silently repaired.
 - `gate.failing_episodes` is exactly the set of `blocked` episodes; validation rejects any other set.
 - Dataset `score.train_ready` is a function of `eligibility_counts` and nothing else: `false` if any blocked, `true` only if the inventory is complete, non-empty and all pass, `null` otherwise — with or without a letter gate. Validation rejects a value that disagrees.
 - `eligibility_counts.total = loaded + failed + unresolved`; failed and unresolved episodes count as `unknown`. `confirmed_eligible_share` and `readiness.score` are `null` while the inventory is incomplete.
-- `--tier metadata` reads no numeric payloads. The tier is enforced at the storage boundary for the LeRobot v2/v3 adapters: they read the parquet schema and project only `episode_index`, `timestamp` and `frame_index`; observation/action vectors never leave the file, and streams are yielded with their channel declarations and no payload. Camera video is not decoded or demuxed either: every vision metric reports `not_applicable` at this tier. Grading records `payload: skipped`, required numeric checks are `unknown`, and the default gate fails. A tier never lowers the requirements. Other adapters (HDF5, MCAP, tabular) do not yet project at the source; their payloads are read and then skipped at grading — tracked for R07-04/R07-08.
+- `--tier metadata` reads no numeric payloads. The tier is enforced at the storage boundary for the LeRobot v2/v3 adapters: they read the parquet schema and project only `episode_index`, `timestamp` and `frame_index`; observation/action vectors never leave the file, and streams are yielded with their channel declarations and no payload. Camera video is not decoded or demuxed either: every vision metric reports `not_applicable` at this tier. Grading records `payload: skipped`, required numeric checks are `unknown`, and the default gate fails. A tier never lowers the requirements. Other adapters (HDF5, MCAP, tabular) do not yet project at the source; their payloads are read and then skipped at grading.
 - `gate.task_traits` and `gate.dataset_traits` are descriptive; they no longer exempt episodes from blocking.
 - `gate.pruned_score` is the mean quality of non-blocked episodes: a candidate description, not a sufficiency claim.
 - Letter fields remain and drive nothing.
@@ -55,9 +50,9 @@ unchanged; contradictory summaries are rejected rather than silently repaired.
 
 ## Domain model additions (not serialised in the report yet)
 
-- `Stream.clock_info: ClockInfo` — `origin` (`capture`, `receive`, `publish`, `log`, `presentation`, `generated`, `simulation`, `unknown`), `origin_evidence` (`producer`, `adapter`, `inferred`, `none`), native unit/dtype, transforms. `ClockInfo.from_legacy(Clock.RECONSTRUCTED)` yields inferred generation, never certified capture. R07-04 populates it from adapters and exposes `clock`, `clock_info` and `source_order` on each graded stream. `tick_period_s` optionally expresses an adapter-generated grid. Legacy capture labels migrate with inferred evidence; they do not supply a producer declaration. Native ticks remain in `Stream.native_timestamps` during analysis and are omitted from the report JSON.
-- `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. R07-04 preserves LeRobot sample order; no sample timestamp sort remains.
-- `ChannelBinding` — `actuator`, `quantity`, `representation`, `unit`, `command`, `device`, `origin`, `status`, `validations[]`. R07-02 routes metrics through typed views built from these.
+- `Stream.clock_info: ClockInfo` — `origin` (`capture`, `receive`, `publish`, `log`, `presentation`, `generated`, `simulation`, `unknown`), `origin_evidence` (`producer`, `adapter`, `inferred`, `none`), native unit/dtype, transforms. `ClockInfo.from_legacy(Clock.RECONSTRUCTED)` yields inferred generation, never certified capture. Adapters populate it and expose `clock`, `clock_info` and `source_order` on each graded stream. `tick_period_s` optionally expresses an adapter-generated grid. Legacy capture labels migrate with inferred evidence; they do not supply a producer declaration. Native ticks remain in `Stream.native_timestamps` during analysis and are omitted from the report JSON.
+- `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. LeRobot sample order is preserved; no sample timestamp sort remains.
+- `ChannelBinding` — `actuator`, `quantity`, `representation`, `unit`, `command`, `device`, `origin`, `status`, `validations[]`. Metrics are routed through typed views built from these.
 
 ## Policy additions
 
@@ -72,7 +67,7 @@ binding:
   id: my-robot-v1
   features:                      # whole-feature assertions, the legacy shape
     observation.state: proprio.joint_position
-  channels: []                   # per-channel semantics (R07-02 consumes these)
+  channels: []                   # per-channel semantics, consumed by typed-view metrics
 requirements:
   id: numeric-core-v1
   required_families: [integrity]
@@ -100,9 +95,9 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 - `tests/legacy_reports/aloha_static_towel-048fef2-6.4.0-trimmed.json` — four episodes from the 048fef2 towel report (original SHA-256 `8001d3ce…`), two of them carrying the `train_ready: true` + gate-failing contradiction. Dataset-level fields are the original 50-episode values and intentionally do not reconcile with the four episodes; the fixture tests loading, not arithmetic.
 - `tests/legacy_reports/aloha_static_towel-43e0cb1-6.3.0-trimmed.json` — first episode from the supplied schema-6.3 report. See the adjacent README for source digest and trimming boundaries.
 
-## R07-05–R07-07 additions
+## Coverage, findings and calibration additions
 
-- Top-level and episode `coverage` ledgers; stream `coverage` rows. See `docs/R07-05-07.md` for denominators. Earlier schema-7 files may omit these and must show missing coverage, not zero coverage. `gate.coverage` remains a legacy grading summary.
+- Top-level and episode `coverage` ledgers; stream `coverage` rows. Earlier schema-7 files may omit these and must show missing coverage, not zero coverage. `gate.coverage` remains a legacy grading summary.
 - Metric `availability` is independent of graded `status`; `support` propagates to findings.
 - Finding `id`, `source_path`, `source_field`, `source_index`, `subject_level`, `evidence_strength` and `calibration` make subjects and promotion decisions inspectable. IDs identify a metric at a source subject; they are not waveform hashes.
 - `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
@@ -112,16 +107,6 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 
 ## Optional deeper diagnostics in 0.7.0
 
-`Report.diagnostics` is an optional version-1 diagnostic envelope with the plan,
-plan digest, implementation digest and addressed results. Each episode also
-retains its results in `episodes[].diagnostics`; validation requires agreement.
-Each result identifies its kind, configured id, episode/source subject,
-availability, measurements, evidence, support and report-only/review consequence.
-Window and visual counts reconcile; partial work is not silently complete.
-Existing schema-7 reports without these fields remain readable.
+`Report.diagnostics` is an optional version-1 diagnostic envelope with the plan, plan digest, implementation digest and addressed results. Each episode also retains its results in `episodes[].diagnostics`; validation requires agreement. Each result identifies its kind, configured id, episode/source subject, availability, measurements, evidence, support and report-only/review consequence. Window and visual counts reconcile; partial work is not silently complete. Existing schema-7 reports without these fields remain readable.
 
-The optional plan is part of execution identity; diagnostic review thresholds are
-part of policy identity. `Stream.source_identity` and its graded counterpart carry
-the adapter source scope even for cameras with no scalar channel bindings.
-`requirements.min_pass_windows` adds named dataset minimums. Diagnostic comparison
-changes appear separately in `Comparison.diagnostic_changes`.
+The optional plan is part of execution identity; diagnostic review thresholds are part of policy identity. `Stream.source_identity` and its graded counterpart carry the adapter source scope even for cameras with no scalar channel bindings. `requirements.min_pass_windows` adds named dataset minimums. Diagnostic comparison changes appear separately in `Comparison.diagnostic_changes`.

@@ -338,7 +338,7 @@ The same override can come from four places, merged per field:
 3. The `binding.features` section of a `--profile` bundle. From Python, `grade(path, bundle=...)`.
 4. A `kalanos-map.yaml` sidecar in the graded folder, or beside the graded file. `--no-sidecar` (or `sidecar=False`) ignores only this one.
 
-`--map` beats `--map-file`, which beats the bundle, which beats the sidecar. Two inputs at the same level that disagree stop the run with exit code 2; every lower-level assertion that lost is recorded in `report.binding_conflicts`. A map file or sidecar can only assert mappings. A bundle also carries the evaluation scope (`requirements`), the decision `policy` and the execution `tier`, each with its own identity recorded in `report.run`; see [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/SCHEMA-7.md](docs/SCHEMA-7.md). Map files and sidecars use this shape:
+`--map` beats `--map-file`, which beats the bundle, which beats the sidecar. Two inputs at the same level that disagree stop the run with exit code 2; every lower-level assertion that lost is recorded in `report.binding_conflicts`. A map file or sidecar can only assert mappings. A bundle also carries the evaluation scope (`requirements`), the decision `policy` and the execution `tier`, each with its own identity recorded in `report.run`; see [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/SCHEMA.md](docs/SCHEMA.md). Map files and sidecars use this shape:
 
 ```yaml
 schema_version: 1
@@ -467,7 +467,7 @@ An explicit Python `policy=` wins over a bundle policy. Otherwise `policy.path`
 loads relative to the bundle file, followed by the configured/default policy when
 no path is supplied. A relative policy path in an in-memory bundle is rejected.
 
-See [the R07-02 implementation contract](docs/R07-02.md) for the validation shape,
+See [the requirements profiles reference](docs/PROFILES.md) for the validation shape,
 test matrix, migration considerations and remaining release boundaries.
 
 ### Clock provenance and recorded order
@@ -509,7 +509,7 @@ Previously saved reports are not rewritten. Adapters with an authoritative
 producer capture contract can supply explicit `ClockInfo`; there is no automatic
 clock promotion through a channel mapping or bundle declaration.
 
-See [the R07-04 clock contract](docs/R07-04.md) for code changes, test cases,
+See [the adapter clock contract](docs/ADAPTERS.md) for code changes, test cases,
 source-format limits and release checks.
 
 
@@ -634,7 +634,7 @@ checks the declared evidence and matching identities; it does not authenticate t
 reviewer or independently relabel the corpus. Synthetic benchmark results and the
 legacy `calibrated_metrics` name list never grant approval. `enforce_calibration:
 false` is rejected. Missing, revoked, expired, mismatched or insufficient evidence
-leaves the candidate at review. See [the combined implementation contract](docs/R07-05-07.md)
+leaves the candidate at review. See [Calibration](docs/DECISIONS.md#calibration)
 for manifest fields, test cases and release checks.
 
 The default `--fail-on blocked,unknown` permits review. Use
@@ -653,7 +653,7 @@ or required unknown evidence remains.
 reference. Quiet holds within that reference retain measurements without an SNR
 penalty. Missing reference evidence leaves a diagnostic review candidate; it
 cannot authorize a statistical block. Boolean flags receive missing-value checks
-and remain excluded from SNR. See [the 0.7.0 release contract](docs/RELEASE-0.7.0.md)
+and remain excluded from SNR. See [the noise-floor reference](docs/METRICS.md)
 and [binding reference configuration](docs/PROFILES.md#noise-reference-evidence).
 
 Schema-7 integrations must preserve `scope`, `eligibility_counts`, `readiness`,
@@ -679,8 +679,7 @@ kalanos diagnostics summarize-study labelled-outcomes.json
 Adapt selectors and budgets to the recording before running the example. Sampled
 visual evidence is distinct from checking every frame. Minimum passing training
 windows belong in `requirements.min_pass_windows`; overlapping windows are not
-independent demonstrations. See [the diagnostic contract](docs/DIAGNOSTICS-0.7.0.md)
-and [supported capabilities](docs/CAPABILITIES.md) for prerequisites, policy
-examples, format limits and validation controls.
+independent demonstrations. See [the diagnostic contract](docs/DIAGNOSTICS.md)
+for prerequisites, policy examples, format limits and validation controls.
 
 Review/selection/export and the training-reader pilot remain planned for **0.7.1**.
