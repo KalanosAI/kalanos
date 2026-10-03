@@ -1,12 +1,15 @@
 """Synthetic acceptance fixtures ONLY; these are not validation results or releases."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 from kalanos.analysis.models.binding import (
     BindingSection,
     Bundle,
     ChannelBinding,
     NoiseFloor,
+    Quantity,
+    Representation,
     Validation,
 )
 from kalanos.analysis.models.calibration import CalibrationManifest
@@ -16,7 +19,7 @@ from kalanos.assets.policy import load_default_policy
 
 
 def synthetic_manifest(context, **changes):
-    data = dict(
+    data: dict[str, Any] = dict(
         id="test-only-" + content_digest(context)[:16],
         **context,
         status="accepted",
@@ -73,8 +76,8 @@ def grade_with_test_calibration(path, *, policy=None, **kwargs):
                         taxonomy_type=b.taxonomy_type,
                         index=b.index,
                         source_identity=b.source_identity,
-                        quantity="position",
-                        representation="continuous",
+                        quantity=Quantity.POSITION,
+                        representation=Representation.CONTINUOUS,
                         unit="rad",
                         noise_floor=floor,
                     )

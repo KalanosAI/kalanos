@@ -32,6 +32,9 @@ def support_for(indices, ranges, *, window=0):
             continue
         lo = previous = positions[0]
         for current in positions[1:] + [None]:
+            # only the trailing sentinel sets these to None, and it ends the loop
+            assert lo is not None
+            assert previous is not None
             if current is not None and current == previous + 1:
                 previous = current
                 continue

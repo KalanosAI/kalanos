@@ -5,7 +5,11 @@ from typing import Literal
 from pydantic import Field
 
 from kalanos.analysis.models.diagnostics import StrictModel
-from kalanos.analysis.models.eligibility import Sufficiency, SufficiencyCheck
+from kalanos.analysis.models.eligibility import (
+    Sufficiency,
+    SufficiencyCheck,
+    SufficiencyStatus,
+)
 from kalanos.analysis.models.provenance import content_digest
 
 
@@ -36,11 +40,11 @@ def window_sufficiency(base, diagnostics, decisions, inventory, requirements):
             )
         )
         status = (
-            "sufficient"
+            SufficiencyStatus.SUFFICIENT
             if observed >= minimum
-            else "unknown"
+            else SufficiencyStatus.UNKNOWN
             if incomplete
-            else "insufficient"
+            else SufficiencyStatus.INSUFFICIENT
         )
         checks.append(
             SufficiencyCheck(
@@ -57,11 +61,11 @@ def window_sufficiency(base, diagnostics, decisions, inventory, requirements):
         )
     states = {c.status.value for c in checks}
     status = (
-        "insufficient"
+        SufficiencyStatus.INSUFFICIENT
         if "insufficient" in states
-        else "unknown"
+        else SufficiencyStatus.UNKNOWN
         if "unknown" in states or not states
-        else "sufficient"
+        else SufficiencyStatus.SUFFICIENT
     )
     return Sufficiency(status=status, checks=checks)
 

@@ -3,6 +3,7 @@
 import math
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Any
 
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 from kalanos.analysis.models.provenance import content_digest
@@ -151,7 +152,7 @@ def apply_calibration(findings, policies, run, scope, producer):
             "channel": f.source_index if f.source_index is not None else f.channel,
             "metric": f.metric_id,
         }
-        updates = {"id": content_digest(key)}
+        updates: dict[str, Any] = {"id": content_digest(key)}
         if (
             f.severity == Severity.CRITICAL
             and (entry.consequence or Consequence.BLOCK) == Consequence.BLOCK

@@ -2,12 +2,13 @@
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:  # Python 3.10 development environment
+else:
     import tomli as tomllib
 
 

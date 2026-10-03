@@ -113,7 +113,9 @@ def test_a_header_stamped_topic_does_not_imply_capture_origin():
     streams = _episode_streams()
 
     assert streams["/joint_states"].clock is Clock.UNKNOWN
-    assert not streams["/joint_states"].clock_info.certifies_acquisition
+    clock_info = streams["/joint_states"].clock_info
+    assert clock_info is not None
+    assert not clock_info.certifies_acquisition
     assert streams["/cmd_vel"].clock is Clock.LOG
 
 

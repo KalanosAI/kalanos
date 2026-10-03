@@ -6,6 +6,7 @@ whole-feature assertion, with both values recorded on the channel.
 """
 
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -437,10 +438,15 @@ def typed_views(stream: Stream) -> list[Stream]:
         elif taxonomy != stream.taxonomy_type:
             mapping_source = (
                 MappingSource.OVERRIDE
-                if any(c.binding.origin == BindingOrigin.BUNDLE for c in channels)
+                # every channel here passed the binding-is-None check above
+                if any(
+                    c.binding.origin == BindingOrigin.BUNDLE
+                    for c in channels
+                    if c.binding is not None
+                )
                 else MappingSource.DECLARED_NAMES
             )
-        updates = dict(
+        updates: dict[str, Any] = dict(
             taxonomy_type=taxonomy,
             channels=channels,
             payload=payload,
@@ -463,7 +469,7 @@ def resolve_episodes(
 ) -> list[Episode]:
     """Shared interpretation for raw episodes in grade and benchmark."""
 
-    by_feature = {o.feature: o for o in overrides}
+    by_feature: dict[str | None, MappingOverride] = {o.feature: o for o in overrides}
     return [
         episode.model_copy(
             update={

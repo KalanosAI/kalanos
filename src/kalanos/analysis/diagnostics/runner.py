@@ -12,23 +12,24 @@ from kalanos.analysis.diagnostics.vision import vision
 from kalanos.analysis.diagnostics.windows import windows
 from kalanos.analysis.identities import analysis_digest
 from kalanos.analysis.metrics.vision import is_camera_footage
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
+from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.metrics import Level
 from kalanos.analysis.models.provenance import content_digest
-from kalanos.analysis.models.scoring import Finding
+from kalanos.analysis.models.scoring import Finding, Severity
 
 
 def execute(kind, spec, episode, operation, *, skipped=False, subject=None):
     """Retain prerequisite/budget/error distinctions and reject nonfinite output."""
-    base = dict(
-        id=spec.id,
-        kind=kind,
-        episode_id=episode.id if episode else None,
-        subject=subject or {},
-    )
+    episode_id = episode.id if episode else None
     if skipped:
         return DiagnosticResult(
-            **base,
-            availability="skipped",
+            id=spec.id,
+            kind=kind,
+            episode_id=episode_id,
+            subject=subject or {},
+            availability=Availability.SKIPPED,
             reason="metadata tier does not execute payload diagnostics",
         )
     try:
@@ -36,14 +37,26 @@ def execute(kind, spec, episode, operation, *, skipped=False, subject=None):
         json.dumps(measured.model_dump(), allow_nan=False)
         return measured
     except Unavailable as exc:
-        return DiagnosticResult(**base, availability="unavailable", reason=str(exc))
+        return DiagnosticResult(
+            id=spec.id,
+            kind=kind,
+            episode_id=episode_id,
+            subject=subject or {},
+            availability=Availability.UNAVAILABLE,
+            reason=str(exc),
+        )
     except Exception as exc:
         return DiagnosticResult(
-            **base, availability="error", reason=f"{type(exc).__name__}: {exc}"
+            id=spec.id,
+            kind=kind,
+            episode_id=episode_id,
+            subject=subject or {},
+            availability=Availability.ERROR,
+            reason=f"{type(exc).__name__}: {exc}",
         )
 
 
-def review_findings(results):
+def review_findings(results: list[DiagnosticResult]):
     """Convert explicit configured review triggers into ordinary review findings.
 
     These first-version diagnostics cannot authorize a statistical block. They
@@ -61,19 +74,19 @@ def review_findings(results):
                 ),
                 metric_id=f"diagnostics.{r.kind}.{r.id}",
                 family={"tracking": "consistency"}.get(r.kind, r.kind),
-                severity="critical",
+                severity=Severity.CRITICAL,
                 value=1,
                 unit="review trigger",
                 points=0,
                 episode_id=r.episode_id,
-                subject_level="episode",
+                subject_level=Level.EPISODE,
                 source_path=r.subject.get("source_path"),
                 source_field=r.subject.get("feature"),
                 source_index=r.subject.get("index"),
                 instance=r.subject.get("instance"),
                 evidence=evidence,
                 support=r.support,
-                consequence="review",
+                consequence=Consequence.REVIEW,
                 route=None,
                 calibration={
                     "accepted": False,

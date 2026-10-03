@@ -439,8 +439,12 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
     smooth_values, residual_values = smoothed.filter(valid), residual.filter(valid)
     if len(smooth_values) < 2:
         return not_applicable("too few finite contiguous windows survive smoothing")
-    signal_variance = float(smooth_values.var())
-    noise_variance = float(residual_values.var())
+    raw_signal_variance, raw_noise_variance = smooth_values.var(), residual_values.var()
+    # both series stay Float64 throughout, so var() returns a plain float here
+    assert isinstance(raw_signal_variance, (int, float))
+    assert isinstance(raw_noise_variance, (int, float))
+    signal_variance = float(raw_signal_variance)
+    noise_variance = float(raw_noise_variance)
     if not all(math.isfinite(v) and v >= 0 for v in (signal_variance, noise_variance)):
         return not_applicable("component variance is not finite")
     signal_std, residual_std = math.sqrt(signal_variance), math.sqrt(noise_variance)

@@ -14,6 +14,7 @@ from kalanos.analysis.diagnostics.common import (
     result,
     select,
 )
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.domain import FramePayload
 
 
@@ -163,7 +164,7 @@ def windows(episode, spec, findings=(), visual=()):
                         "blocked" if finding.consequence.value == "block" else "review"
                     )
                     reasons.append(f"finding:{finding.id or finding.metric_id}")
-        status = max(states, key=_PRIORITY.get)
+        status = max(states, key=_PRIORITY.__getitem__)
         counts[status] += 1
         records.append(
             {
@@ -198,7 +199,7 @@ def windows(episode, spec, findings=(), visual=()):
         },
     )
     if total > budget:
-        out.availability = "skipped"
+        out.availability = Availability.SKIPPED
         out.reason = (
             "window/probe budget reached; unevaluated candidates remain unknown"
         )

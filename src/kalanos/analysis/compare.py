@@ -166,6 +166,9 @@ def compare_reports(old, new):
     for key in sorted(before.keys() & after.keys()):
         a, b = before[key], after[key]
         if a.eligibility != b.eligibility or a.score.score != b.score.score:
+            # Report._decisions_agree refuses episodes without eligibility
+            assert a.eligibility is not None
+            assert b.eligibility is not None
             episode_changes.append(
                 {
                     "episode_id": key,

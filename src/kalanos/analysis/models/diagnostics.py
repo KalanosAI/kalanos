@@ -344,9 +344,14 @@ class DiagnosticResult(StrictModel):
                     record.get(k)
                     for k in ("grid_start", "anchor_grid_index", "grid_end_exclusive")
                 ]
-                if any(type(v) is not int or v < 0 for v in bounds) or not (
-                    bounds[0] <= bounds[1] < bounds[2]
-                ):
+                if any(type(v) is not int or v < 0 for v in bounds):
+                    raise ValueError("window record has invalid grid bounds")
+                assert (
+                    isinstance(bounds[0], int)
+                    and isinstance(bounds[1], int)
+                    and isinstance(bounds[2], int)
+                )
+                if not (bounds[0] <= bounds[1] < bounds[2]):
                     raise ValueError("window record has invalid grid bounds")
                 if bounds[0] in starts:
                     raise ValueError("duplicate window record address")

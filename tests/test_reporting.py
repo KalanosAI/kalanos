@@ -704,10 +704,14 @@ def test_report_grades_integrity_without_unverified_acquisition_timing():
     assert armc.channels, "armC's arm stream lost its channels somewhere in the walk"
     assert armc.metrics["drop_rate"].status == MetricStatus.NOT_APPLICABLE
     assert armc.metrics["recorded_drop_estimate"].status == MetricStatus.REPORT_ONLY
-    assert armc.metrics["recorded_drop_estimate"].value > 0.05
+    recorded_drop_estimate = armc.metrics["recorded_drop_estimate"].value
+    assert recorded_drop_estimate is not None
+    assert recorded_drop_estimate > 0.05
 
     assert report.score.score == episode.score.score
-    assert report.score.score > 85
+    report_score = report.score.score
+    assert report_score is not None
+    assert report_score > 85
 
     # Missing provenance must not turn a recorded-axis estimate into a
     # critical acquisition finding. The real channel finding keeps its address.

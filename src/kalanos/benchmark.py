@@ -12,6 +12,7 @@ and counts where a metric that graded good before now grades warning or critical
 # Built-in
 import importlib.metadata
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -665,7 +666,7 @@ def benchmark_dataset(
     policy: Policy | None = None,
     sample: int,
     dictionary: Dictionary | None = None,
-    bundle: Bundle | UPath | str | None = None,
+    bundle: Bundle | UPath | str | os.PathLike[str] | None = None,
     mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: UPath | None = None,
     sidecar: bool = True,
@@ -802,7 +803,7 @@ def run_benchmark(
     sample: int = DEFAULT_SAMPLE,
     policy: Policy | None = None,
     dictionary: Dictionary | None = None,
-    bundle: Bundle | UPath | str | None = None,
+    bundle: Bundle | UPath | str | os.PathLike[str] | None = None,
     mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: UPath | None = None,
     sidecar: bool = True,

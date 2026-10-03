@@ -4,6 +4,7 @@ import bisect
 import math
 from fractions import Fraction
 
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import DiagnosticResult
 from kalanos.analysis.models.domain import FramePayload
 
@@ -219,6 +220,6 @@ def result(kind, spec, episode=None, **kwargs):
         id=spec.id,
         kind=kind,
         episode_id=episode.id if episode else None,
-        availability="computed",
+        availability=Availability.COMPUTED,
         **kwargs,
     )

@@ -12,6 +12,7 @@ from kalanos.analysis.diagnostics.common import (
     select,
     validated,
 )
+from kalanos.analysis.models.coverage import Availability
 
 
 def cohort(episodes, spec, decisions):
@@ -301,7 +302,7 @@ def cohort(episodes, spec, decisions):
     )
 
     if total_pairs > comparisons:
-        measured.availability = "skipped"
+        measured.availability = Availability.SKIPPED
         measured.reason = (
             "pair-comparison budget reached; partial descriptive results retained"
         )

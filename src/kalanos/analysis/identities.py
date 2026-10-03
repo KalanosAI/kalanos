@@ -51,6 +51,8 @@ def detector_versions():
             continue  # Third-party transitive implementation identity is unknown.
         try:
             module = inspect.getmodule(entry.func)
+            if module is None:
+                continue  # Missing implementation identity cannot authorize a block.
             body = inspect.getsource(module)
         except (OSError, TypeError):
             continue  # Missing implementation identity cannot authorize a block.

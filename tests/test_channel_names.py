@@ -54,7 +54,9 @@ def channel_taxonomy(stream_type: str, name: str) -> str:
         channels=[Channel(name=name)],
     )
     resolved = resolve_stream(stream, dictionary=load_default_dictionary())
-    return resolved.channels[0].binding.taxonomy_type
+    binding = resolved.channels[0].binding
+    assert binding is not None
+    return binding.taxonomy_type
 
 
 def test_names_declared_as_a_list_are_read():

@@ -245,5 +245,7 @@ def grade(
         if source_before != source_after:
             raise SourceUnavailable("source changed during analysis; report withheld")
         source_after.revision = source.revision
+        # run_info above is never None, and pipeline.run threads it through unchanged
+        assert report.run is not None
         report.run.source = source_after
     return report

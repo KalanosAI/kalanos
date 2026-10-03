@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from kalanos.analysis.models.domain import ClockInfo, Stream
 
 
-_SECONDS_PER_UNIT = {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}
+_SECONDS_PER_UNIT: dict[str | None, float] = {
+    "s": 1.0,
+    "ms": 1e-3,
+    "us": 1e-6,
+    "ns": 1e-9,
+}
 
 
 @dataclass(frozen=True)

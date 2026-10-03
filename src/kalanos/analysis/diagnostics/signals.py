@@ -2,6 +2,7 @@
 
 import math
 import statistics
+from typing import cast
 
 from kalanos.analysis.diagnostics.common import (
     Unavailable,
@@ -38,7 +39,7 @@ def timing(episode, spec, review=None):
     skew, ages, misses = [], [], []
     matches = []
     for i, time in enumerate(lt):
-        j = nearest(rt, time)
+        j = cast(int, nearest(rt, time))
         delta = rt[j] - time
         if abs(delta) <= spec.tolerance_s:
             matches.append([rows[i], rr[j]])
@@ -67,7 +68,9 @@ def timing(episode, spec, review=None):
         fit = {
             "offset_at_left_origin_s": intercept,
             "remaining_drift_ppm": slope * 1e6,
-            "residual_rms_s": math.sqrt(statistics.mean(v * v for v in residuals)),
+            "residual_rms_s": math.sqrt(
+                statistics.mean(float(v * v) for v in residuals)
+            ),
             "slope_standard_error_ppm": math.sqrt(
                 sum(v * v for v in residuals) / (len(x) - 2) / ss
             )
@@ -143,8 +146,8 @@ def tracking(episode, spec, review=None):
     command, state = numeric(left, lc, lp), numeric(right, rc, rp)
     raw, adjusted, samples, bad = [], [], [], []
     for i, (time, value) in enumerate(zip(lt, command, strict=False)):
-        base = nearest(rt, time)
-        target = nearest(rt, time + spec.response_delay_s)
+        base = cast(int, nearest(rt, time))
+        target = cast(int, nearest(rt, time + spec.response_delay_s))
         if not finite(value) or any(
             abs(rt[j] - t) > spec.tolerance_s or not finite(state[j])
             for j, t in ((base, time), (target, time + spec.response_delay_s))
