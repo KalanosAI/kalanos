@@ -39,6 +39,7 @@ def timing(episode, spec, review=None):
     skew, ages, misses = [], [], []
     matches = []
     for i, time in enumerate(lt):
+        # ordered() requires two finite timestamps per axis, so nearest always finds one
         j = cast(int, nearest(rt, time))
         delta = rt[j] - time
         if abs(delta) <= spec.tolerance_s:
@@ -146,6 +147,7 @@ def tracking(episode, spec, review=None):
     command, state = numeric(left, lc, lp), numeric(right, rc, rp)
     raw, adjusted, samples, bad = [], [], [], []
     for i, (time, value) in enumerate(zip(lt, command, strict=False)):
+        # ordered() requires two finite timestamps per axis, so nearest always finds one
         base = cast(int, nearest(rt, time))
         target = cast(int, nearest(rt, time + spec.response_delay_s))
         if not finite(value) or any(
