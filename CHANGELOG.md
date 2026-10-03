@@ -1,161 +1,141 @@
 # Changelog
 
-## 0.7.0
+All notable changes to Kalanos are listed here, newest first.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
+Before 1.0, a minor version can break the report schema or the CLI.
 
-The decision-integrity and optional deeper-diagnostics release. Report schema 7.0.0.
+## [0.7.0] - 2026-10-03
 
-### Contextual noise evidence, real-data fixes and release packaging (R07-03, R07-08/09)
+Report schema 7.0.0.
+Every episode now gets one decision, and the readiness score, the gate and the exit code all follow from it.
 
-- Complete R07-03 contextual smooth/residual SNR evidence with scoped native-scale
-  reference validation. Preserve component measurements; a quiet hold within its
-  validated reference receives no SNR penalty. Unassessed SNR cannot be promoted
-  by a matching statistical manifest alone.
-- Count Boolean nulls in the missing-value check, correcting numeric coverage for
-  datasets carrying Boolean terminal flags. Boolean data remains outside SNR.
-- Schema-7 publisher and Action companion updates ship alongside; package and
-  CITATION versions agree; release metadata is checked before tagging. See
-  `docs/RELEASE-0.7.0.md` and the real-data record in `docs/ACCEPTANCE-0.7.0.md`.
-- Review/selection/export and the training-reader pilot remain planned for 0.7.1.
+### Breaking
 
-### Optional deeper diagnostics
+- Each episode carries one `eligibility` (`pass`, `blocked`, `review` or `unknown`), decided after every metric runs; `train_ready`, the counts, the gate and the exit code derive from it, and `score >= 70` no longer decides anything. ([#17](https://github.com/KalanosAI/kalanos/pull/17), [#19](https://github.com/KalanosAI/kalanos/pull/19))
+- `readiness` is `null`, with reasons, whenever an episode is `review` or `unknown` or the inventory is incomplete. ([#17](https://github.com/KalanosAI/kalanos/pull/17))
+- An uncalibrated critical statistical finding sends its episode to `review` instead of blocking it; blocking requires a structured calibration manifest, and `enforce_calibration: false` is rejected. ([#24](https://github.com/KalanosAI/kalanos/pull/24))
+- Capture timing metrics (`effective_hz`, `dt_jitter_ms`, `drop_rate`) abstain unless the producer proves its timestamps are capture times, which no built-in reader does yet; rows keep their source order and are never sorted. ([#23](https://github.com/KalanosAI/kalanos/pull/23))
+- Episodes inside a container are always named `source::episode`, so a single-episode LeRobot export changes id from `root` to `root::episode_000000`. ([#21](https://github.com/KalanosAI/kalanos/pull/21))
+- An incomplete inventory (a refused source, or declared episodes that never load) fails the default gate. ([#19](https://github.com/KalanosAI/kalanos/pull/19), [#21](https://github.com/KalanosAI/kalanos/pull/21))
+- `kalanos grade` exits `0` for a clean audit, `1` when `--fail-on` trips and `2` for a configuration or operational error. ([#17](https://github.com/KalanosAI/kalanos/pull/17))
 
-- Add explicit stream-pair timing and event-based offset/drift evidence; validated
-  absolute/delta/rate command response; a separate dimensionless motion metric.
-- Add bounded sampled video inspection, media-segment/count checks, frame-level
-  blur/exposure/repetition evidence, and full versus sampled visual coverage.
-- Count declared training windows with source support, missing evidence and work
-  budgets; evaluate minimum passing-window requirements separately from quality.
-- Execute dataset cohorts for occupancy, effective dimension, trajectory
-  repetition, reviewed phase balance, outliers and optional session uncertainty.
-- Keep review thresholds in decision policy and measurement/execution facts in
-  the diagnostic plan. Preserve default numeric behavior and calibration guards.
-- Expose identified diagnostics in JSON/YAML/HTML, inspect, terminal summaries
-  and comparison. Add draft-only study summaries and the numeric dependency extra.
-- See `docs/DIAGNOSTICS-0.7.0.md` and `docs/CAPABILITIES.md` for exact supported
-  inputs, conservative abstention, controls and remaining limits.
+### Added
 
-### Video quality
+- Vision metrics for camera streams: `sharpness_score`, `exposure_shift_pct`, `exposure_level`, `frozen_frame_pct` and `frame_count_vs_timebase`, with `--vision-samples` and `--full-frame-scan`. ([#29](https://github.com/KalanosAI/kalanos/pull/29))
+- `velocity_spike_pct` and `log_dimensionless_jerk` motion metrics on joint positions, report-only. ([#30](https://github.com/KalanosAI/kalanos/pull/30))
+- `kalanos benchmark`, which measures how often each metric fires on reference datasets and how often it catches an injected defect. ([#15](https://github.com/KalanosAI/kalanos/pull/15))
+- `--map`, `--map-file` and a `kalanos-map.yaml` sidecar to type a source field for one run, recorded on `report.mapping_overrides`. ([#16](https://github.com/KalanosAI/kalanos/pull/16))
+- `--profile` bundles with separate binding, requirements, policy and execution sections, per-channel bindings, and `--tier metadata|standard|full`. ([#17](https://github.com/KalanosAI/kalanos/pull/17), [#22](https://github.com/KalanosAI/kalanos/pull/22))
+- `kalanos inspect`, `kalanos compare` and `kalanos profiles list|show|validate`, with `kalanos.compare` and `kalanos.load_report` in the library; `inspect` and `compare` also read 6.3, 6.4 and 6.5 reports. ([#24](https://github.com/KalanosAI/kalanos/pull/24))
+- `--hash-source` records the byte identity of local sources and refuses a source that changes during the run. ([#24](https://github.com/KalanosAI/kalanos/pull/24))
+- Clock provenance (`clock_info`, `source_order`) on every stream, and report-only `recorded_hz`, `recorded_dt_spread_ms` and `recorded_drop_estimate`. ([#23](https://github.com/KalanosAI/kalanos/pull/23))
+- A coverage ledger per episode and dataset, and findings localized to source-row intervals. ([#24](https://github.com/KalanosAI/kalanos/pull/24))
+- Contextual SNR that separates the smooth signal from the residual and accepts a validated `noise_floor` reference. ([#25](https://github.com/KalanosAI/kalanos/pull/25))
+- Optional deeper diagnostics, configured in the bundle: stream-pair timing, command response, sampled video, motion shape, training windows and dataset cohorts, with the new `numeric` extra and `kalanos diagnostics summarize-study`. ([#26](https://github.com/KalanosAI/kalanos/pull/26))
+- Dictionary categories, so each stream in the report carries its category and group. ([#28](https://github.com/KalanosAI/kalanos/pull/28))
+- `Bundle` and `ExecutionTier` exported from `kalanos`, and `--profile` accepts the preset names that `profiles list` prints.
 
-- Grade camera streams with the `vision` metrics: `sharpness_score` (the share of
-  native-resolution edge energy a re-blur removes), `exposure_shift_pct` (frames
-  exposed unlike their camera's typical frame), `exposure_level` (reported, never
-  graded), `frozen_frame_pct` (repeats while an action stream moves, scaled by
-  contrast) and `frame_count_vs_timebase` (container packets against timestamps).
-  Depth streams are not cameras.
-- Read 10 evenly spaced frames per camera by default, each decoded once and shared
-  by every vision metric. `--vision-samples` and `--full-frame-scan`, the
-  `KALANOS_VISION_SAMPLES` and `KALANOS_FULL_FRAME_SCAN` variables, and the
-  `vision_samples` and `full_frame_scan` arguments of `grade()` override the
-  bundle; `--tier full` always reads every frame. The resolved settings are part
-  of the execution identity.
-- The vision metrics grade only under a scope requiring `sampled_video_quality` or
-  `video_quality`, and feed those capabilities and the coverage ledger. A camera
-  whose read stops short of its requested frames is not sampled.
-- Configure every camera read once, in a top-level `vision` section of the bundle
-  (`sample_frames`, `full_frame_scan`, `max_decode_frames`, `max_pixels`, previews
-  and exposure levels). `diagnostics.vision` is now a bool that publishes this
-  read; a bundle that sets the section under `diagnostics.vision` no longer
-  validates. The default sample is 10 frames, down from 96.
-- Record each camera's read once, as `GradedStream.frames`: rows requested,
-  examined and missing, and per frame its presentation time, shape, blur, clipped
-  share and, for evidence frames, a luminance SHA-256. Vision results carry
-  support intervals and, when graded warning or critical, a worst-frame
-  thumbnail. Decode caps and decoder failures keep the frames already read.
-- Compare each camera across its episodes in `Report.cameras`, raising
-  `vision.blur_vs_camera` and `vision.exposure_vs_camera` findings.
-- Calibrate the `sharpness_score`, `exposure_shift_pct` and `frozen_frame_pct`
-  bands on lerobot/pusht, lerobot/cmu_stretch and lerobot/aloha_static_towel; see
-  `docs/METRICS.md`.
-- `kalanos benchmark` injects blur, clipping and frozen frames into a
-  native-resolution copy of each camera, only under a scope that grades vision.
-  `kalanos.testing` adds `blur_frames`, `clip_frames`, `Defect.BLUR` and
-  `Defect.CLIPPED`, and `stream_context` takes `vision_samples`,
-  `full_frame_scan` and `episode_streams`.
+### Changed
 
-### Diagnostic correctness fixes
+- JSON reports are written compactly. ([#31](https://github.com/KalanosAI/kalanos/pull/31))
+- Boolean channels count toward `missing_pct`. ([#25](https://github.com/KalanosAI/kalanos/pull/25))
+- Task and dataset traits are descriptive only; a finding on every episode still blocks. ([#17](https://github.com/KalanosAI/kalanos/pull/17))
 
-- Match the consumed channel before propagating findings into training windows;
-  a defect on an unused channel no longer changes those windows' status.
-- Use exact rational native-clock/grid comparisons for windows, including declared
-  clock transforms, age and gap limits. Preserve causal matching without an
-  epsilon that could admit future samples. Reported times remain JSON numbers.
-- Reconcile every episode-status count with recorded decisions and failed or
-  unresolved inventory. Reject duplicate episode IDs and incorrect published
-  eligible shares. Missing optional shares remain readable.
-- Reconcile window summaries with complete, uniquely addressed window records
-  and explicit unexamined-budget unknowns; reject contradictory imported evidence.
-- Clarify that missing diagnostic extras affect eligibility only when the
-  corresponding capability is required. Package and report schema versions stay
-  0.7.0 and 7.0.0 respectively.
+### Fixed
 
-### Contract (R07-01, R07-03 interfaces, R07-02/04/05 models)
+- Float32 frame-number timestamps are read as a reconstructed clock, so timing metrics no longer grade rounding noise. ([#14](https://github.com/KalanosAI/kalanos/pull/14))
+- Training windows ignore defects on channels they do not consume, and match native clocks exactly. ([#27](https://github.com/KalanosAI/kalanos/pull/27))
+- Episode counts reconcile with recorded decisions and with failed or unresolved inventory. ([#27](https://github.com/KalanosAI/kalanos/pull/27))
 
-- One authoritative `episodes[].eligibility` (`pass | blocked | review | unknown`) under a named scope, decided once after every metric runs. Every dataset count, the gate, the CLI exit code and the compatibility `train_ready` derive from it; a report whose surfaces disagree fails validation.
-- `score >= 70` no longer decides anything. `train_ready` mirrors eligibility (`true`/`false`/`null`).
-- Task and dataset traits are descriptive; prevalence no longer exempts an episode from blocking.
-- Findings carry `consequence` and `route` separately from severity, and `support` (whole-episode or explicit half-open sample intervals).
-- `readiness` is `null` with reasons whenever any episode is `review` or `unknown`, the inventory is incomplete or empty, or a passing episode lacks a score. Formula id recorded.
-- `eligibility_counts` always published; `sufficiency` evaluated against explicit requirements (`min_pass_episodes` and `min_pass_windows` in this release).
-- `producer`, `run` (configuration identities with content digests, source evidence with explicit hash scope), `scope`, `inventory`, `binding_conflicts` recorded.
-- Removed `gate.pruned_grade` and `gate.train_ready_after_pruning`.
-- Domain: `ClockInfo` (origin incl. `publish` and `presentation`, origin evidence), `SourceOrder`, `ChannelBinding` with separate actuator kind, quantity, representation, unit and command semantics. Adapters populate these in R07-04/02.
-- Policy: `MetricPolicy.consequence`/`route`, `Policy.enforce_calibration` and legacy `calibrated_metrics` were introduced here; R07-07 below enables enforcement and replaces name-list authorization with structured manifests.
+### Removed
 
-### Contract corrections (branch review round 2)
+- `gate.pruned_grade` and `gate.train_ready_after_pruning`. ([#17](https://github.com/KalanosAI/kalanos/pull/17))
 
-- Inventory: a declared episode that never loads is `inventory.unresolved`, counted as `unknown`; `complete` is derived, never assumed; readiness and the eligible share are null while the denominator is unresolved; the default gate fails an incomplete audit; `run.completion` is `partial`.
-- Every stream records `evaluation.payload`; under `numeric-core` a stream with channels that was not read (`missing_input`, `skipped`, `error`) makes its episode `unknown`. One stream's result never covers another stream.
-- `--tier metadata` is an execution boundary: no numeric payload is fetched, required checks are `unknown`, the default gate fails.
-- Dataset `score.train_ready` derives from the counts and inventory in assembly, with or without a letter gate; validation rejects a contradiction.
-- `run.binding` digests the effective mapping after precedence (an argument override changes it); `run.bundle` identifies the declared file; the dictionary digest covers full content; `run.execution` records tier and limits.
-- Same-priority mapping conflicts are refused wherever they occur: repeated `--map` flags, duplicate YAML keys (strict loader for bundles and mapping files), and disagreements below the winning level.
-- A bundle's relative `policy.path` resolves against the bundle's directory; missing or malformed policies are `ConfigurationError` → exit 2.
+## [0.6.5] - 2026-09-28
 
-### Contract corrections (branch review round 3)
+### Changed
 
-- Inventory: an adapter that refuses part-way keeps the episodes it yielded and the count it declared; the gap is `unresolved`; a refused source is listed in `inventory.refused_sources` rather than counted as one failed episode; a refused directory is not re-offered file by file; `run.completion` is `partial`.
-- Metadata tier is enforced at the storage boundary for LeRobot v2/v3: parquet schema read, index/clock columns projected, numeric vectors never materialised (`kalanos.analysis.execution` carries the tier to adapters). `StreamEvaluation.n_channels_declared` added.
+- `report.readiness` replaces letter grades on the card, the CLI and the README; the letter fields are deprecated. ([#13](https://github.com/KalanosAI/kalanos/pull/13))
+- Publishing needs no manual approval; the PyPI environment accepts only `v*` tags. ([#12](https://github.com/KalanosAI/kalanos/pull/12))
 
-### Coverage, report workflows and calibration enforcement (R07-05–R07-07)
+## [0.6.4] - 2026-09-28
 
-- Add shared metric/capability coverage ledgers, with honest eligible denominators and explicit unavailable/skipped/error states; report-only computations count as evaluated.
-- Preserve localized source-row flatline/spike support, wider spike filter support, stable finding identities and review groups. SNR/spectral support remains whole-episode.
-- Add `compare`, `profiles list/show/validate`, richer `inspect`, and public `compare`/`load_report` APIs. Refuse unsupported numerical comparisons and retain historical schema evidence. Opt-in `--hash-source` records complete local byte identity with before/after stability checks.
-- Enforce structured calibration matching before statistical blocking. Uncalibrated critical findings require review, which makes readiness undefined. Legacy name lists cannot authorize blocking and disabling enforcement is rejected.
-- Record payload/metric failures as operational errors, with partial completion and CLI exit 2. The language-conditioned missing-instruction rule explicitly uses its existing contract route.
-- R07-03 is completed by the contextual noise section above. No accepted production manifest is shipped.
+### Fixed
 
-### Clock provenance and recorded order (R07-04)
+- LeRobot's nested channel names are read, and channels named as grippers grade as grippers. ([#11](https://github.com/KalanosAI/kalanos/pull/11))
 
-- Readers preserve source row order (LeRobot v2/v3, CSV/delimited/JSON/JSONL, HDF5, MCAP); backwards and repeated timestamps are measured in source order with the offending source rows, never hidden by sorting.
-- Every stream reports `clock_info` (origin, origin evidence, source field, native unit/dtype, domain/epoch, transforms) and `source_order`, including at metadata tier. Native integer ticks are subtracted before conversion to seconds; null/NaN/inf timestamps break adjacency and keep their source addresses.
-- New report-only recorded-timeline checks: `recorded_hz`, `recorded_dt_spread_ms`, `recorded_drop_estimate`. The capture checks `effective_hz`, `dt_jitter_ms` and `drop_rate` require producer evidence that timestamps are capture times, and abstain otherwise.
-- **Behaviour change:** no built-in reader records producer capture evidence, so these acquisition timing metrics abstain on built-in formats; recorded timing diagnostics remain report-only. Other checks can still affect readiness. They are reported, with the affected episodes named. A legacy `Clock.CAPTURE` label migrates as inferred capture, not producer proof. README examples describe the current decision rules; older pinned scores are not release validation.
-- MCAP reads in file order and selects header, then distinguishable publish, then log time per topic; a header stamp alone is not capture evidence. HDF5 keeps a damaged recorded time axis instead of substituting a generated grid.
+## [0.6.3] - 2026-09-28
 
-### Contract corrections (branch review round 4)
+### Changed
 
-- CLI: an incomplete inventory fails the default `--fail-on blocked,unknown` gate (exit 1) — a refused source alone, passing episodes beside a refused source, and undelivered declared episodes. `--fail-on blocked` permits it with a stderr warning. Operational errors remain exit 2.
-- Episode ids are stable across partial and complete runs: containers always qualify `source::episode`; only an adapter that names the episode after the file keeps the short form. A single-episode LeRobot export changes id from `root` to `root::episode_000000`.
-- A directory an adapter selected is owned on every read path, including zero-yield; its manifest and data files are no longer offered to other adapters.
+- A channel that never changes in an episode is a warning (unused or disconnected) instead of a stuck sensor. ([#10](https://github.com/KalanosAI/kalanos/pull/10))
 
-### Configuration
+## [0.6.2] - 2026-09-27
 
-- `--profile bundle.yaml`: one file, four sections with separate identities (`binding`, `requirements`, `policy`, `execution`).
-- `--tier metadata|standard|full`; a tier never changes requirements.
-- One resolver (`assets/bundle.py`) for `--map` > `--map-file` > bundle > sidecar; conflicts recorded, same-priority disagreement is an error. `--map`, `--map-file` and `kalanos-map.yaml` remain supported unchanged.
+### Changed
 
-### CLI
+- Flatline is critical only above 90%, since joints hold still in real teleoperation; torque SNR is report-only. ([#9](https://github.com/KalanosAI/kalanos/pull/9))
 
-- `--fail-on` (default `blocked,unknown`); exit `0` clean audit, `1` gate tripped, `2` configuration/operational error.
-- `kalanos inspect REPORT.json` reads schema 7 and legacy 6.3/6.4/6.5 reports, naming contradictions and unsupplied fields.
+## [0.6.1] - 2026-09-27
 
-### Remaining release work
+### Fixed
 
-- R07-03 SNR applicability and scale handling; fresh calibration is required after detector changes.
-- Real-data calibration, operating-scope validation, independent review and accepted production manifests.
-- Public-dataset re-audits with the combined behavior, publisher/Action migration (R07-09), and visual/behavioral runners.
-- Nonlocal streaming byte identity. Source hashing is optional and limited to a materialized local root; ordinary runs keep source evidence incomplete.
+- A finding on nearly every episode is a dataset trait instead of a failure on each one, which removes false D grades. ([#8](https://github.com/KalanosAI/kalanos/pull/8))
 
-The shared grade/benchmark resolver and typed views landed in R07-02; clocks in
-R07-04; coverage, comparison and calibration enforcement are included above.
+## [0.6.0] - 2026-09-26
+
+### Added
+
+- A dataset grade gate: the share of failing episodes caps the letter, with task traits, pruning and coverage. ([#7](https://github.com/KalanosAI/kalanos/pull/7))
+- `language_conditioned` and `legacy_0_5` policies. ([#7](https://github.com/KalanosAI/kalanos/pull/7))
+
+## [0.5.0] - 2026-09-26
+
+### Changed
+
+- Action commands are exempt from flatline, SNR is not applicable below about 45 Hz, and reconstructed clocks report timing as not observable. ([#6](https://github.com/KalanosAI/kalanos/pull/6))
+
+## [0.4.0] - 2026-09-26
+
+### Added
+
+- Task instructions are read per episode, with a report-only `annotation.task_instruction_missing`. ([#5](https://github.com/KalanosAI/kalanos/pull/5))
+
+## [0.3.0] - 2026-09-26
+
+### Added
+
+- `monotonic_violations`, report-only until a band is settled, and a repeated-timestamp test fault. ([#4](https://github.com/KalanosAI/kalanos/pull/4))
+
+## [0.2.1] - 2026-09-26
+
+### Added
+
+- Citation metadata, and a GitHub Release for every tag. ([#2](https://github.com/KalanosAI/kalanos/pull/2))
+
+### Fixed
+
+- Common robot-learning field names are recognised, false switch and jerk criticals are gone, and HDF5 timestamps are read. ([#3](https://github.com/KalanosAI/kalanos/pull/3))
+
+## [0.2.0] - 2026-09-24
+
+### Added
+
+- Published on PyPI with trusted publishing. ([#1](https://github.com/KalanosAI/kalanos/pull/1))
+
+## 0.1.0 - 2026-09-24
+
+Initial public release.
+
+[0.7.0]: https://github.com/KalanosAI/kalanos/compare/v0.6.5...v0.7.0
+[0.6.5]: https://github.com/KalanosAI/kalanos/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/KalanosAI/kalanos/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/KalanosAI/kalanos/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/KalanosAI/kalanos/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/KalanosAI/kalanos/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/KalanosAI/kalanos/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/KalanosAI/kalanos/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/KalanosAI/kalanos/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/KalanosAI/kalanos/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/KalanosAI/kalanos/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/KalanosAI/kalanos/releases/tag/v0.2.0
