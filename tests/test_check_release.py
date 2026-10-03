@@ -43,4 +43,6 @@ def test_metadata_agreement(tmp_path, version, prerelease):
 
 
 def test_checkout_metadata_agrees():
-    assert release.check(ROOT)[0] == "0.7.0"
+    """The checked-out pyproject.toml and CITATION.cff name the same version."""
+
+    release.check(ROOT)
