@@ -44,6 +44,8 @@ BUNDLE_SCHEMA_VERSION = 1
 # more. It does not silently demand physical units, capture timing or video.
 DEFAULT_REQUIREMENTS_ID = "numeric-core-v1"
 DEFAULT_POLICY_ID = "default-decisions-v1"
+# Requirements ids that name a whole bundle, for `--profile` and `profiles list`.
+BUILT_IN_PROFILES = (DEFAULT_REQUIREMENTS_ID, "vision-imitation-v1")
 # Every camera frame read. A scope that requires it, or the sampled one below,
 # lets the vision family grade, and so decide an episode.
 VIDEO_QUALITY_CAPABILITY = "video_quality"

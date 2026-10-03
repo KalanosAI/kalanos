@@ -26,7 +26,11 @@ from upath import UPath
 # Internal
 from kalanos import api
 from kalanos.analysis.coverage import coverage_lines
-from kalanos.analysis.models.binding import Bundle, RequirementsSection
+from kalanos.analysis.models.binding import (
+    BUILT_IN_PROFILES,
+    Bundle,
+    RequirementsSection,
+)
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import KalanosError
@@ -200,8 +204,8 @@ def grade(
         typer.Option(
             "--profile",
             help=(
-                "A configuration bundle: binding, requirements, policy and "
-                "execution sections. Defaults to the numeric-core scope."
+                "A configuration bundle file, or a built-in profile name from "
+                "`kalanos profiles list`. Defaults to the numeric-core scope."
             ),
         ),
     ] = None,
@@ -911,12 +915,12 @@ app.add_typer(profiles_app, name="profiles")
 
 @profiles_app.command("list")
 def profiles_list() -> None:
-    print("numeric-core-v1\nvision-imitation-v1")
+    print("\n".join(BUILT_IN_PROFILES))
 
 
 @profiles_app.command("show")
 def profiles_show(name: str) -> None:
-    if name not in ("numeric-core-v1", "vision-imitation-v1"):
+    if name not in BUILT_IN_PROFILES:
         print(f"kalanos: unknown profile {name!r}", file=sys.stderr)
         raise typer.Exit(code=2)
     print(Bundle(requirements=RequirementsSection(id=name)).model_dump_json(indent=2))

@@ -9,6 +9,8 @@ kalanos profiles show vision-imitation-v1
 kalanos profiles validate acquisition.yaml
 ```
 
+A built-in profile name works directly as `--profile`, with every other section at its default: `kalanos grade ./recording --profile vision-imitation-v1 --tier full`. A file with the same name takes precedence.
+
 Validation checks YAML/model structure and any referenced decision policy. It does not load a dataset or certify a binding. Unknown capability or metric names cannot produce a pass: their required evidence will be unavailable at grading time.
 
 ## Channel selectors and validation

@@ -23,6 +23,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.models.binding import (
+    BUILT_IN_PROFILES,
     BUNDLE_SCHEMA_VERSION,
     BindingConflict,
     BindingOrigin,
@@ -125,7 +126,9 @@ def load_bundle(path: UPath) -> Bundle:
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise MappingOverrideError(f"no bundle at {path}") from exc
+        raise MappingOverrideError(
+            f"no bundle at {path}; built-in profiles: {', '.join(BUILT_IN_PROFILES)}"
+        ) from exc
     try:
         payload = safe_load_strict(raw)
     except yaml.YAMLError as exc:
@@ -474,6 +477,14 @@ def prepare_configuration(
     bundle_path = (
         None if bundle is None or isinstance(bundle, Bundle) else UPath(bundle)
     )
+    # A built-in profile name stands in for a bundle unless such a file exists.
+    if (
+        bundle_path is not None
+        and str(bundle) in BUILT_IN_PROFILES
+        and not bundle_path.exists()
+    ):
+        bundle = Bundle(requirements=RequirementsSection(id=str(bundle)))
+        bundle_path = None
     loaded = (
         bundle
         if isinstance(bundle, Bundle)

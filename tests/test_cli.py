@@ -531,3 +531,24 @@ def test_new_cli_commands_are_registered_in_module_entrypoint():
         capture_output=True,
     )
     assert result.returncode == 0 and "vision-imitation-v1" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["numeric-core-v1", "vision-imitation-v1"])
+def test_grade_profile_accepts_a_built_in_profile_name(name):
+    """A name that `profiles list` prints works as `--profile` without a file."""
+
+    result = runner.invoke(
+        app, ["grade", str(CSV_FIXTURE), "--json", "--profile", name]
+    )
+
+    assert "no bundle" not in result.stderr
+    report = Report.model_validate_json(result.stdout)
+    assert report.scope is not None
+    assert report.scope.requirements_id == name
+
+
+def test_grade_profile_names_the_built_in_profiles_when_nothing_matches():
+    result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--profile", "no-such"])
+
+    assert result.exit_code == 2
+    assert "numeric-core-v1" in result.stderr
