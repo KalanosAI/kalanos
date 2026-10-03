@@ -1,21 +1,41 @@
-"""0.7.0 controls for contextual SNR and reference validation."""
+"""Verifies contextual SNR and the validation of its noise-floor reference."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 import random
 
+# External
 import polars as pl
 import pytest
 from pydantic import ValidationError
-from test_integrity import _channel_ctx
 
+# Internal
 from kalanos.analysis.coverage import state_of
 from kalanos.analysis.metrics.integrity import snr_db
-from kalanos.analysis.models.binding import ChannelBinding, NoiseFloor, Validation
+from kalanos.analysis.models.binding import (
+    ChannelBinding,
+    NoiseFloor,
+    Quantity,
+    Representation,
+    Validation,
+)
 from kalanos.analysis.models.domain import ClockInfo, SourceOrder
 from kalanos.analysis.models.metrics import Level, MetricStatus
 from kalanos.analysis.models.scoring import FindingLocation
 from kalanos.analysis.scoring.score import score_metrics
 from kalanos.assets.policy import load_default_policy
+
+# Local
+from helpers import channel_ctx as _channel_ctx
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def context(scale=1.0, floor=None):
@@ -26,8 +46,8 @@ def context(scale=1.0, floor=None):
         feature="position",
         index=0,
         taxonomy_type="proprio.joint_position",
-        quantity="position",
-        representation="continuous",
+        quantity=Quantity.POSITION,
+        representation=Representation.CONTINUOUS,
         unit="rad",
         source_identity="test-session",
         noise_floor=floor,
@@ -53,7 +73,7 @@ def context(scale=1.0, floor=None):
 def reference(sd=0.01, **changes):
     """A test-only residual standard-deviation reference in native radians."""
     return NoiseFloor(
-        **dict(
+        **dict(  # pyright: ignore[reportArgumentType]
             dict(
                 standard_deviation=sd,
                 unit="rad",
@@ -82,15 +102,21 @@ def scored(ctx):
     )
 
 
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
 @pytest.mark.parametrize(
     "taxonomy", ["reward.reward", "annotation.label", "metadata.episode_index"]
 )
 def test_semantic_scalar_exclusions(taxonomy):
     ctx = context()
+    assert ctx.channel.binding is not None
     ctx.channel.binding.taxonomy_type = taxonomy
     r = snr_db(ctx)
     assert r.status == MetricStatus.NOT_APPLICABLE
-    assert r.availability.value == "not_applicable"
+    assert r.availability is not None and r.availability.value == "not_applicable"
 
 
 @pytest.mark.parametrize(
@@ -98,13 +124,16 @@ def test_semantic_scalar_exclusions(taxonomy):
 )
 def test_declared_discrete_excluded_even_with_more_than_two_values(change):
     ctx = context()
+    assert ctx.channel.binding is not None
     ctx.channel.binding = ctx.channel.binding.model_copy(update=change)
-    assert snr_db(ctx).availability.value == "not_applicable"
+    result = snr_db(ctx)
+    assert result.availability is not None
+    assert result.availability.value == "not_applicable"
 
 
 def test_quiet_hold_with_validated_floor_is_measured_without_noise_penalty():
     results, score, findings = scored(context(floor=reference()))
-    assert results["snr_db"].value < 15
+    assert results["snr_db"].value is not None and results["snr_db"].value < 15
     assert results["snr_db"].status == MetricStatus.REPORT_ONLY
     assert state_of(results["snr_db"]).value == "computed"
     assert score.score is None and not findings
@@ -137,13 +166,14 @@ def test_corruption_above_reference_remains_visible():
 def test_reference_mismatch_preserves_measurement_but_abstains(change):
     ctx = context(floor=reference(**change))
     result = snr_db(ctx)
-    assert math.isfinite(result.value)
+    assert result.value is not None and math.isfinite(result.value)
     assert result.evidence["noise_assessment"]["status"] == "unassessed"
 
 
 @pytest.mark.parametrize("property", ["unit", "quantity", "identity", "noise_floor"])
 def test_each_reference_validation_required(property):
     ctx = context(floor=reference())
+    assert ctx.channel.binding is not None
     ctx.channel.binding.validations = [
         v for v in ctx.channel.binding.validations if v.property != property
     ]
@@ -152,6 +182,7 @@ def test_each_reference_validation_required(property):
 
 def test_changed_reference_or_source_invalidates_validation():
     ctx = context(floor=reference())
+    assert ctx.channel.binding is not None
     ctx.channel.binding.source_identity = "another-session"
     assert snr_db(ctx).evidence["noise_assessment"]["status"] == "unassessed"
     ctx.channel.binding.source_identity = "test-session"
@@ -164,7 +195,7 @@ def test_nonfinite_values_break_windows_without_contaminating_finite_results(inv
     ctx = context()
     ctx.values = ctx.values.scatter([200], [invalid])
     r = snr_db(ctx)
-    assert math.isfinite(r.value)
+    assert r.value is not None and math.isfinite(r.value)
     assert r.evidence["n_invalid_samples"] == 1
     assert r.evidence["n_samples"] == 391
 
@@ -234,6 +265,7 @@ def test_boolean_missing_values_are_measured_without_snr(values, expected):
 
 def test_reference_without_source_scope_is_unassessed():
     ctx = context(floor=reference())
+    assert ctx.channel.binding is not None
     ctx.channel.binding.source_identity = None
     for validation in ctx.channel.binding.validations:
         validation.scope = None

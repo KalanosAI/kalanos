@@ -7,7 +7,6 @@ coverage, and the packaged policies that switch it on, off, or extend it.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
-from collections.abc import Container
 from pathlib import Path
 from typing import cast
 
@@ -24,43 +23,8 @@ from kalanos.analysis.scoring.gate import cap_for, dataset_traits, task_traits, 
 from kalanos.api import grade
 from kalanos.assets.policy import load_default_policy, load_policy
 
-
-def _write_arm(
-    path: Path,
-    n_episodes: int,
-    glitched: set[int],
-    tasks=None,
-    jittered: Container[int] = frozenset(),
-) -> None:
-    """Smooth 50 Hz joint motion; `glitched` episodes get large command jumps.
-
-    `jittered` episodes get a physical clock's 50 µs jitter on their timestamps,
-    so their timing grades; the rest are exactly even and not observable.
-    """
-
-    rng = np.random.default_rng(0)
-    t = np.arange(200) * 0.02
-    with h5py.File(str(path), "w") as store:
-        data = store.create_group("data")
-        data.attrs["fps"] = 50.0
-        for index in range(n_episodes):
-            group = data.create_group(f"demo_{index}")
-            actions = np.stack(
-                [0.2 * np.sin(2 * np.pi * 0.4 * t + phase) for phase in range(6)], 1
-            )
-            if index in glitched:
-                rows = rng.choice(np.arange(1, 199), size=20, replace=False)
-                actions[rows] += rng.choice([-1, 1], (20, 6)) * rng.uniform(
-                    2, 3, (20, 6)
-                )
-            group.create_dataset("actions", data=actions)
-            stamps = t
-            if index in jittered:
-                stamps = t + rng.normal(0, 5e-5, t.shape)
-                stamps[0] = 0.0
-            group.create_dataset("timestamps", data=stamps)
-            if tasks is not None and tasks[index] is not None:
-                group.attrs["task"] = tasks[index]
+# Local
+from helpers import write_arm as _write_arm
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -154,6 +118,7 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     assert report.score.train_ready is False
     # `pruned_score` describes the non-blocked candidate set; since schema 7
     # nothing claims that set is train-ready or sufficient.
+    assert report.score.score is not None
     assert gate.pruned_score is not None and gate.pruned_score > report.score.score
     assert not hasattr(gate, "train_ready_after_pruning")
     assert not hasattr(gate, "pruned_grade")

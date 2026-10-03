@@ -503,3 +503,31 @@ def test_grade_map_that_cannot_apply_exits_two(value):
     assert result.exit_code == 2
     assert result.stderr.startswith("kalanos: ")
     assert result.stdout == ""
+
+
+def test_profiles_commands_validate_structure_and_resolve_policy(tmp_path):
+    runner = CliRunner()
+    assert "numeric-core-v1" in runner.invoke(app, ["profiles", "list"]).stdout
+    shown = runner.invoke(app, ["profiles", "show", "vision-imitation-v1"])
+    assert shown.exit_code == 0 and "video_quality" in shown.stdout
+    assert runner.invoke(app, ["profiles", "show", "no-such-profile"]).exit_code == 2
+    bundle = tmp_path / "profile.yaml"
+    bundle.write_text("requirements:\n  id: numeric-core-v1\n")
+    assert runner.invoke(app, ["profiles", "validate", str(bundle)]).exit_code == 0
+    bundle.write_text("policy:\n  path: missing.yaml\n")
+    assert runner.invoke(app, ["profiles", "validate", str(bundle)]).exit_code == 2
+
+
+def test_new_cli_commands_are_registered_in_module_entrypoint():
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    result = subprocess.run(
+        [sys.executable, "-m", "kalanos.cli", "profiles", "list"],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0 and "vision-imitation-v1" in result.stdout

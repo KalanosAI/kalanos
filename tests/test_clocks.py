@@ -1,9 +1,15 @@
-"""R07-04 controls: source order, clock evidence and native tick precision."""
+"""Verifies source order, clock evidence and native tick precision."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import json
 import shutil
 from pathlib import Path
 
+# External
 import h5py
 import polars as pl
 import pytest
@@ -12,6 +18,7 @@ from mcap_ros2.writer import Writer
 from pydantic import ValidationError
 from upath import UPath
 
+# Internal
 from kalanos.analysis.adapters.csv import CsvAdapter
 from kalanos.analysis.adapters.hdf5 import Hdf5Adapter
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
@@ -36,8 +43,29 @@ from kalanos.api import grade
 from kalanos.benchmark import benchmark_dataset
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
 FIXTURES = Path(__file__).parent / "fixtures"
 ACQUISITION = ("effective_hz", "dt_jitter_ms", "drop_rate")
+
+_STAMPED = """std_msgs/Header header
+float64 value
+================================================================================
+MSG: std_msgs/Header
+builtin_interfaces/Time stamp
+string frame_id
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+"""
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def signal(
@@ -69,6 +97,11 @@ def metrics(stream):
     return run_stream_metrics(
         StreamContext(stream=stream, is_regular=stream.is_regular)
     )
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
 
 
 @pytest.mark.parametrize("origin", list(ClockOrigin))
@@ -116,7 +149,8 @@ def test_declared_uniform_capture_clock_is_measurable_without_generation_heurist
 def test_unknown_jitter_is_not_promoted_to_capture():
     result = metrics(signal([0, 0.0201, 0.04, 0.0601, 0.08]))
     assert result["dt_jitter_ms"].value is None
-    assert result["recorded_dt_spread_ms"].value > 0
+    spread = result["recorded_dt_spread_ms"].value
+    assert spread is not None and spread > 0
 
 
 def test_generated_gap_is_visible_without_acquisition_claim():
@@ -213,6 +247,7 @@ def test_legacy_capture_label_does_not_manufacture_producer_evidence():
         timestamp_dtype=TimestampDtype.FLOAT64,
         source_path=UPath("legacy.csv"),
     )
+    assert stream.clock_info is not None
     assert stream.clock_info.origin_evidence == OriginEvidence.INFERRED
     assert not stream.clock_info.certifies_acquisition
 
@@ -304,19 +339,6 @@ def test_hdf5_distinguishes_adapter_generation_from_recorded_clock(tmp_path, rec
     assert not stream.clock_info.certifies_acquisition
 
 
-_STAMPED = """std_msgs/Header header
-float64 value
-================================================================================
-MSG: std_msgs/Header
-builtin_interfaces/Time stamp
-string frame_id
-================================================================================
-MSG: builtin_interfaces/Time
-int32 sec
-uint32 nanosec
-"""
-
-
 @pytest.mark.parametrize(
     "mode,origin",
     [
@@ -369,11 +391,13 @@ def test_report_round_trip_retains_clock_evidence_and_benchmark_agrees(tier):
     restored = Report.model_validate_json(report.model_dump_json())
     for episode in restored.episodes:
         for stream in episode.streams:
+            assert stream.clock_info is not None
             assert stream.clock_info.origin == ClockOrigin.GENERATED
             assert stream.clock_info.origin_evidence == OriginEvidence.INFERRED
             assert stream.source_order.preserved
             assert all(stream.metrics[key].value is None for key in ACQUISITION)
     bench = benchmark_dataset(str(root), sample=0, tier=tier)
+    assert report.run is not None
     assert report.run.binding == bench.configuration["binding"]
     assert report.scope == bench.scope
     # The JSON records provenance without duplicating entire native arrays.
@@ -420,16 +444,21 @@ def test_injectors_update_native_clock_state_without_promoting_generated_time(
     )
     result = metrics(changed)
     assert all(result[key].value is None for key in ACQUISITION)
+    assert changed.clock_info is not None
     assert changed.clock_info.origin == ClockOrigin.GENERATED
     if operation == "drop":
-        assert result["recorded_drop_estimate"].value > 0.09
+        drop_estimate = result["recorded_drop_estimate"].value
+        assert drop_estimate is not None and drop_estimate > 0.09
+        assert changed.native_timestamps is not None
         assert len(changed.native_timestamps) == 90
     elif operation == "repeat":
         assert result["monotonic_violations"].value == 3
     elif operation == "jitter":
-        assert result["recorded_dt_spread_ms"].value > 0
+        spread = result["recorded_dt_spread_ms"].value
+        assert spread is not None and spread > 0
     else:
-        assert result["recorded_hz"].value < 100
+        hz = result["recorded_hz"].value
+        assert hz is not None and hz < 100
     assert stream.native_timestamps is not None and len(stream.native_timestamps) == 100
 
 
@@ -456,6 +485,7 @@ def test_lerobot_invalid_timestamp_is_retained_for_audit(tmp_path, invalid):
     assert result.evidence["n_invalid_timestamps"] == 1
     assert result.evidence["first_invalid_sample"] == 2
     assert stream.metrics["recorded_hz"].value is None
+    assert stream.clock_info is not None
     assert stream.clock_info.origin == ClockOrigin.UNKNOWN
 
 
@@ -480,3 +510,22 @@ def test_unknown_native_units_still_preserve_exact_integer_order():
     assert result["monotonic_violations"].evidence["n_backwards"] == 1
     assert result["monotonic_violations"].evidence["n_repeated"] == 0
     assert result["recorded_hz"].value is None
+
+
+def test_a_legacy_reconstructed_clock_migrates_as_inferred_generation():
+    info = ClockInfo.from_legacy(Clock.RECONSTRUCTED)
+    assert info.origin == ClockOrigin.GENERATED
+    assert info.origin_evidence == OriginEvidence.INFERRED
+    assert not info.certifies_acquisition
+    assert ClockInfo(
+        origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.PRODUCER
+    ).certifies_acquisition
+    assert not ClockInfo(
+        origin=ClockOrigin.CAPTURE, origin_evidence=OriginEvidence.INFERRED
+    ).certifies_acquisition
+
+
+def test_publication_and_log_origins_are_distinct_and_never_capture():
+    assert ClockOrigin.PUBLISH.compatibility_clock == Clock.LOG
+    assert ClockOrigin.PRESENTATION.compatibility_clock == Clock.UNKNOWN
+    assert ClockOrigin.GENERATED.compatibility_clock == Clock.RECONSTRUCTED

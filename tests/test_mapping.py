@@ -11,13 +11,24 @@ from pathlib import Path
 # External
 import pytest
 import yaml
+from typer.testing import CliRunner
+from upath import UPath
 
 # Internal
 import kalanos
 from kalanos import MappingOverrideError, MappingSource, OverrideOrigin
+from kalanos.analysis.models.binding import (
+    BindingOrigin,
+    FeatureAssertion,
+    SamePriorityConflict,
+    resolve_feature_types,
+)
 from kalanos.analysis.models.metrics import MetricStatus
 from kalanos.analysis.models.report import GradedStream, Report
+from kalanos.assets.bundle import load_bundle
 from kalanos.assets.mapping import SIDECAR_NAME, parse_map_argument
+from kalanos.assets.yaml_strict import DuplicateKeyError, safe_load_strict
+from kalanos.cli import app
 
 # Local
 from helpers import CSV_FIXTURE, LEROBOT_FIXTURE
@@ -30,6 +41,7 @@ from helpers import CSV_FIXTURE, LEROBOT_FIXTURE
 STATE = "observation.state"
 UNMAPPED_STATE = f"unmapped.{STATE}"
 JOINT_POSITION = "proprio.joint_position"
+TINY_V3 = Path(__file__).parent / "fixtures" / "lerobot_v3_tiny"
 
 # The prefix of the reason a metric gives when a stream's type does not qualify.
 _TAXONOMY_GATE = "needs one of"
@@ -56,6 +68,11 @@ def _write_mapping(path: Path, features: dict[str, str]) -> Path:
 
     path.write_text(yaml.safe_dump({"schema_version": 1, "features": features}))
     return path
+
+
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
 
 
 @pytest.fixture
@@ -205,3 +222,58 @@ def test_a_map_argument_splits_on_its_last_equals_sign():
 def test_a_map_argument_with_an_empty_side_is_refused(text):
     with pytest.raises(MappingOverrideError):
         parse_map_argument(text)
+
+
+def test_two_map_flags_for_one_feature_exit_two_before_grading():
+    result = CliRunner().invoke(
+        app,
+        [
+            "grade",
+            str(TINY_V3),
+            "--map",
+            "observation.state=proprio.joint_position",
+            "--map",
+            "observation.state=proprio.joint_velocity",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "conflicting argument assertions" in result.output + (result.stderr or "")
+
+
+def test_a_conflict_below_the_winner_is_still_refused():
+    with pytest.raises(SamePriorityConflict, match="sidecar"):
+        resolve_feature_types(
+            [
+                FeatureAssertion(
+                    feature="f", taxonomy_type="a", origin=BindingOrigin.ARGUMENT
+                ),
+                FeatureAssertion(
+                    feature="f", taxonomy_type="b", origin=BindingOrigin.SIDECAR
+                ),
+                FeatureAssertion(
+                    feature="f", taxonomy_type="c", origin=BindingOrigin.SIDECAR
+                ),
+            ]
+        )
+    # Repeating the same value is not a conflict.
+    resolve_feature_types(
+        [
+            FeatureAssertion(feature="f", taxonomy_type="a", origin=BindingOrigin.FILE),
+            FeatureAssertion(feature="f", taxonomy_type="a", origin=BindingOrigin.FILE),
+        ]
+    )
+
+
+def test_duplicate_yaml_keys_are_refused_in_bundles_and_mapping_files(tmp_path):
+    with pytest.raises(DuplicateKeyError, match="observation.state"):
+        safe_load_strict("features:\n  observation.state: a\n  observation.state: b\n")
+    bundle = tmp_path / "dup.yaml"
+    bundle.write_text(
+        "schema_version: 1\nbinding:\n  id: x\n  features:\n"
+        "    observation.state: proprio.joint_position\n"
+        "    observation.state: proprio.joint_velocity\n"
+    )
+    with pytest.raises(MappingOverrideError, match="duplicate key"):
+        load_bundle(UPath(bundle))
+    result = CliRunner().invoke(app, ["grade", str(TINY_V3), "--profile", str(bundle)])
+    assert result.exit_code == 2

@@ -1,16 +1,20 @@
-"""R07-02 acceptance: semantic identity, evidence, precedence and shared inputs."""
+"""Verifies channel bindings: semantic identity, validation evidence and precedence."""
 
-import json
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import shutil
 from pathlib import Path
 
+# External
 import polars as pl
 import pytest
-import yaml
 from pydantic import ValidationError
-from typer.testing import CliRunner
 from upath import UPath
 
+# Internal
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import (
     resolve_taxonomy,
@@ -29,13 +33,15 @@ from kalanos.analysis.models.binding import (
     Bundle,
     ChannelBinding,
     CommandSemantics,
+    FeatureAssertion,
     Quantity,
     Representation,
     RequirementsSection,
+    SamePriorityConflict,
     Validation,
     ValidationStatus,
+    resolve_feature_types,
 )
-from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import (
     Channel,
     Episode,
@@ -52,20 +58,26 @@ from kalanos.analysis.models.metrics import (
     Requires,
     StreamContext,
 )
-from kalanos.analysis.models.provenance import ExecutionTier, content_digest
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.reporting.assemble import grade_episode
 from kalanos.analysis.scoring.cameras import camera_key
 from kalanos.api import grade
-from kalanos.assets.bundle import prepare_configuration, resolve_vision
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 from kalanos.benchmark import benchmark_dataset
-from kalanos.cli import app
-from kalanos.core.settings import Settings
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 FIXTURE = Path(__file__).parent / "fixtures/lerobot_v3_tiny"
 SOURCE = "acquisition-session"
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def signal(names=("p", "effort", "command"), taxonomy="unmapped.mixed"):
@@ -127,15 +139,33 @@ def assertions():
     ]
 
 
+def _vision_reasons(episode) -> list[str]:
+    """The ids of an episode's eligibility reasons that concern its cameras."""
+
+    return [
+        r.id
+        for r in episode.eligibility.reasons
+        if ".vision." in r.id
+        or r.id in ("capability:video_quality", "capability:sampled_video_quality")
+    ]
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
 def test_mixed_views_preserve_source_indices_values_and_original_stream():
     original = signal()
     bound = bind(original, assertions())
     views = typed_views(bound)
+    assert isinstance(original.payload, FramePayload)
     assert [s.taxonomy_type for s in views] == [a.taxonomy_type for a in assertions()]
     assert [s.channels[0].source_index for s in views] == [0, 1, 2]
     assert [s.instance for s in views] == ["left", "right", "right"]
     for view in views:
         channel = view.channels[0]
+        assert isinstance(view.payload, FramePayload)
         assert view.payload.frame[channel.name].equals(
             original.payload.frame[channel.name]
         )
@@ -152,18 +182,20 @@ def test_whole_feature_override_cannot_erase_explicit_effort_or_discrete_channel
         origin=OverrideOrigin.ARGUMENT,
     )
     bound = bind(signal(), assertions(), override)
-    assert bound.channels[1].binding.quantity == Quantity.EFFORT
-    assert bound.channels[1].binding.taxonomy_type == "proprio.joint_torque"
-    assert bound.channels[2].binding.representation == Representation.DISCRETE
-    assert any(
-        c.displaced == "proprio.joint_position"
-        for c in bound.channels[1].binding.conflicts
-    )
+    first = bound.channels[1].binding
+    second = bound.channels[2].binding
+    assert first is not None
+    assert second is not None
+    assert first.quantity == Quantity.EFFORT
+    assert first.taxonomy_type == "proprio.joint_torque"
+    assert second.representation == Representation.DISCRETE
+    assert any(c.displaced == "proprio.joint_position" for c in first.conflicts)
 
 
 def test_gripper_effort_is_not_retyped_by_its_name():
     bound = bind(signal(("left_gripper",), "proprio.joint_torque"))
     b = bound.channels[0].binding
+    assert b is not None
     assert b.actuator == ActuatorKind.GRIPPER
     assert b.quantity == Quantity.EFFORT
     assert b.taxonomy_type == "proprio.joint_torque"
@@ -181,8 +213,12 @@ def test_partly_named_vector_preserves_unknowns_under_feature_override():
         update={"channels": channels, "source_field": "custom_vector"}
     )
     bound = bind(stream)
-    assert bound.channels[0].binding.taxonomy_type == "proprio.joint_position"
-    assert bound.channels[1].binding.taxonomy_type.startswith("unmapped.")
+    first = bound.channels[0].binding
+    second = bound.channels[1].binding
+    assert first is not None
+    assert second is not None
+    assert first.taxonomy_type == "proprio.joint_position"
+    assert second.taxonomy_type.startswith("unmapped.")
     assert bound.channels[1].source_index == 1
     override = MappingOverride(
         feature="custom_vector",
@@ -190,14 +226,17 @@ def test_partly_named_vector_preserves_unknowns_under_feature_override():
         origin=OverrideOrigin.ARGUMENT,
     )
     overridden = bind(stream, override=override)
-    assert overridden.channels[1].binding.taxonomy_type.startswith("unmapped.")
-    assert overridden.channels[1].binding.conflicts
+    overridden_second = overridden.channels[1].binding
+    assert overridden_second is not None
+    assert overridden_second.taxonomy_type.startswith("unmapped.")
+    assert overridden_second.conflicts
 
 
 def test_inferred_name_and_unit_assertion_do_not_mean_validated_physics():
     bound = bind(signal(), assertions())
     for channel in bound.channels:
         b = channel.binding
+        assert b is not None
         assert b.capabilities["numeric"].ready
         assert not b.capabilities["derivatives"].ready
         assert not b.capabilities["limits"].ready
@@ -233,6 +272,7 @@ def test_validation_is_per_property_and_requires_matching_value_and_scope():
     a = validated_position()
     a.validations += [evidence("limits", [-1, 1], "other-session")]
     b = bind(signal(), [a]).channels[0].binding
+    assert b is not None
     assert b.capabilities["derivatives"].ready
     assert not b.capabilities["limits"].ready
     assert b.property_status["unit"] == ValidationStatus.VALIDATED
@@ -248,6 +288,7 @@ def test_capability_scoped_validation_does_not_leak_to_another_capability():
     a.limits = (-1, 1)
     a.validations.append(evidence("limits", [-1, 1], capability="limits"))
     b = bind(signal(), [a]).channels[0].binding
+    assert b is not None
     assert b.capabilities["derivatives"].ready
     assert not b.capabilities["limits"].ready
 
@@ -264,6 +305,7 @@ def test_different_source_cannot_reuse_validation():
         .channels[0]
         .binding
     )
+    assert b is not None
     assert not b.capabilities["derivatives"].ready
     assert len(b.invalidated_validations) == 3
 
@@ -274,6 +316,7 @@ def test_overriding_validated_unit_invalidates_previous_evidence():
         feature="mixed", index=0, taxonomy_type="proprio.joint_position", unit="deg"
     )
     b = bind(original, [replacement]).channels[0].binding
+    assert b is not None
     assert b.unit == "deg"
     assert b.property_status["unit"] == ValidationStatus.ASSERTED
     assert not b.capabilities["derivatives"].ready
@@ -294,30 +337,28 @@ def test_new_evidence_can_revalidate_an_overridden_unit():
             ],
         }
     )
-    assert (
-        bind(original, [replacement])
-        .channels[0]
-        .binding.capabilities["derivatives"]
-        .ready
-    )
+    b = bind(original, [replacement]).channels[0].binding
+    assert b is not None
+    assert b.capabilities["derivatives"].ready
 
 
 def test_generic_metrics_need_no_physical_units_but_capability_gate_abstains():
     stream = bind(signal(), assertions())
+    assert isinstance(stream.payload, FramePayload)
     ctx = ChannelContext(
         channel=stream.channels[0],
         values=stream.payload.frame["p"],
         stream=StreamContext(stream=stream, is_regular=True),
     )
     assert _unmet_node_reason(Requires(capabilities=["numeric"]), ctx) is None
-    assert "derivatives" in _unmet_node_reason(
-        Requires(capabilities=["derivatives"]), ctx
-    )
+    derivatives_reason = _unmet_node_reason(Requires(capabilities=["derivatives"]), ctx)
+    assert derivatives_reason is not None and "derivatives" in derivatives_reason
     assert ctx.taxonomy_type == "proprio.joint_position"
 
 
 def test_display_rename_after_binding_preserves_measurements_and_identity():
     original = bind(signal(), assertions())
+    assert isinstance(original.payload, FramePayload)
     renamed = original.model_copy(
         update={
             "channels": [
@@ -359,6 +400,7 @@ def test_display_rename_after_binding_preserves_measurements_and_identity():
 
 def test_declared_permutation_with_updated_bindings_preserves_semantics():
     original = signal()
+    assert isinstance(original.payload, FramePayload)
     permutation = [2, 0, 1]
     names = [original.channels[i].name for i in permutation]
     moved = original.model_copy(
@@ -367,9 +409,10 @@ def test_declared_permutation_with_updated_bindings_preserves_semantics():
             "payload": FramePayload(frame=original.payload.frame.select(names)),
         }
     )
-    updated = [
-        a.model_copy(update={"index": permutation.index(a.index)}) for a in assertions()
-    ]
+    updated = []
+    for a in assertions():
+        assert a.index is not None
+        updated.append(a.model_copy(update={"index": permutation.index(a.index)}))
     a, b = bind(original, assertions()), bind(moved, updated)
 
     def by_name(s):
@@ -444,12 +487,14 @@ def test_grade_and_benchmark_share_resolved_identities_and_tiers(tier):
     )
     report = grade(FIXTURE, bundle=bundle, tier=tier)
     bench = benchmark_dataset(str(FIXTURE), bundle=bundle, sample=1, tier=tier)
+    assert report.run is not None
     assert bench.configuration["binding"] == report.run.binding
     for key in ("requirements", "policy", "dictionary", "execution", "bundle"):
         assert bench.configuration[key] == getattr(report.run, key)
     assert bench.scope == report.scope
     if tier == ExecutionTier.METADATA:
         assert bench.n_sampled == 0
+        assert report.eligibility_counts is not None
         assert report.eligibility_counts.unknown == len(report.episodes)
         declared = [c for s in report.episodes[0].streams for c in s.declared_channels]
         assert declared and all(c.binding is not None for c in declared)
@@ -471,21 +516,184 @@ def test_sidecar_is_permanent_read_only_and_explicit_flags_win(tmp_path):
     mapping = {"observation.velocity": "proprio.joint_position"}
     report = grade(root, bundle=bundle, mapping=mapping)
     bench = benchmark_dataset(str(root), bundle=bundle, mapping=mapping, sample=0)
+    assert report.run is not None
     assert report.run.binding == bench.configuration["binding"]
     assert report.binding_conflicts[0].winner.origin == BindingOrigin.ARGUMENT
     assert sidecar.read_text() == content
     assert len(list(root.glob("*.yaml"))) == 1
 
 
-def _vision_reasons(episode) -> list[str]:
-    """The ids of an episode's eligibility reasons that concern its cameras."""
+def test_report_json_round_trip_retains_resolved_bindings():
+    from kalanos.analysis.models.report import Report
 
-    return [
-        r.id
-        for r in episode.eligibility.reasons
-        if ".vision." in r.id
-        or r.id in ("capability:video_quality", "capability:sampled_video_quality")
+    report = grade(FIXTURE)
+    reread = Report.model_validate_json(report.model_dump_json())
+    assert reread.run is not None and report.run is not None
+    assert reread.run.binding == report.run.binding
+    assert reread.episodes[0].streams == report.episodes[0].streams
+
+
+def test_bundle_channel_cannot_spoof_validated_status():
+    a = assertions()[0].model_copy(
+        update={"origin": BindingOrigin.DECLARED, "status": ValidationStatus.VALIDATED}
+    )
+    b = bind(signal(), [a]).channels[0].binding
+    assert b is not None
+    assert b.origin == BindingOrigin.BUNDLE
+    assert b.status == ValidationStatus.ASSERTED
+    assert not b.capabilities["derivatives"].ready
+
+
+def test_same_feature_in_two_sources_respects_scoped_selector():
+    a = assertions()[0].model_copy(update={"source_identity": SOURCE})
+    first = bind(signal(), [a]).channels[0].binding
+    second = (
+        resolve_stream(
+            signal(),
+            dictionary=load_default_dictionary(),
+            channels=[a],
+            source_identity="other-session",
+        )
+        .channels[0]
+        .binding
+    )
+    assert first is not None and second is not None
+    assert first.taxonomy_type == "proprio.joint_position"
+    assert second.taxonomy_type.startswith("unmapped.")
+
+
+def test_global_and_source_scoped_selectors_cannot_overlap_silently():
+    a = assertions()[0]
+    b = a.model_copy(update={"source_identity": SOURCE})
+    with pytest.raises(MappingOverrideError, match="overlapping"):
+        bind(signal(), [a, b])
+
+
+def test_unknown_taxonomy_in_channel_binding_is_configuration_error():
+    bundle = Bundle(
+        binding=BindingSection(
+            id="bad",
+            channels=[
+                ChannelBinding(
+                    feature="observation.state", index=0, taxonomy_type="not.a.type"
+                )
+            ],
+        )
+    )
+    with pytest.raises(MappingOverrideError):
+        grade(FIXTURE, bundle=bundle)
+
+
+@pytest.mark.parametrize(
+    "limits", [(1, 1), (2, 1), (float("-inf"), 1), (0, float("inf"))]
+)
+def test_declared_physical_limits_must_be_finite_and_ordered(limits):
+    with pytest.raises(ValidationError):
+        ChannelBinding(
+            feature="mixed",
+            index=0,
+            taxonomy_type="proprio.joint_position",
+            limits=limits,
+        )
+
+
+def test_registered_jerk_abstains_without_evidence_and_runs_with_it():
+    from kalanos.analysis.metrics.registry import run_stream_metrics
+
+    unvalidated = typed_views(bind(signal(), assertions()))[0]
+    validated = typed_views(bind(signal(), [validated_position()]))[0]
+    no = run_stream_metrics(StreamContext(stream=unvalidated, is_regular=True))[
+        "mean_jerk_norm"
     ]
+    yes = run_stream_metrics(StreamContext(stream=validated, is_regular=True))[
+        "mean_jerk_norm"
+    ]
+    assert no.value is None and "derivatives" in no.evidence["reason"]
+    assert yes.value is not None
+
+
+def test_contradictory_quantity_and_taxonomy_are_rejected():
+    with pytest.raises(ValidationError, match="quantity contradicts"):
+        ChannelBinding(
+            feature="mixed",
+            index=0,
+            taxonomy_type="proprio.gripper_width",
+            quantity=Quantity.EFFORT,
+        )
+
+
+def test_taxonomy_override_cannot_leave_a_contradictory_inherited_quantity():
+    original = bind(signal(), assertions())
+    changed = ChannelBinding(
+        feature="mixed", index=1, taxonomy_type="proprio.joint_position"
+    )
+    with pytest.raises(MappingOverrideError, match="inconsistent binding"):
+        bind(original, [changed])
+
+
+def test_feature_override_preserves_inferred_actuator_kind():
+    override = MappingOverride(
+        feature="mixed",
+        taxonomy_type="proprio.joint_torque",
+        origin=OverrideOrigin.ARGUMENT,
+    )
+    b = (
+        bind(signal(("left_gripper",), "action.action_vector"), override=override)
+        .channels[0]
+        .binding
+    )
+    assert b is not None
+    assert b.actuator == ActuatorKind.GRIPPER
+    assert b.quantity == Quantity.EFFORT
+
+
+def test_binding_precedence_is_argument_file_bundle_sidecar_and_conflicts_are_kept():
+    resolved = resolve_feature_types(
+        [
+            FeatureAssertion(
+                feature="f", taxonomy_type="sidecar", origin=BindingOrigin.SIDECAR
+            ),
+            FeatureAssertion(
+                feature="f", taxonomy_type="bundle", origin=BindingOrigin.BUNDLE
+            ),
+            FeatureAssertion(
+                feature="f", taxonomy_type="file", origin=BindingOrigin.FILE
+            ),
+            FeatureAssertion(
+                feature="f", taxonomy_type="arg", origin=BindingOrigin.ARGUMENT
+            ),
+            FeatureAssertion(
+                feature="g", taxonomy_type="same", origin=BindingOrigin.BUNDLE
+            ),
+            FeatureAssertion(
+                feature="g", taxonomy_type="same", origin=BindingOrigin.SIDECAR
+            ),
+        ]
+    )
+    assert resolved.types["f"].taxonomy_type == "arg"
+    [conflict] = resolved.conflicts
+    assert conflict.feature == "f"
+    assert [d.origin for d in conflict.displaced] == [
+        BindingOrigin.FILE,
+        BindingOrigin.BUNDLE,
+        BindingOrigin.SIDECAR,
+    ]
+    # Agreement is not a conflict.
+    assert resolved.types["g"].taxonomy_type == "same"
+
+
+def test_two_assertions_at_one_priority_that_disagree_are_a_configuration_error():
+    with pytest.raises(SamePriorityConflict):
+        resolve_feature_types(
+            [
+                FeatureAssertion(
+                    feature="f", taxonomy_type="a", origin=BindingOrigin.FILE
+                ),
+                FeatureAssertion(
+                    feature="f", taxonomy_type="b", origin=BindingOrigin.FILE
+                ),
+            ]
+        )
 
 
 def test_the_default_scope_shows_vision_results_without_grading_them():
@@ -595,291 +803,3 @@ def test_sampled_video_quality_without_the_decoder_is_unknown(monkeypatch):
         "capability:sampled_video_quality" in _vision_reasons(e)
         for e in report.episodes
     )
-
-
-def test_relative_bundle_policy_is_shared_by_grade_and_benchmark(tmp_path):
-    policy = load_default_policy()
-    (tmp_path / "policy.yaml").write_text(
-        yaml.safe_dump(policy.model_dump(mode="json"))
-    )
-    profile = tmp_path / "profile.yaml"
-    profile.write_text("schema_version: 1\npolicy:\n  id: local\n  path: policy.yaml\n")
-    report = grade(FIXTURE, bundle=profile)
-    bench = benchmark_dataset(str(FIXTURE), bundle=profile, sample=0)
-    assert bench.configuration["policy"] == report.run.policy
-
-
-def test_explicit_policy_wins_consistently_over_bundle_policy(tmp_path):
-    profile = Bundle.model_validate({"policy": {"path": "missing.yaml"}})
-    explicit = load_default_policy()
-    loaded, _, _ = prepare_configuration(
-        UPath(tmp_path), policy=explicit, bundle=profile
-    )
-    assert loaded is explicit
-
-
-def test_vision_settings_follow_cli_then_environment_then_bundle():
-    """The command line beats KALANOS_*, which beats the bundle; the full tier scans."""
-
-    bundle = VisionSpec(sample_frames=7, max_pixels=4096)
-    unset = Settings(vision_samples=None, full_frame_scan=None)
-    environment = Settings(vision_samples=5, full_frame_scan=True)
-
-    def resolve(
-        settings, samples=None, full_frame_scan=None, tier=ExecutionTier.STANDARD
-    ):
-        return resolve_vision(
-            bundle,
-            settings,
-            samples=samples,
-            full_frame_scan=full_frame_scan,
-            tier=tier,
-        )
-
-    assert (resolve(unset).sample_frames, resolve(unset).full_frame_scan) == (7, False)
-    assert resolve(unset).max_pixels == 4096
-    assert (
-        resolve(environment).sample_frames,
-        resolve(environment).full_frame_scan,
-    ) == (
-        5,
-        True,
-    )
-    cli = resolve(environment, samples=3, full_frame_scan=False)
-    assert (cli.sample_frames, cli.full_frame_scan) == (3, False)
-    assert resolve(unset, tier=ExecutionTier.FULL).full_frame_scan
-
-
-def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
-    """Only a changed vision section enters the execution digest."""
-
-    def configuration(bundle):
-        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
-
-    default = configuration(Bundle(vision=VisionSpec()))
-    changed = configuration(Bundle(vision=VisionSpec(max_pixels=4096)))
-
-    assert default.execution_id.digest == content_digest(
-        {
-            "tier": default.scope.tier.value,
-            "limits": {
-                "max_bytes": default.limits.max_bytes,
-                "max_files": default.limits.max_files,
-            },
-        }
-    )
-    assert changed.execution_id.digest != default.execution_id.digest
-
-
-@pytest.mark.parametrize("override", [{"full_frame_scan": True}, {"vision_samples": 3}])
-def test_a_command_line_vision_override_changes_the_execution_identity(
-    tmp_path, override
-):
-    """A full scan or another sample count is a different run to compare."""
-
-    default = prepare_configuration(UPath(tmp_path), bundle=Bundle())[2]
-    overridden = prepare_configuration(UPath(tmp_path), bundle=Bundle(), **override)[2]
-
-    assert overridden.execution_id.digest != default.execution_id.digest
-
-
-def test_benchmark_cli_accepts_profile_and_rejects_conflicting_maps(tmp_path):
-    profile = tmp_path / "profile.yaml"
-    profile.write_text("schema_version: 1\nexecution:\n  tier: metadata\n")
-    output = tmp_path / "bench.json"
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "benchmark",
-            str(FIXTURE),
-            "--profile",
-            str(profile),
-            "--sample",
-            "0",
-            "--out",
-            str(output),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert json.loads(output.read_text())["datasets"][0]["scope"]["tier"] == "metadata"
-    result = runner.invoke(
-        app,
-        [
-            "benchmark",
-            str(FIXTURE),
-            "--map",
-            "observation.state=proprio.joint_position",
-            "--map",
-            "observation.state=proprio.joint_torque",
-        ],
-    )
-    assert result.exit_code == 2
-
-
-def test_report_json_round_trip_retains_resolved_bindings():
-    from kalanos.analysis.models.report import Report
-
-    report = grade(FIXTURE)
-    reread = Report.model_validate_json(report.model_dump_json())
-    assert reread.run.binding == report.run.binding
-    assert reread.episodes[0].streams == report.episodes[0].streams
-
-
-def test_bundle_channel_cannot_spoof_validated_status():
-    a = assertions()[0].model_copy(
-        update={"origin": BindingOrigin.DECLARED, "status": ValidationStatus.VALIDATED}
-    )
-    b = bind(signal(), [a]).channels[0].binding
-    assert b.origin == BindingOrigin.BUNDLE
-    assert b.status == ValidationStatus.ASSERTED
-    assert not b.capabilities["derivatives"].ready
-
-
-def test_same_feature_in_two_sources_respects_scoped_selector():
-    a = assertions()[0].model_copy(update={"source_identity": SOURCE})
-    first = bind(signal(), [a]).channels[0].binding
-    second = (
-        resolve_stream(
-            signal(),
-            dictionary=load_default_dictionary(),
-            channels=[a],
-            source_identity="other-session",
-        )
-        .channels[0]
-        .binding
-    )
-    assert first.taxonomy_type == "proprio.joint_position"
-    assert second.taxonomy_type.startswith("unmapped.")
-
-
-def test_global_and_source_scoped_selectors_cannot_overlap_silently():
-    a = assertions()[0]
-    b = a.model_copy(update={"source_identity": SOURCE})
-    with pytest.raises(MappingOverrideError, match="overlapping"):
-        bind(signal(), [a, b])
-
-
-def test_unknown_taxonomy_in_channel_binding_is_configuration_error():
-    bundle = Bundle(
-        binding=BindingSection(
-            id="bad",
-            channels=[
-                ChannelBinding(
-                    feature="observation.state", index=0, taxonomy_type="not.a.type"
-                )
-            ],
-        )
-    )
-    with pytest.raises(MappingOverrideError):
-        grade(FIXTURE, bundle=bundle)
-
-
-def test_in_memory_bundle_cannot_bypass_schema_version_validation():
-    with pytest.raises(MappingOverrideError, match="schema_version"):
-        grade(FIXTURE, bundle=Bundle(schema_version=999))
-
-
-@pytest.mark.parametrize(
-    "limits", [(1, 1), (2, 1), (float("-inf"), 1), (0, float("inf"))]
-)
-def test_declared_physical_limits_must_be_finite_and_ordered(limits):
-    with pytest.raises(ValidationError):
-        ChannelBinding(
-            feature="mixed",
-            index=0,
-            taxonomy_type="proprio.joint_position",
-            limits=limits,
-        )
-
-
-def test_bundle_resource_limits_are_enforced_before_adapter_reads(monkeypatch):
-    import kalanos.api as api
-    import kalanos.benchmark as benchmark
-    from kalanos.analysis.models.discovery import SourceInfo
-    from kalanos.analysis.models.errors import SourceTooLarge
-
-    fake = SourceInfo(
-        uri="hf://datasets/test/source@revision",
-        protocol="hf",
-        size_bytes=100,
-        file_count=10,
-    )
-    monkeypatch.setattr(api, "resolve_source", lambda path: (UPath(FIXTURE), fake))
-    monkeypatch.setattr(
-        benchmark, "resolve_source", lambda path: (UPath(FIXTURE), fake)
-    )
-    bundle = Bundle.model_validate({"execution": {"limits": {"max_bytes": 99}}})
-    with pytest.raises(SourceTooLarge):
-        grade(FIXTURE, bundle=bundle)
-    with pytest.raises(SourceTooLarge):
-        benchmark_dataset(str(FIXTURE), bundle=bundle, sample=0)
-
-
-def test_bundle_budget_can_tighten_but_cannot_lift_an_explicit_limit(tmp_path):
-    from kalanos.analysis.models.discovery import SourceLimits
-
-    bundle = Bundle.model_validate(
-        {"execution": {"limits": {"max_bytes": 500, "max_files": 3}}}
-    )
-    _, _, config = prepare_configuration(
-        UPath(tmp_path), bundle=bundle, limits=SourceLimits(max_bytes=100, max_files=10)
-    )
-    assert config.limits == SourceLimits(max_bytes=100, max_files=3)
-
-
-@pytest.mark.parametrize(
-    "limits", [{"unknown_budget": 1}, {"max_files": -1}, {"max_bytes": True}]
-)
-def test_unknown_or_invalid_resource_limits_are_rejected(limits):
-    with pytest.raises(ValidationError):
-        Bundle.model_validate({"execution": {"limits": limits}})
-
-
-def test_registered_jerk_abstains_without_evidence_and_runs_with_it():
-    from kalanos.analysis.metrics.registry import run_stream_metrics
-
-    unvalidated = typed_views(bind(signal(), assertions()))[0]
-    validated = typed_views(bind(signal(), [validated_position()]))[0]
-    no = run_stream_metrics(StreamContext(stream=unvalidated, is_regular=True))[
-        "mean_jerk_norm"
-    ]
-    yes = run_stream_metrics(StreamContext(stream=validated, is_regular=True))[
-        "mean_jerk_norm"
-    ]
-    assert no.value is None and "derivatives" in no.evidence["reason"]
-    assert yes.value is not None
-
-
-def test_contradictory_quantity_and_taxonomy_are_rejected():
-    with pytest.raises(ValidationError, match="quantity contradicts"):
-        ChannelBinding(
-            feature="mixed",
-            index=0,
-            taxonomy_type="proprio.gripper_width",
-            quantity=Quantity.EFFORT,
-        )
-
-
-def test_taxonomy_override_cannot_leave_a_contradictory_inherited_quantity():
-    original = bind(signal(), assertions())
-    changed = ChannelBinding(
-        feature="mixed", index=1, taxonomy_type="proprio.joint_position"
-    )
-    with pytest.raises(MappingOverrideError, match="inconsistent binding"):
-        bind(original, [changed])
-
-
-def test_feature_override_preserves_inferred_actuator_kind():
-    override = MappingOverride(
-        feature="mixed",
-        taxonomy_type="proprio.joint_torque",
-        origin=OverrideOrigin.ARGUMENT,
-    )
-    b = (
-        bind(signal(("left_gripper",), "action.action_vector"), override=override)
-        .channels[0]
-        .binding
-    )
-    assert b.actuator == ActuatorKind.GRIPPER
-    assert b.quantity == Quantity.EFFORT

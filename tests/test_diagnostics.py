@@ -1,48 +1,68 @@
-"""Controls for explicit 0.7.0 diagnostics and their decision boundaries."""
+"""Verifies the explicit diagnostics and their decision boundaries."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+import builtins
+from copy import deepcopy
+
+# External
 import numpy as np
 import polars as pl
 import pytest
+from diagnostics_helpers import (
+    audit,
+    episode,
+    relation,
+    signal,
+    two_channels,
+    window_spec,
+)
 from pydantic import ValidationError
 from typer.testing import CliRunner
 from upath import UPath
 
+# Internal
 from kalanos.analysis.diagnostics.common import Unavailable
 from kalanos.analysis.diagnostics.dataset import cohort
 from kalanos.analysis.diagnostics.runner import execute
 from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.validation import summarize_study
 from kalanos.analysis.diagnostics.windows import windows
+from kalanos.analysis.localization import support_for
 from kalanos.analysis.models.binding import (
     Bundle,
-    ChannelBinding,
-    EvaluationScope,
     RequirementsSection,
-    Validation,
 )
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import (
     ClockRelation,
+    CohortFeature,
     CohortSpec,
     DiagnosticPlan,
+    DiagnosticResult,
     DiagnosticReviewPolicy,
+    ModalitySpec,
     MotionSpec,
     Selector,
     TimingSpec,
     TrackingSpec,
     VisionSpec,
-    WindowSpec,
 )
 from kalanos.analysis.models.domain import (
-    Channel,
     ClockInfo,
     ClockOrigin,
-    Episode,
-    FramePayload,
+    Kind,
+    MappingSource,
+    OriginEvidence,
     SourceOrder,
     Stream,
+    TimestampDtype,
 )
-from kalanos.analysis.models.report import AnalysedEpisode, Report
-from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.reporting.render import render_html
 from kalanos.assets.policy import load_default_policy
 from kalanos.cli import app, failing_statuses, parse_fail_on
@@ -50,62 +70,9 @@ from kalanos.testing import clean_recording
 from kalanos.testing.injectors import SyntheticFrames
 
 
-def signal(feature="state", values=None, times=None, command="none"):
-    """Create an explicitly validated synthetic channel, never production evidence."""
-    values = list(values if values is not None else np.linspace(0, 1, 101))
-    times = list(times if times is not None else np.arange(len(values)) / 100)
-    b = ChannelBinding(
-        feature=feature,
-        index=0,
-        taxonomy_type="proprio.joint_position",
-        quantity="position",
-        representation="continuous",
-        unit="rad",
-        frame="joint",
-        command=command,
-        source_identity="fixture-session",
-    )
-    current = b.model_dump(mode="json")
-    current["identity"] = f"{feature}[0]"
-    b.validations = [
-        Validation(
-            property=k,
-            value=current[k],
-            scope="fixture-session",
-            validator="test",
-            evidence="synthetic only",
-        )
-        for k in ("identity", "quantity", "unit", "frame", "representation", "command")
-    ]
-    return Stream(
-        taxonomy_type="proprio.joint_position",
-        mapping_source="declared_names",
-        kind="series",
-        source_path=UPath("fixture.csv"),
-        source_field=feature,
-        timestamps=pl.Series(times),
-        timestamp_dtype="float64",
-        clock_info=ClockInfo(
-            origin="capture",
-            origin_evidence="producer",
-            native_unit="s",
-            domain="fixture",
-        ),
-        is_regular=True,
-        payload=FramePayload(frame=pl.DataFrame({"value": values})),
-        channels=[Channel(name="value", source_index=0, binding=b)],
-    )
-
-
-def relation(**updates):
-    """Return a fixture-only reviewed relation between two source scopes."""
-    return ClockRelation(
-        left_scope="fixture-session",
-        right_scope="fixture-session",
-        evidence="fixture-only clock wiring",
-        domain="fixture",
-        **updates,
-    )
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def pair(**updates):
@@ -120,55 +87,50 @@ def pair(**updates):
     )
 
 
-def episode(*streams, identifier="e"):
-    """Build one canonical episode without passing through an adapter."""
-    return Episode(id=identifier, streams=list(streams), tasks=["fixture task"])
-
-
-def audit(
-    episodes, plan=None, requirements=None, tier="standard", review=None, vision=None
-):
-    """Exercise the real assembly, coverage and single eligibility calculation."""
-    policy = load_default_policy()
-    if review:
-        policy.diagnostic_reviews = review
-    vision = vision or VisionSpec()
-    return assemble_report(
-        root=UPath("fixture"),
-        analysed=[
-            AnalysedEpisode(
-                episode=e, adapter="csv", policy=policy, adapter_confidence=1
-            )
-            for e in episodes
-        ],
-        policy=policy,
-        diagnostics_plan=plan,
-        vision_samples=vision.sample_frames,
-        full_frame_scan=vision.full_frame_scan,
-        vision=vision,
-        requirements=requirements,
-        scope=EvaluationScope(requirements_id="test", policy_id="test", tier=tier),
+def finding(**updates):
+    """Construct a scoped review with ordinary source identity fields."""
+    return Finding(
+        **{
+            "id": "fixture-finding",
+            "metric_id": "integrity.fixture",
+            "family": "integrity",
+            "severity": "critical",
+            "value": 1,
+            "unit": None,
+            "points": 0,
+            "episode_id": "e",
+            "source_path": "fixture.csv",
+            "source_field": "state",
+            "source_index": 1,
+            "channel": "other",
+            "consequence": "review",
+            **updates,
+        }
     )
 
 
-def window_spec(**updates):
-    """Declare a ten-hertz, two-history plus two-future window contract."""
-    return WindowSpec(
-        id="train",
-        anchor=Selector(feature="state", index=0),
-        modalities=[
-            {
-                "selector": {"feature": "state", "index": 0},
-                "max_age_s": 0.00001,
-                "matching": "nearest",
-            }
-        ],
-        sample_rate_hz=10,
-        history_steps=2,
-        prediction_steps=2,
-        max_gap_s=0.11,
-        **updates,
+def native_signal(unit="ns", origin=0, *, feature="state", rate=10):
+    """Record exact integer native ticks, independently of float display times."""
+    units_per_second = {"ns": 10**9, "us": 10**6, "ms": 1000}[unit]
+    step = int(units_per_second / rate)
+    s = signal(
+        feature, values=list(np.arange(10, dtype=float)), times=np.arange(10) / rate
     )
+    s.native_timestamps = pl.Series(
+        [origin + i * step for i in range(10)], dtype=pl.Int64
+    )
+    s.clock_info = ClockInfo(
+        native_unit=unit,
+        origin=ClockOrigin.CAPTURE,
+        origin_evidence=OriginEvidence.PRODUCER,
+        domain="fixture",
+    )
+    return s
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
 
 
 def test_timing_offset_is_explicit_and_unmatched_rows_are_retained():
@@ -194,6 +156,7 @@ def test_timing_offset_is_explicit_and_unmatched_rows_are_retained():
 )
 def test_pair_abstains_when_clock_evidence_is_missing(change):
     a, b = signal("command"), signal()
+    assert b.clock_info is not None
     spec = pair()
     spec.relation.claim = "capture_alignment"
     if change == "source_scope":
@@ -217,6 +180,7 @@ def test_large_integer_epoch_preserves_small_cross_stream_differences():
         s.native_timestamps = pl.Series(
             [10**18 + i * 1000 + offset for i in range(101)], dtype=pl.Int64
         )
+        assert s.clock_info is not None
         s.clock_info.native_unit = "ns"
     spec = pair()
     spec.tolerance_s = 2e-9
@@ -252,9 +216,9 @@ def test_tracking_preserves_raw_error_and_declared_delay_comparison():
 )
 def test_tracking_requires_each_scoped_property(prop):
     command = signal("command", command="absolute")
-    command.channels[0].binding.validations = [
-        v for v in command.channels[0].binding.validations if v.property != prop
-    ]
+    binding = command.channels[0].binding
+    assert binding is not None
+    binding.validations = [v for v in binding.validations if v.property != prop]
     with pytest.raises(Unavailable):
         tracking(
             episode(command, signal()),
@@ -288,6 +252,7 @@ def test_tracking_review_enters_existing_gate_without_score_penalty_or_block():
             review=DiagnosticReviewPolicy(tracking_max_abs_error={"pair": 0.1}),
         ),
     )
+    assert new.eligibility_counts is not None
     assert new.eligibility_counts.review == 1 and new.eligibility_counts.blocked == 0
     assert new.score.score == base.score.score
     assert any(
@@ -296,6 +261,7 @@ def test_tracking_review_enters_existing_gate_without_score_penalty_or_block():
         for f in new.findings
     )
     assert failing_statuses(new, parse_fail_on("blocked,review,unknown")) == 1
+    assert new.readiness is not None
     assert new.readiness.score is None
 
 
@@ -402,10 +368,13 @@ def test_window_sufficiency_never_counts_review_episodes():
     )
     req = RequirementsSection(min_pass_windows={"train": 8})
     r = audit([e], DiagnosticPlan(windows=[window_spec()]), req)
+    assert r.sufficiency is not None
     assert r.sufficiency.checks[0].observed == 7
     assert r.sufficiency.status.value == "insufficient"
     req.min_pass_windows = {"absent": 1}
-    assert audit([e], None, req).sufficiency.status.value == "unknown"
+    narrowed = audit([e], None, req).sufficiency
+    assert narrowed is not None
+    assert narrowed.status.value == "unknown"
 
 
 def camera(count=10):
@@ -414,18 +383,19 @@ def camera(count=10):
     rgb = np.stack([image] * 3, axis=2)
     return Stream(
         taxonomy_type="extero.camera_rgb",
-        kind="video",
-        mapping_source="declared_names",
+        kind=Kind.VIDEO,
+        mapping_source=MappingSource.DECLARED_NAMES,
         source_path=UPath("camera.mp4"),
         source_field="camera",
         timestamps=pl.Series(np.arange(count) / 10),
-        timestamp_dtype="float64",
+        timestamp_dtype=TimestampDtype.FLOAT64,
         payload=SyntheticFrames(frames=[rgb.copy() for _ in range(count)]),
     )
 
 
 def camera_read(report):
     """The vision diagnostic result of a report graded with one camera."""
+    assert report.diagnostics is not None
     return next(x for x in report.diagnostics.results if x.kind == "vision")
 
 
@@ -438,6 +408,8 @@ def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
         RequirementsSection(required_capabilities=["video_quality"]),
         vision=VisionSpec(sample_frames=4),
     )
+    assert r.coverage is not None
+    assert r.eligibility_counts is not None
     assert r.coverage.decoded_frames_examined == 4
     assert r.eligibility_counts.unknown == 1
     assert camera_read(r).consequence == "report_only"
@@ -447,6 +419,7 @@ def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
         RequirementsSection(required_capabilities=["sampled_video_quality"]),
         vision=VisionSpec(sample_frames=4),
     )
+    assert sampled.eligibility_counts is not None
     assert sampled.eligibility_counts.unknown == 0
 
 
@@ -457,6 +430,8 @@ def test_full_visual_evaluation_satisfies_required_capability():
         RequirementsSection(required_capabilities=["video_quality"]),
         vision=VisionSpec(sample_frames=10),
     )
+    assert r.eligibility_counts is not None
+    assert r.coverage is not None
     assert r.eligibility_counts.unknown == 0
     assert r.coverage.decoded_frames_examined == 10
     # A static scene repeats every frame, which stays a candidate, not a fault.
@@ -467,6 +442,7 @@ def test_full_visual_evaluation_satisfies_required_capability():
 
 def test_dark_frame_threshold_is_configured_and_review_only():
     cam = camera()
+    assert isinstance(cam.payload, SyntheticFrames)
     cam.payload.frames[3] = np.zeros((16, 16, 3), dtype=np.uint8)
     r = camera_read(
         audit(
@@ -507,12 +483,12 @@ def cohort_spec():
         task="fixture task",
         evidence="fixture scope",
         features=[
-            {
-                "channel": {"feature": "state", "index": 0},
-                "unit": "rad",
-                "lower": 0,
-                "upper": 1,
-            }
+            CohortFeature(
+                channel=Selector(feature="state", index=0),
+                unit="rad",
+                lower=0,
+                upper=1,
+            )
         ],
         similarity_rmse=0.01,
     )
@@ -528,12 +504,13 @@ def test_dataset_runner_keeps_raw_and_passing_summaries_separate():
     assert r.measurements["exact_feature_trajectory_duplicates"] == [["a", "b"]]
     assert r.measurements["phase_balance"]["fractions_of_labelled"] is None
     integrated = audit(episodes, DiagnosticPlan(cohorts=[spec]))
+    assert integrated.diagnostics is not None
     assert integrated.diagnostics.results[0].kind == "cohort"
 
 
 def test_dataset_invalid_samples_do_not_become_diversity():
     spec = cohort_spec()
-    values = list(np.linspace(0, 1, 101))
+    values = [float(v) for v in np.linspace(0, 1, 101)]
     values[50] = float("inf")
     r = cohort(
         [
@@ -582,10 +559,12 @@ def test_metadata_tier_records_skipped_required_diagnostics(kind):
     spec = specs[kind]
     r = audit(
         [episode(signal("command", command="absolute"), signal())],
-        DiagnosticPlan(**{kind: [spec]}),
+        DiagnosticPlan.model_validate({kind: [spec]}),
         RequirementsSection(required_metrics=[f"diagnostics.{kind}.{spec.id}"]),
         tier="metadata",
     )
+    assert r.diagnostics is not None
+    assert r.eligibility_counts is not None
     assert r.diagnostics.results[0].availability.value == "skipped"
     assert r.eligibility_counts.unknown == 1
 
@@ -600,6 +579,7 @@ def test_operational_errors_are_retained_and_fail_with_exit_two(monkeypatch):
     monkeypatch.setattr("kalanos.cli.api.grade", lambda *a, **k: r)
     invoked = CliRunner().invoke(app, ["grade", "fixture.csv", "--json"])
     assert invoked.exit_code == 2
+    assert r.eligibility_counts is not None
     assert r.eligibility_counts.unknown == 1
 
 
@@ -625,6 +605,8 @@ def test_plan_changes_execution_identity(tmp_path):
     b = prepare_configuration(
         path, bundle=Bundle(diagnostics=DiagnosticPlan(timing=[pair()])), sidecar=False
     )[2]
+    assert a.execution_id is not None
+    assert b.execution_id is not None
     assert a.execution_id.digest != b.execution_id.digest
 
 
@@ -662,7 +644,7 @@ def test_configuration_rejects_nonfinite_numbers_and_duplicate_ids():
     with pytest.raises(ValidationError):
         DiagnosticPlan(timing=[pair(), pair()])
     with pytest.raises(ValidationError):
-        Bundle(diagnostics={"auto_align": True})
+        Bundle(diagnostics={"auto_align": True})  # pyright: ignore[reportArgumentType]
 
 
 def test_nonfinite_computed_output_is_an_error():
@@ -675,7 +657,7 @@ def test_nonfinite_computed_output_is_an_error():
         lambda: DiagnosticResult(
             id="pair",
             kind="timing",
-            availability="computed",
+            availability=Availability.COMPUTED,
             measurements={"bad": float("inf")},
         ),
     )
@@ -700,6 +682,7 @@ def test_video_decoder_failure_preserves_already_examined_frames(monkeypatch):
 
 def test_video_shape_change_requests_review_and_records_shapes():
     cam = camera()
+    assert isinstance(cam.payload, SyntheticFrames)
     cam.payload.frames[2] = np.zeros((8, 8, 3), dtype=np.uint8)
     r = camera_read(
         audit(
@@ -725,6 +708,8 @@ def test_video_missing_decoder_is_unavailable_not_pass_or_operational_failure(
         DiagnosticPlan(vision=True),
         RequirementsSection(required_capabilities=["video_quality"]),
     )
+    assert r.eligibility_counts is not None
+    assert r.diagnostics is not None
     assert r.eligibility_counts.unknown == 1
     assert r.diagnostics.results[0].availability.value == "unavailable"
     assert not r.operational_errors
@@ -762,6 +747,7 @@ def test_configured_error_and_motion_period_controls():
     b = s.channels[0].binding
     from kalanos.analysis.models.binding import Representation
 
+    assert b is not None
     b.representation = Representation.ANGLE
     for v in b.validations:
         if v.property == "representation":
@@ -837,6 +823,8 @@ def test_mixed_native_units_at_large_epoch_remain_precise():
         [10**18 + i * 1000 for i in range(101)], dtype=pl.Int64
     )
     b.native_timestamps = pl.Series([10**15 + i for i in range(101)], dtype=pl.Int64)
+    assert a.clock_info is not None
+    assert b.clock_info is not None
     a.clock_info.native_unit = "ns"
     b.clock_info.native_unit = "us"
     r = timing(episode(a, b), pair())
@@ -849,6 +837,7 @@ def test_rate_tracking_uses_velocity_quantity_and_native_units():
     a, b = signal("command", command="rate"), signal()
     for s in (a, b):
         binding = s.channels[0].binding
+        assert binding is not None
         binding.taxonomy_type = "proprio.joint_velocity"
         binding.quantity = Quantity.VELOCITY
         binding.unit = "rad/s"
@@ -889,6 +878,8 @@ def test_review_threshold_changes_policy_identity_without_changing_plan(tmp_path
         UPath(tmp_path), bundle=bundle, policy=second, sidecar=False
     )[2]
     assert a.policy_id.digest != b.policy_id.digest
+    assert a.execution_id is not None
+    assert b.execution_id is not None
     assert a.execution_id.digest == b.execution_id.digest
 
 
@@ -910,6 +901,7 @@ def test_example_bundle_loads_through_cli():
     from kalanos.assets.bundle import load_bundle
 
     bundle = load_bundle(UPath(path))
+    assert bundle.diagnostics is not None
     assert bundle.diagnostics.windows[0].id == "train"
     result = CliRunner().invoke(app, ["profiles", "validate", str(path)])
     assert result.exit_code == 0
@@ -952,6 +944,254 @@ def test_tracking_preview_is_bounded_and_retains_command_response():
         TrackingSpec(**pair().model_dump(), semantics="absolute"),
     )
     preview = tracking_preview(r)
+    assert preview is not None
     assert preview["expected"] == preview["observed"]
     assert preview["samples"] <= 200
     assert r.evidence["samples"][0]["expected_response"] == 0
+
+
+def test_unused_channel_review_keeps_selected_windows_pass_but_episode_review():
+    e = two_channels(missing=True)
+    r = audit([e], DiagnosticPlan(windows=[window_spec()]))
+    eligibility = r.episodes[0].eligibility
+    assert eligibility is not None
+    assert r.diagnostics is not None
+    assert eligibility.status.value == "review"
+    assert r.diagnostics.results[0].measurements["counts"]["pass"] == 7
+    assert Report.model_validate_json(r.model_dump_json()) == r
+
+
+@pytest.mark.parametrize("consequence", ["review", "block"])
+@pytest.mark.parametrize("by_name", [False, True])
+def test_channel_findings_only_affect_consumed_indices(consequence, by_name):
+    e = two_channels()
+    f = finding(consequence=consequence, source_index=None if by_name else 1)
+    spec = window_spec()
+    assert windows(e, spec, [f]).measurements["counts"]["pass"] == 7
+    spec.modalities[0].selector.index = 1
+    expected = "blocked" if consequence == "block" else "review"
+    assert windows(e, spec, [f]).measurements["counts"][expected] == 7
+    spec.modalities[0].selector.index = None
+    assert windows(e, spec, [f]).measurements["counts"][expected] == 7
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"episode_id": "other"},
+        {"source_path": "elsewhere.csv"},
+        {"source_field": "different"},
+        {"instance": "other-arm"},
+    ],
+)
+def test_findings_from_other_subjects_do_not_leak(updates):
+    f = finding(source_index=0, channel="value", **updates)
+    assert (
+        windows(two_channels(), window_spec(), [f]).measurements["counts"]["pass"] == 7
+    )
+
+
+@pytest.mark.parametrize("episode_wide", [False, True])
+def test_broad_findings_still_propagate(episode_wide):
+    f = finding(
+        source_index=None,
+        channel=None,
+        source_path=None if episode_wide else "fixture.csv",
+        source_field=None if episode_wide else "state",
+    )
+    assert (
+        windows(two_channels(), window_spec(), [f]).measurements["counts"]["review"]
+        == 7
+    )
+
+
+def test_selected_channel_intervals_only_mark_overlapping_windows():
+    f = finding(
+        source_index=0,
+        channel="value",
+        support=support_for(list(range(10)), [(4, 5)]),
+    )
+    counts = windows(two_channels(), window_spec(), [f]).measurements["counts"]
+    assert counts == {"pass": 3, "blocked": 0, "review": 4, "unknown": 0}
+
+
+@pytest.mark.parametrize("unit", ["ns", "us", "ms"])
+@pytest.mark.parametrize("epoch", [False, True])
+@pytest.mark.parametrize("rate", [10, 12.5])
+def test_causal_windows_match_exact_native_grid_without_roundoff(unit, epoch, rate):
+    origin = {"ns": 10**18, "us": 10**15, "ms": 10**12}[unit] if epoch else 0
+    e = episode(native_signal(unit, origin, rate=rate))
+    spec = window_spec()
+    spec.sample_rate_hz = rate
+    spec.max_gap_s = 1 / rate
+    spec.modalities[0].matching = "previous"
+    spec.modalities[0].max_age_s = 0
+    r = windows(e, spec)
+    assert r.measurements["counts"] == {
+        "pass": 7,
+        "blocked": 0,
+        "review": 0,
+        "unknown": 0,
+    }
+    assert r.evidence["windows"][0]["consumed"][0]["source_rows"] == [0, 1, 2, 3]
+    assert DiagnosticResult.model_validate_json(r.model_dump_json()) == r
+
+
+def test_float_native_origin_is_subtracted_without_manufacturing_an_age():
+    s = signal(
+        values=list(np.arange(10, dtype=float)), times=[1 + i / 10 for i in range(10)]
+    )
+    spec = window_spec()
+    spec.modalities[0].matching = "previous"
+    spec.modalities[0].max_age_s = 0
+    assert windows(episode(s), spec).measurements["counts"]["pass"] == 7
+
+
+@pytest.mark.parametrize("future", [1, 100])
+def test_causal_matching_does_not_accept_a_genuinely_future_native_tick(future):
+    left, right = native_signal(), native_signal(feature="camera-state")
+    right.native_timestamps = right.native_timestamps + future
+    spec = window_spec()
+    spec.modalities = [
+        ModalitySpec(
+            selector=Selector(feature="camera-state", index=0),
+            relation=relation(),
+            matching="previous",
+            max_age_s=0.00001,
+        )
+    ]
+    assert windows(episode(left, right), spec).measurements["counts"]["blocked"] == 7
+
+
+def test_causal_matching_preserves_a_distinct_future_float_timestamp():
+    left = signal(values=list(np.arange(10, dtype=float)), times=np.arange(10) / 10)
+    times = list(np.arange(10) / 10)
+    times[3] = float(np.nextafter(0.3, np.inf))
+    right = signal("camera-state", values=list(np.arange(10, dtype=float)), times=times)
+    spec = window_spec()
+    spec.modalities = [
+        ModalitySpec(
+            selector=Selector(feature="camera-state", index=0),
+            relation=relation(),
+            matching="previous",
+            max_age_s=0.00001,
+        )
+    ]
+    counts = windows(episode(left, right), spec).measurements["counts"]
+    assert counts == {"pass": 3, "blocked": 4, "review": 0, "unknown": 0}
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_exact_max_age_boundary_is_inclusive_without_widening_it(late):
+    left, right = native_signal(), native_signal(feature="camera-state")
+    assert right.native_timestamps is not None
+    right.native_timestamps = right.native_timestamps - 10_000_000 - int(late)
+    spec = window_spec()
+    spec.modalities = [
+        ModalitySpec(
+            selector=Selector(feature="camera-state", index=0),
+            relation=relation(),
+            matching="previous",
+            max_age_s=0.01,
+        )
+    ]
+    status = "blocked" if late else "pass"
+    assert windows(episode(left, right), spec).measurements["counts"][status] == 7
+
+
+def test_mixed_units_and_declared_affine_transform_match_exactly():
+    left = native_signal("ns", 10**18)
+    right = native_signal("us", 10**15, feature="camera-state")
+    # Right runs at half the left rate; the declared relation maps it exactly.
+    right.native_timestamps = pl.Series([10**15 + i * 50_000 for i in range(10)])
+    spec = window_spec()
+    spec.modalities = [
+        ModalitySpec(
+            selector=Selector(feature="camera-state", index=0),
+            relation=relation(drift_ppm=1_000_000, anchor_s=1_000_000_000),
+            matching="previous",
+            max_age_s=0,
+        )
+    ]
+    assert windows(episode(left, right), spec).measurements["counts"]["pass"] == 7
+
+
+def test_window_summary_must_match_the_recorded_statuses():
+    r = windows(
+        two_channels(), window_spec(), [finding(source_index=0, channel="value")]
+    )
+    data = r.model_dump(mode="json")
+    data["measurements"]["counts"] = {
+        "pass": 7,
+        "blocked": 0,
+        "review": 0,
+        "unknown": 0,
+    }
+    with pytest.raises(ValidationError, match="window"):
+        DiagnosticResult.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["missing", "duplicate", "invalid_status", "invalid_bounds", "absent_records"],
+)
+def test_window_evidence_requires_complete_unique_valid_records(change):
+    data = windows(two_channels(), window_spec()).model_dump(mode="json")
+    records = data["evidence"]["windows"]
+    if change == "missing":
+        records.pop()
+    elif change == "duplicate":
+        records[1] = deepcopy(records[0])
+    elif change == "invalid_status":
+        records[0]["status"] = "approved"
+    elif change == "invalid_bounds":
+        records[0]["grid_end_exclusive"] = records[0]["grid_start"]
+    else:
+        del data["evidence"]["windows"]
+    with pytest.raises(ValidationError, match="window"):
+        DiagnosticResult.model_validate(data)
+
+
+def test_budget_unknowns_reconcile_with_examined_records_on_roundtrip():
+    r = windows(two_channels(), window_spec(max_windows=2))
+    assert r.measurements["counts"] == {
+        "pass": 2,
+        "blocked": 0,
+        "review": 0,
+        "unknown": 5,
+    }
+    assert DiagnosticResult.model_validate_json(r.model_dump_json()) == r
+
+
+def test_missing_extra_only_changes_eligibility_when_capability_required(monkeypatch):
+    e = episode(signal())
+    plan = DiagnosticPlan(
+        motion=[
+            MotionSpec(
+                id="shape", channel=Selector(feature="state", index=0), max_gap_s=0.11
+            )
+        ]
+    )
+    original = builtins.__import__
+
+    def no_numpy(name, *args, **kwargs):
+        """Simulate a plain installation without altering the environment."""
+        if name == "numpy" or name.startswith("numpy."):
+            raise ImportError("missing optional NumPy")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_numpy)
+    optional = audit([e], plan)
+    required = audit(
+        [e], plan, RequirementsSection(required_capabilities=["motion_shape"])
+    )
+    assert optional.eligibility_counts is not None
+    assert required.eligibility_counts is not None
+    assert optional.eligibility_counts.pass_count == 1
+    assert required.eligibility_counts.unknown == 1
+    for report in (optional, required):
+        assert report.diagnostics is not None
+        result = report.diagnostics.results[0]
+        assert result.reason is not None
+        assert result.availability.value == "unavailable"
+        assert "kalanos[numeric]" in result.reason
