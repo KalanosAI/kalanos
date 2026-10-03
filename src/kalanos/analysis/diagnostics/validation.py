@@ -1,19 +1,57 @@
 """Explicit window sufficiency and unaccepted calibration-study summaries."""
 
-from typing import Literal
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
+
+# External
 from pydantic import Field
 
-from kalanos.analysis.models.diagnostics import StrictModel
+# Internal
+from kalanos.analysis.models.binding import RequirementsSection
+from kalanos.analysis.models.diagnostics import DiagnosticsReport, StrictModel
 from kalanos.analysis.models.eligibility import (
+    EpisodeEligibility,
     Sufficiency,
     SufficiencyCheck,
     SufficiencyStatus,
 )
-from kalanos.analysis.models.provenance import content_digest
+from kalanos.analysis.models.provenance import Inventory, content_digest
 
 
-def window_sufficiency(base, diagnostics, decisions, inventory, requirements):
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+class StudyObservation(StrictModel):
+    """One externally labelled episode and the complete policy's observed decision."""
+
+    episode_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    split: Literal["tuning", "validation"]
+    truth: Literal["valid", "fault"]
+    decision: Literal["pass", "blocked", "review", "unknown"]
+    evidence: str = Field(min_length=1)
+    real_fault: bool = False
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def window_sufficiency(
+    base: Sufficiency,
+    diagnostics: DiagnosticsReport | None,
+    decisions: Mapping[str, EpisodeEligibility],
+    inventory: Inventory,
+    requirements: RequirementsSection,
+) -> Sufficiency:
     """Evaluate minimum window counts using passing episodes and known lower bounds."""
     checks = list(base.checks)
     for identifier, minimum in requirements.min_pass_windows.items():
@@ -70,19 +108,9 @@ def window_sufficiency(base, diagnostics, decisions, inventory, requirements):
     return Sufficiency(status=status, checks=checks)
 
 
-class StudyObservation(StrictModel):
-    """One externally labelled episode and the complete policy's observed decision."""
-
-    episode_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    split: Literal["tuning", "validation"]
-    truth: Literal["valid", "fault"]
-    decision: Literal["pass", "blocked", "review", "unknown"]
-    evidence: str = Field(min_length=1)
-    real_fault: bool = False
-
-
-def summarize_study(observations):
+def summarize_study(
+    observations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
     """Summarize held-out outcomes without asserting independence or acceptance."""
     rows = [StudyObservation.model_validate(x) for x in observations]
     if not rows or len({r.episode_id for r in rows}) != len(rows):

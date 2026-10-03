@@ -1,13 +1,25 @@
 """Strict configuration and evidence for optional 0.7.0 diagnostics."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import json
 from collections import Counter
 from typing import Annotated, Any, Literal
 
+# External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Internal
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.support import TemporalSupport
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 class StrictModel(BaseModel):
@@ -48,8 +60,9 @@ class Selector(StrictModel):
 class ClockRelation(StrictModel):
     """Attest a right-to-left clock transform for exact source scopes.
 
-    A declaration records externally reviewed evidence; Kalanos does not
-    authenticate its author or infer a clock relationship from equal units.
+    A declaration records externally reviewed evidence;
+    Kalanos does not authenticate its author
+    or infer a clock relationship from equal units.
     """
 
     left_scope: str = Field(min_length=1)
@@ -74,7 +87,7 @@ class TimingSpec(StrictModel):
     events: list[tuple[int, int]] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def unique_events(self):
+    def unique_events(self) -> "TimingSpec":
         """Require unique, nonnegative source-row event correspondences."""
         if any(a < 0 or b < 0 for a, b in self.events):
             raise ValueError("event rows must be nonnegative")
@@ -105,7 +118,7 @@ class MotionSpec(StrictModel):
     limits_evidence: str | None = None
 
     @model_validator(mode="after")
-    def limits_attested(self):
+    def limits_attested(self) -> "MotionSpec":
         """Require an evidence reference for a configured velocity limit."""
         if self.max_abs_velocity is not None and not self.limits_evidence:
             raise ValueError("max_abs_velocity requires limits_evidence")
@@ -128,7 +141,7 @@ class VisionSpec(StrictModel):
     bright_level: int = Field(default=250, ge=0, le=255)
 
     @model_validator(mode="after")
-    def ordered_levels(self):
+    def ordered_levels(self) -> "VisionSpec":
         """Reject reversed exposure thresholds and impossible sampling budgets."""
         if self.dark_level >= self.bright_level:
             raise ValueError("dark_level must be below bright_level")
@@ -173,7 +186,7 @@ class CohortFeature(StrictModel):
     upper: float
 
     @model_validator(mode="after")
-    def increasing_range(self):
+    def increasing_range(self) -> "CohortFeature":
         """Reject degenerate normalization ranges."""
         if self.upper <= self.lower:
             raise ValueError("cohort range must increase")
@@ -190,7 +203,7 @@ class PhaseLabel(StrictModel):
     evidence: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def forward(self):
+    def forward(self) -> "PhaseLabel":
         """Reject empty or reversed phase intervals."""
         if self.end_exclusive <= self.start:
             raise ValueError("phase interval must be nonempty")
@@ -219,7 +232,7 @@ class CohortSpec(StrictModel):
     phase_labels: list[PhaseLabel] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def unique_members(self):
+    def unique_members(self) -> "CohortSpec":
         """Prevent duplicate members, overlapping labels and unbounded comparisons."""
         if len(set(self.episode_ids)) != len(self.episode_ids):
             raise ValueError("cohort episode ids must be unique")
@@ -271,7 +284,7 @@ class DiagnosticPlan(StrictModel):
     cohorts: list[CohortSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def unique_ids(self):
+    def unique_ids(self) -> "DiagnosticPlan":
         """Keep every configured check address stable and unambiguous."""
         ids = [
             x.id
@@ -304,7 +317,7 @@ class DiagnosticResult(StrictModel):
     consequence: Literal["report_only", "review"] = "report_only"
 
     @model_validator(mode="after")
-    def reconciles(self):
+    def reconciles(self) -> "DiagnosticResult":
         """Reject nonfinite evidence and contradictory visual/window counts."""
         json.dumps(
             {"measurements": self.measurements, "evidence": self.evidence},

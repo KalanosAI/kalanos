@@ -1,15 +1,23 @@
 """Resolve channel semantics once, before either grading or benchmarking.
 
-Source arrays and indices are never rewritten. Whole-feature mappings remain
-compatibility defaults. A specific channel interpretation survives a conflicting
-whole-feature assertion, with both values recorded on the channel.
+Source arrays and indices are never rewritten.
+Whole-feature mappings remain compatibility defaults.
+A specific channel interpretation survives a conflicting whole-feature assertion,
+with both values recorded on the channel.
 """
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+# External
 from pydantic import ValidationError
 
+# Internal
 from kalanos.analysis.inference.roles import roles
 from kalanos.analysis.models.binding import (
     ActuatorKind,
@@ -35,6 +43,10 @@ from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.provenance import ConfigIdentity, content_digest
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 _PROPERTIES = (
     "taxonomy_type",
@@ -63,6 +75,11 @@ _TYPES = {
     "action.joint_torque_command": (ActuatorKind.JOINT, Quantity.EFFORT),
     "action.gripper_command": (ActuatorKind.GRIPPER, Quantity.UNKNOWN),
 }
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _known(value: object) -> bool:
@@ -140,12 +157,12 @@ def capability_checks(
         if status == ValidationStatus.VALIDATED
     }
 
-    def validated_for(capability):
+    def validated_for(capability: str) -> set[str]:
         return validated | {
             v.property for v in binding.validations if v.capability == capability
         }
 
-    def physical(capability):
+    def physical(capability: str) -> list[str]:
         missing = [
             f"{p} lacks scoped validation"
             for p in ("identity", "quantity", "unit")
@@ -403,8 +420,9 @@ def typed_views(stream: Stream) -> list[Stream]:
     """Expose homogeneous channel groups without reindexing source columns.
 
     Each view keeps the original field/path and each channel's source index.
-    The source stream and its arrays remain untouched. Views are signals, not
-    extra physical sensors; consumers must count devices from binding identity.
+    The source stream and its arrays remain untouched.
+    Views are signals, not extra physical sensors;
+    consumers must count devices from binding identity.
     """
 
     groups: dict[tuple, list[Channel]] = {}

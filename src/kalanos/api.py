@@ -18,10 +18,6 @@ from upath import UPath
 # Internal
 from kalanos.analysis import pipeline
 from kalanos.analysis.adapters.video import close_remote_handles
-
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
-# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
-# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 from kalanos.analysis.compare import compare_reports as compare
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.models.binding import Bundle
@@ -42,6 +38,10 @@ from kalanos.analysis.source_identity import hash_local_source
 from kalanos.assets.bundle import prepare_configuration
 from kalanos.core.settings import get_settings
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 __all__ = ["compare", "grade", "load_report"]
 
@@ -107,24 +107,26 @@ def grade(
         Whether frame metrics read every frame rather than a sample.
         `None` uses `Settings.full_frame_scan`, then the bundle's `vision` section;
         the full tier always reads every frame.
-    mapping : Mapping[str, str] or None
-        Source fields to type for this run, each a `Stream.source_field`
-        mapped to a dictionary key. The same as `--map`.
+    mapping : Mapping[str, str], Sequence[tuple[str, str]] or None
+        Source fields to type for this run,
+        each a `Stream.source_field` mapped to a dictionary key.
+        The same as `--map`; pairs keep a repeated field so a contradiction is refused.
     mapping_file : str, PathLike, UPath or None
         A YAML mapping file, the same as `--map-file`.
-    bundle : str, PathLike, UPath, Bundle or None
-        A configuration bundle (`--profile`): binding, requirements, policy
-        and execution sections with separate identities. `None` grades under
-        the built-in `numeric-core` scope at the standard tier.
-    tier : ExecutionTier or None
-        Overrides the bundle's execution tier. A tier never changes the
-        requirements: skipping a required capability makes episodes unknown.
-    hash_source : bool
-        Hash all local source bytes before and after analysis; reject changing
-        sources. Off by default. Symlinks and nonlocal roots are refused.
     sidecar : bool
         Whether to read a `kalanos-map.yaml` in the graded root,
         or beside it when the root is a file.
+    bundle : str, PathLike, UPath, Bundle or None
+        A configuration bundle file or a built-in profile name (`--profile`):
+        binding, requirements, policy and execution sections with separate identities.
+        `None` grades under the built-in `numeric-core` scope at the standard tier.
+    tier : ExecutionTier or None
+        Overrides the bundle's execution tier.
+        A tier never changes the requirements:
+        skipping a required capability makes episodes unknown.
+    hash_source : bool
+        Hash all local source bytes before and after analysis,
+        and withhold the report if they changed.
 
     Returns
     -------
@@ -136,7 +138,11 @@ def grade(
     SourceUnavailable
         If `path` does not exist,
         a Hugging Face dataset is missing, gated or private,
-        or the `hf` extra is not installed.
+        or the `hf` extra is not installed;
+        or, with `hash_source`, if the root is not local,
+        holds a symlink, a non-regular file or no regular file at all,
+        a file changes while it is hashed,
+        or the bytes changed during analysis.
     SourceTooLarge
         If `path` is remote and over a limit; nothing was read.
     NothingToGrade
@@ -146,14 +152,19 @@ def grade(
     ValueError
         If `vision_samples` is below 1.
     MappingOverrideError
-        If a mapping source is malformed, names a type the dictionary lacks,
-        or names a field no stream has.
+        If a mapping source or the bundle file is missing or malformed,
+        names a type the dictionary lacks,
+        or names a field no stream has;
+        or if the bundle's diagnostic plan does not cover what the policy reviews.
+    ConfigurationError
+        If the bundle's policy cannot be located or loaded.
 
     Notes
     -----
-    The three mapping sources merge per field: `mapping` beats `mapping_file`,
-    which beats the sidecar. Each applied override is recorded on
-    `Report.mapping_overrides` with where it came from.
+    The three mapping sources merge per field:
+    `mapping` beats `mapping_file`, which beats the sidecar.
+    Each applied override is recorded on `Report.mapping_overrides`
+    with where it came from.
     """
 
     if vision_samples is not None and vision_samples < 1:

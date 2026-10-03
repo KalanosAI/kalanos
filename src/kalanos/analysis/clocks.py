@@ -1,10 +1,20 @@
 """Clock evidence and adjacent source-row gaps, shared by timing metrics."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 from dataclasses import dataclass
 
+# Internal
 from kalanos.analysis.models.domain import ClockInfo, Stream
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 _SECONDS_PER_UNIT: dict[str | None, float] = {
     "s": 1.0,
@@ -12,6 +22,11 @@ _SECONDS_PER_UNIT: dict[str | None, float] = {
     "us": 1e-6,
     "ns": 1e-9,
 }
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 @dataclass(frozen=True)
@@ -26,12 +41,18 @@ class ClockSamples:
     seconds: bool = True
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 def samples(stream: Stream) -> ClockSamples:
     """Subtract native ticks before converting, never bridge an invalid row.
 
-    A transformed view is restored through its explicit source row map. Without
-    that map, there is no defensible source-order measurement. Integer subtraction
-    happens in Python, avoiding both epoch float rounding and unsigned underflow.
+    A transformed view is restored through its explicit source row map.
+    Without that map, there is no defensible source-order measurement.
+    Integer subtraction happens in Python,
+    avoiding both epoch float rounding and unsigned underflow.
     """
 
     info = stream.clock_info or ClockInfo.from_legacy(stream.clock)
@@ -48,7 +69,7 @@ def samples(stream: Stream) -> ClockSamples:
     if not stream.source_order.preserved:
         rows.sort(key=lambda row: row[0])
 
-    def valid(value):
+    def valid(value: float | None) -> bool:
         return value is not None and math.isfinite(value)
 
     invalid = [i for i, value in rows if not valid(value)]

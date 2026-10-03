@@ -34,6 +34,11 @@ from kalanos.testing import Defect, clean_frames, clean_recording
 from helpers import FIXTURES_DIR
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+
 # A scope under which vision grades, so cameras are decoded for injection.
 VIDEO_SCOPE = Bundle(
     requirements=RequirementsSection(required_capabilities=["sampled_video_quality"])

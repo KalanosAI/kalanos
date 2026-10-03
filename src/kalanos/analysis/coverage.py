@@ -1,19 +1,40 @@
 """Build and merge coverage from actual result states, not policy grades."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 
+# Internal
 from kalanos.analysis.metrics.registry import registered_metrics
 from kalanos.analysis.metrics.vision import CORE_METRICS, is_camera_footage
 from kalanos.analysis.models.binding import (
     SAMPLED_VIDEO_QUALITY_CAPABILITY,
     VIDEO_QUALITY_CAPABILITY,
+    RequirementsSection,
 )
 from kalanos.analysis.models.coverage import Availability, Coverage, CoverageRow
-from kalanos.analysis.models.metrics import Level, MetricStatus
+from kalanos.analysis.models.domain import Stream
+from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
+from kalanos.analysis.models.provenance import Inventory
+from kalanos.analysis.models.report import (
+    GradedChannel,
+    GradedEpisode,
+    GradedStream,
+    StreamEvaluation,
+)
 
 
-def state_of(result):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def state_of(result: MetricResult) -> Availability:
     if result.availability is not None and result.availability != Availability.COMPUTED:
         return result.availability
     if (
@@ -25,7 +46,9 @@ def state_of(result):
     return Availability.UNAVAILABLE
 
 
-def row(key, unit, states):
+def row(
+    key: str, unit: str, states: Iterable[tuple[Availability, str | None]]
+) -> CoverageRow:
     states = list(states)
     counts = Counter(s.value for s, _ in states)
     reasons = Counter(reason for _, reason in states if reason)
@@ -43,7 +66,13 @@ def row(key, unit, states):
     )
 
 
-def metric_rows(level, subjects, *, skipped=None, skip_reason=None):
+def metric_rows(
+    level: Level,
+    subjects: Iterable[tuple[str, dict[str, MetricResult]]],
+    *,
+    skipped: Availability | None = None,
+    skip_reason: str | None = None,
+) -> list[CoverageRow]:
     """Each subject is (taxonomy, result mapping); omitted payloads remain counted."""
     rows = []
     for entry in registered_metrics(level):
@@ -79,7 +108,12 @@ def metric_rows(level, subjects, *, skipped=None, skip_reason=None):
     return rows
 
 
-def stream_rows(stream, graded, metrics, evaluation):
+def stream_rows(
+    stream: Stream,
+    graded: list[GradedChannel],
+    metrics: dict[str, MetricResult],
+    evaluation: StreamEvaluation,
+) -> list[CoverageRow]:
     subjects = [
         (
             g.channel.binding.taxonomy_type
@@ -102,7 +136,7 @@ def stream_rows(stream, graded, metrics, evaluation):
     )
 
 
-def merge_rows(rows):
+def merge_rows(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
     grouped = defaultdict(list)
     for item in rows:
         grouped[(item.key, item.unit)].append(item)
@@ -154,7 +188,7 @@ def _unsampled_reason(stream):
     return "vision metrics did not sample the stream"
 
 
-def vision_metric_coverage(streams):
+def vision_metric_coverage(streams: list[GradedStream]) -> tuple[bool, bool]:
     """Whether the vision metrics sampled every camera stream, and read every frame.
 
     Parameters
@@ -169,7 +203,7 @@ def vision_metric_coverage(streams):
         No camera stream is `(False, False)`: nothing was evaluated.
     """
 
-    cameras = [s for s in streams if is_camera_footage(s.kind, s.taxonomy_type)]
+    cameras = [s for s in streams if is_camera_footage(s.kind or "", s.taxonomy_type)]
     if not cameras:
         return False, False
     results = []
@@ -184,7 +218,7 @@ def vision_metric_coverage(streams):
     return True, full
 
 
-def vision_metric_frames(streams):
+def vision_metric_frames(streams: list[GradedStream]) -> tuple[int, int] | None:
     """`(examined, declared)` frames over the cameras the vision metrics sampled.
 
     A camera's examined count is the most frames any of `CORE_METRICS` measured on it.
@@ -212,7 +246,9 @@ def vision_metric_frames(streams):
     return sum(e for e, _ in counts), sum(d for _, d in counts)
 
 
-def episode_coverage(episode, requirements):
+def episode_coverage(
+    episode: GradedEpisode, requirements: RequirementsSection
+) -> Coverage:
     metrics = merge_rows(
         [r for s in episode.streams for r in s.coverage]
         + metric_rows(Level.EPISODE, [("episode", episode.metrics)])
@@ -250,13 +286,13 @@ def episode_coverage(episode, requirements):
         for kind in ("timing", "tracking", "motion", "vision", "windows")
     }
 
-    def done(kind):
+    def done(kind: str) -> bool:
         return bool(by_kind[kind]) and all(
             r.availability == Availability.COMPUTED for r in by_kind[kind]
         )
 
     camera_count = sum(
-        is_camera_footage(s.kind, s.taxonomy_type) for s in episode.streams
+        is_camera_footage(s.kind or "", s.taxonomy_type) for s in episode.streams
     )
     sampled_vision = done("vision") and len(by_kind["vision"]) == camera_count
     full_vision = sampled_vision and all(
@@ -331,7 +367,9 @@ def episode_coverage(episode, requirements):
         )
         for s in episode.streams
     ]
-    cameras = [s for s in episode.streams if is_camera_footage(s.kind, s.taxonomy_type)]
+    cameras = [
+        s for s in episode.streams if is_camera_footage(s.kind or "", s.taxonomy_type)
+    ]
     visual_state = (
         Availability.UNAVAILABLE
         if "video_quality" in requirements.required_capabilities
@@ -416,7 +454,7 @@ def episode_coverage(episode, requirements):
     )
 
 
-def report_coverage(episodes, inventory):
+def report_coverage(episodes: list[GradedEpisode], inventory: Inventory) -> Coverage:
     coverages = [e.coverage for e in episodes if e.coverage is not None]
     return Coverage(
         metrics=merge_rows(r for c in coverages for r in c.metrics),
@@ -450,7 +488,7 @@ def report_coverage(episodes, inventory):
     )
 
 
-def coverage_lines(coverage):
+def coverage_lines(coverage: Coverage | None) -> list[str]:
     """The same strings feed terminal, inspect and HTML; never a blended score."""
     if coverage is None:
         return ["Coverage was not recorded in this report."]

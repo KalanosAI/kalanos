@@ -1,8 +1,8 @@
 """The `kalanos` command group.
 
-`grade` is the first subcommand, not the only one. Everything here parses
-arguments and prints; the work belongs to `kalanos.analysis`, so that a
-second command reuses the pipeline rather than reimplementing part of it.
+`grade` is the first subcommand, not the only one.
+Everything here parses arguments and prints; the work belongs to `kalanos.analysis`,
+so that a second command reuses the pipeline rather than reimplementing part of it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -55,6 +55,14 @@ from kalanos.plugins import list_adapters, list_metrics, list_reporters
 from kalanos.scaffold import scaffold_adapter, scaffold_metric
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# Listing width when stdout is not a terminal, so rows do not depend on who ran it.
+_LISTING_WIDTH = 120
+
+
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
 # ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
 # ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
@@ -67,9 +75,23 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# What a listing is laid out against when stdout is not a terminal, so a
-# captured row does not depend on the width of whoever ran it.
-_LISTING_WIDTH = 120
+
+new_app = typer.Typer(
+    name="new",
+    help="Write a publishable plugin package to start from.",
+    no_args_is_help=True,
+)
+app.add_typer(new_app)
+
+
+profiles_app = typer.Typer(help="Inspect and validate requirements bundles.")
+app.add_typer(profiles_app, name="profiles")
+
+
+diagnostics_app = typer.Typer(
+    help="Inspect explicit diagnostic plans and validation evidence."
+)
+app.add_typer(diagnostics_app, name="diagnostics")
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -248,13 +270,14 @@ def grade(
         The audit completed and no episode carries a status in `fail_on`.
     1
         The audit completed and at least one episode carries such a status,
-        or the inventory is incomplete (a refused source, or declared
-        episodes that never loaded) and `unknown` is in `fail_on`.
-        CI gate failure is not source corruption: `review` and `unknown` say
-        the data needs a decision or more evidence.
+        or the inventory is incomplete
+        (a refused source, or declared episodes that never loaded)
+        and `unknown` is in `fail_on`.
+        CI gate failure is not source corruption:
+        `review` and `unknown` say the data needs a decision or more evidence.
     2
-        Invalid configuration or an operational failure: a missing path, a
-        malformed bundle, an unknown taxonomy type, an unwritable report.
+        Invalid configuration or an operational failure: a missing path,
+        a malformed bundle, an unknown taxonomy type, an unwritable report.
         Takes precedence over 1 when both apply.
 
     Parameters
@@ -262,9 +285,10 @@ def grade(
     path : str
         File or folder to analyse, parsed as a `UPath`.
     report : Path or None
-        Where to write the report. `.html` renders it, `.json`/`.yaml`/`.yml`
-        dump the model. Omitting it only affects the file write — stdout is
-        decided by `as_json` either way.
+        Where to write the report.
+        `.html` renders it, `.json`/`.yaml`/`.yml` dump the model.
+        Omitting it only affects the file write —
+        stdout is decided by `as_json` either way.
     as_json : bool
         Print the Report model to stdout instead of the report card.
     max_remote_gb : float or None
@@ -288,17 +312,30 @@ def grade(
         A YAML mapping file of overrides, beaten by `map_`.
     no_sidecar : bool
         Ignore a `kalanos-map.yaml` in the graded root.
+    profile : Path or None
+        A configuration bundle file, or a built-in profile name.
+        `None` grades under the built-in `numeric-core` scope.
+    tier : ExecutionTier or None
+        Overrides the bundle's execution tier without changing its requirements.
+    hash_source : bool
+        Hash local source bytes before and after analysis,
+        and withhold the report if they changed.
+    fail_on : str
+        Comma-separated eligibility statuses that fail the audit.
 
     Raises
     ------
     typer.Exit
-        Code 2 when grading raised a `KalanosError` — `path` does not exist,
+        Code 2 when `fail_on` names an unknown status or `pass`, or no status at all,
+        when the report records operational errors,
+        or when grading raised a `KalanosError` — `path` does not exist,
         is a remote dataset over a limit, held nothing to report on at all,
         two adapters tied on the same file,
         or a mapping override was malformed or matched nothing —
         or when writing `report` failed: an unsupported suffix, a missing directory,
         an unwritable path.
         The reason goes to stderr and nothing is written to stdout.
+        Code 1 when the gate in `fail_on` trips.
     """
 
     settings = get_settings()
@@ -465,12 +502,22 @@ def inspect(
         typer.Option("--episode", help="Show one episode's reasons in full."),
     ] = None,
 ) -> None:
-    """Read-only inspection of a saved report, current or legacy.
+    """Summarise a saved report, current or legacy, without changing it.
+
+    Parameters
+    ----------
+    report : Path
+        The report JSON, of the current schema or a legacy one.
+    episode : str or None
+        Show only this episode's findings, diagnostics and reasons,
+        with each reason in full.
+        `None` shows every episode with a count of its reasons.
 
     Raises
     ------
     typer.Exit
-        Code 2 when the file is missing or not a report.
+        Code 2 when the file is missing or not a report,
+        or `episode` names no episode in it.
     """
 
     try:
@@ -640,6 +687,16 @@ def benchmark(
         `None` benchmarks `REFERENCE_DATASETS`.
     sample : int
         How many episodes per dataset to inject defects into.
+    profile : Path or None
+        A configuration bundle file, or a built-in profile name, as for `grade`.
+    map_ : list[str] or None
+        `FEATURE=TYPE` overrides, as for `grade`.
+    map_file : Path or None
+        A YAML mapping file of overrides, as for `grade`.
+    no_sidecar : bool
+        Ignore a `kalanos-map.yaml` in or beside each dataset.
+    tier : ExecutionTier or None
+        Overrides the bundle's execution tier without changing its requirements.
     out : Path or None
         Where to write the result, relative to the working directory.
         `None` prints the Markdown to stdout instead.
@@ -768,14 +825,6 @@ def reporters() -> None:
     _console().print(table)
 
 
-new_app = typer.Typer(
-    name="new",
-    help="Write a publishable plugin package to start from.",
-    no_args_is_help=True,
-)
-app.add_typer(new_app)
-
-
 @new_app.command("adapter", help="Write an adapter package for a new format.")
 def new_adapter(
     name: Annotated[
@@ -890,10 +939,37 @@ def main(
     "compare", help="Compare saved reports without inventing missing identities."
 )
 def compare_command(
-    old: Annotated[Path, typer.Argument()],
-    new: Annotated[Path, typer.Argument()],
-    report: Annotated[Path | None, typer.Option("--report")] = None,
+    old: Annotated[
+        Path, typer.Argument(help="The earlier report JSON, of any schema.")
+    ],
+    new: Annotated[Path, typer.Argument(help="The later report JSON, of any schema.")],
+    report: Annotated[
+        Path | None,
+        typer.Option(
+            "--report",
+            help="Also write the comparison JSON here. It must not be either input.",
+        ),
+    ] = None,
 ) -> None:
+    """Compare two saved reports and print the comparison as JSON.
+
+    Parameters
+    ----------
+    old : Path
+        The earlier report.
+    new : Path
+        The later report.
+    report : Path or None
+        Where to also write the comparison, relative to the working directory.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 when a report cannot be read or loaded,
+        when `report` is one of the inputs, or when writing it fails.
+        Code 1 when the reports are not comparable.
+    """
+
     try:
         result = api.compare(old, new)
         text = result.model_dump_json(indent=2)
@@ -909,25 +985,61 @@ def compare_command(
         raise typer.Exit(code=1)
 
 
-profiles_app = typer.Typer(help="Inspect and validate requirements bundles.")
-app.add_typer(profiles_app, name="profiles")
-
-
-@profiles_app.command("list")
+@profiles_app.command("list", help="List the built-in profile names.")
 def profiles_list() -> None:
+    """Print each built-in profile name on its own line."""
+
     print("\n".join(BUILT_IN_PROFILES))
 
 
-@profiles_app.command("show")
-def profiles_show(name: str) -> None:
+@profiles_app.command("show", help="Print the bundle a built-in profile stands for.")
+def profiles_show(
+    name: Annotated[
+        str,
+        typer.Argument(help="A built-in profile name, from `kalanos profiles list`."),
+    ],
+) -> None:
+    """Print the bundle a built-in profile stands for, as JSON.
+
+    Parameters
+    ----------
+    name : str
+        A built-in profile name.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 when `name` is not a built-in profile.
+    """
+
     if name not in BUILT_IN_PROFILES:
         print(f"kalanos: unknown profile {name!r}", file=sys.stderr)
         raise typer.Exit(code=2)
     print(Bundle(requirements=RequirementsSection(id=name)).model_dump_json(indent=2))
 
 
-@profiles_app.command("validate")
-def profiles_validate(path: Path) -> None:
+@profiles_app.command(
+    "validate", help="Check a configuration bundle file and the policy it names."
+)
+def profiles_validate(
+    path: Annotated[Path, typer.Argument(help="A configuration bundle YAML file.")],
+) -> None:
+    """Load a configuration bundle and its policy, and report whether both are valid.
+
+    Dataset bindings and coverage are left to a grade run,
+    which has a dataset to check them against.
+
+    Parameters
+    ----------
+    path : Path
+        The bundle file.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 when the bundle or its policy cannot be read or does not validate.
+    """
+
     try:
         bundle = load_bundle(UPath(path))
         load_bundle_policy(bundle, UPath(path))
@@ -940,15 +1052,33 @@ def profiles_validate(path: Path) -> None:
         raise typer.Exit(code=2) from exc
 
 
-diagnostics_app = typer.Typer(
-    help="Inspect explicit diagnostic plans and validation evidence."
+@diagnostics_app.command(
+    "summarize-study",
+    help="Summarize labelled JSON observations as an unaccepted validation draft.",
 )
-app.add_typer(diagnostics_app, name="diagnostics")
+def summarize_study_command(
+    path: Annotated[
+        Path,
+        typer.Argument(help="A JSON list of labelled episode observations."),
+    ],
+) -> None:
+    """Summarize labelled JSON observations as an unaccepted validation draft.
 
+    Parameters
+    ----------
+    path : Path
+        A JSON list of observations, one per episode,
+        each in the tuning or the validation split.
 
-@diagnostics_app.command("summarize-study")
-def summarize_study_command(path: Path) -> None:
-    """Summarize labelled JSON observations as an unaccepted validation draft."""
+    Raises
+    ------
+    typer.Exit
+        Code 2 when the file cannot be read or parsed,
+        an observation does not validate,
+        episode ids repeat,
+        or a session appears in both splits.
+    """
+
     from kalanos.analysis.diagnostics.validation import summarize_study
 
     try:
@@ -957,6 +1087,10 @@ def summarize_study_command(path: Path) -> None:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
 
+
+# ░█▄█░█▀█░▀█▀░█▀█
+# ░█░█░█▀█░░█░░█░█
+# ░▀░▀░▀░▀░▀▀▀░▀░▀
 
 if __name__ == "__main__":
     app()

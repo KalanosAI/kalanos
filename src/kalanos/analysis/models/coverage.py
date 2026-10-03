@@ -1,8 +1,19 @@
 """Coverage counts measures attempted work, independently of graded severity."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 from enum import Enum
 
+# External
 from pydantic import BaseModel, Field, model_validator
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 class Availability(str, Enum):
@@ -27,7 +38,7 @@ class CoverageRow(BaseModel):
     reasons: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def reconciles(self):
+    def reconciles(self) -> "CoverageRow":
         if (
             self.eligible
             != self.computed + self.unavailable + self.skipped + self.error

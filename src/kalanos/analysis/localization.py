@@ -1,13 +1,28 @@
 """Source sample locations, without manufacturing event times or repair windows."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 
+# External
 import polars as pl
 
+# Internal
+from kalanos.analysis.models.metrics import ChannelContext
 from kalanos.analysis.models.support import SampleInterval, SupportKind, TemporalSupport
 
 
-def source_values(ctx):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def source_values(
+    ctx: ChannelContext,
+) -> tuple[pl.Series, list[int], list[float]] | None:
     stream = ctx.stream.stream
     order = stream.source_order
     if not order.preserved and order.original_index is None:
@@ -23,7 +38,9 @@ def source_values(ctx):
     )
 
 
-def support_for(indices, ranges, *, window=0):
+def support_for(
+    indices: list[int], ranges: list[tuple[int, int]], *, window: int = 0
+) -> TemporalSupport:
     """Map measured positions to source rows; split gaps instead of filling them."""
     intervals = []
     for start, end in ranges:
@@ -61,5 +78,5 @@ def support_for(indices, ranges, *, window=0):
     )
 
 
-def finite(value):
+def finite(value: float | None) -> bool:
     return value is not None and math.isfinite(value)

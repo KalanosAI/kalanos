@@ -1,9 +1,10 @@
 """Provenance: who produced a report, from what, under which configuration.
 
-An installed package version cannot distinguish a release branch from its
-ancestor, and a dataset name cannot say which bytes were read. These models
-record enough identity that two reports on the same data can be told apart by
-what changed — source, binding, metric, policy, requirements or execution —
+An installed package version cannot distinguish a release branch from its ancestor,
+and a dataset name cannot say which bytes were read.
+These models record enough identity that two reports on the same data
+can be told apart by what changed —
+source, binding, metric, policy, requirements or execution —
 rather than by guessing.
 """
 
@@ -229,6 +230,11 @@ class Inventory(BaseModel):
                 "inventory with unresolved episodes or refused sources is not complete"
             )
         return self
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def content_digest(value: Any) -> str:

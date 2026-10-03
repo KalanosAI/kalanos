@@ -1,11 +1,19 @@
 """Execute optional diagnostics once and feed the existing decision pipeline."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import json
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from types import SimpleNamespace
+from typing import Any, Literal, cast
 
-from kalanos.analysis.diagnostics.common import Unavailable
+# Internal
+from kalanos.analysis.diagnostics.common import DiagnosticSpec, Unavailable
 from kalanos.analysis.diagnostics.dataset import run_dataset_diagnostics
 from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.vision import vision
@@ -13,14 +21,37 @@ from kalanos.analysis.diagnostics.windows import windows
 from kalanos.analysis.identities import analysis_digest
 from kalanos.analysis.metrics.vision import is_camera_footage
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
-from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.diagnostics import (
+    CohortSpec,
+    DiagnosticPlan,
+    DiagnosticResult,
+    DiagnosticsReport,
+    MotionSpec,
+    TimingSpec,
+)
+from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.eligibility import Consequence, EpisodeEligibility
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.provenance import content_digest
+from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import ExecutionTier, content_digest
+from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.models.scoring import Finding, Severity
 
 
-def execute(kind, spec, episode, operation, *, skipped=False, subject=None):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def execute(
+    kind: Literal["timing", "tracking", "motion", "vision", "windows", "cohort"],
+    spec: DiagnosticSpec,
+    episode: Episode | None,
+    operation: Callable[[], DiagnosticResult],
+    *,
+    skipped: bool = False,
+    subject: dict[str, Any] | None = None,
+) -> DiagnosticResult:
     """Retain prerequisite/budget/error distinctions and reject nonfinite output."""
     episode_id = episode.id if episode else None
     if skipped:
@@ -56,11 +87,11 @@ def execute(kind, spec, episode, operation, *, skipped=False, subject=None):
         )
 
 
-def review_findings(results: list[DiagnosticResult]):
+def review_findings(results: list[DiagnosticResult]) -> list[Finding]:
     """Convert explicit configured review triggers into ordinary review findings.
 
-    These first-version diagnostics cannot authorize a statistical block. They
-    enter the same one-time eligibility calculation as existing findings.
+    These first-version diagnostics cannot authorize a statistical block.
+    They enter the same one-time eligibility calculation as existing findings.
     """
     findings = []
     for r in results:
@@ -100,7 +131,9 @@ def review_findings(results: list[DiagnosticResult]):
     return findings
 
 
-def _graded_camera(graded_episode, stream):
+def _graded_camera(
+    graded_episode: GradedEpisode | None, stream: Stream
+) -> GradedStream | None:
     """The graded stream of one episode that `stream` was graded as, or `None`."""
     if graded_episode is None:
         return None
@@ -114,7 +147,14 @@ def _graded_camera(graded_episode, stream):
     return None
 
 
-def episode_diagnostics(episodes, plan, tier, findings, policies, graded):
+def episode_diagnostics(
+    episodes: Sequence[Episode],
+    plan: DiagnosticPlan,
+    tier: ExecutionTier,
+    findings: Sequence[Finding],
+    policies: Mapping[str, Policy],
+    graded: Mapping[str, GradedEpisode],
+) -> dict[str, list[DiagnosticResult]]:
     """Run signal and visual work before windows, without changing source arrays.
 
     Parameters
@@ -148,10 +188,15 @@ def episode_diagnostics(episodes, plan, tier, findings, policies, graded):
             ("motion", plan.motion, motion),
         ):
             for spec in specs:
-                selector = spec.channel if kind == "motion" else spec.left
+                # Motion specs select by `channel`; timing and tracking specs by `left`.
+                selector = (
+                    cast(MotionSpec, spec).channel
+                    if kind == "motion"
+                    else cast(TimingSpec, spec).left
+                )
                 items.append(
                     execute(
-                        kind,
+                        cast(Literal["timing", "tracking", "motion"], kind),
                         spec,
                         episode,
                         partial(operation, episode, spec, review),
@@ -222,12 +267,30 @@ def episode_diagnostics(episodes, plan, tier, findings, policies, graded):
     return results
 
 
-def finish_diagnostics(episodes, plan, results, decisions, tier):
+def finish_diagnostics(
+    episodes: Sequence[Episode],
+    plan: DiagnosticPlan,
+    results: Mapping[str, list[DiagnosticResult]],
+    decisions: Mapping[str, EpisodeEligibility],
+    tier: ExecutionTier,
+) -> DiagnosticsReport:
     """Run dataset-level diagnostics after eligibility, preserving both populations."""
 
-    def execute_dataset(kind, spec, episode, operation):
+    def execute_dataset(
+        kind: str,
+        spec: CohortSpec,
+        episode: Episode | None,
+        operation: Callable[[], DiagnosticResult],
+    ) -> DiagnosticResult:
         """Respect the execution tier at dataset level too."""
-        return execute(kind, spec, episode, operation, skipped=tier.value == "metadata")
+        # run_dataset_diagnostics always calls this with "cohort".
+        return execute(
+            cast(Literal["cohort"], kind),
+            spec,
+            episode,
+            operation,
+            skipped=tier.value == "metadata",
+        )
 
     dataset = run_dataset_diagnostics(
         episodes,
@@ -243,7 +306,7 @@ def finish_diagnostics(episodes, plan, results, decisions, tier):
     )
 
 
-def diagnostic_lines(report):
+def diagnostic_lines(report: DiagnosticsReport | None) -> list[str]:
     """Produce shared, concise terminal/HTML/inspect wording from recorded results."""
     if report is None:
         return []
@@ -258,7 +321,7 @@ def diagnostic_lines(report):
     ]
 
 
-def validate_review_plan(plan, policy):
+def validate_review_plan(plan: DiagnosticPlan | None, policy: Policy) -> None:
     """Reject review rules that would silently target no configured diagnostic."""
     from kalanos.analysis.models.errors import MappingOverrideError
 

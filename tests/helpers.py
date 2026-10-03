@@ -57,28 +57,6 @@ _CHANNEL_SOURCE_PATH = UPath("test_integrity.csv")
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
-def csv_schema(path: UPath) -> SourceSchema:
-    """Sniff, read, and infer a CSV file's schema.
-
-    Parameters
-    ----------
-    path : UPath
-        The CSV file to resolve.
-
-    Returns
-    -------
-    SourceSchema
-        The resolved schema, dialect included.
-    """
-
-    dialect = sniff_dialect(path)
-    with path.open("rb") as handle:
-        frame = pl.read_csv(
-            source=handle, separator=dialect.delimiter, has_header=dialect.has_header
-        )
-    return infer_schema(frame).model_copy(update={"dialect": dialect})
-
-
 class ScoreAttributeCollector(HTMLParser):
     """Collects every `data-level`/`data-name`/`data-score` triple, in document order.
 
@@ -148,6 +126,33 @@ class DisclosureStateCollector(HTMLParser):
                     "open" in attr,
                 )
             )
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def csv_schema(path: UPath) -> SourceSchema:
+    """Sniff, read, and infer a CSV file's schema.
+
+    Parameters
+    ----------
+    path : UPath
+        The CSV file to resolve.
+
+    Returns
+    -------
+    SourceSchema
+        The resolved schema, dialect included.
+    """
+
+    dialect = sniff_dialect(path)
+    with path.open("rb") as handle:
+        frame = pl.read_csv(
+            source=handle, separator=dialect.delimiter, has_header=dialect.has_header
+        )
+    return infer_schema(frame).model_copy(update={"dialect": dialect})
 
 
 def score_attr(score: ScoreResult) -> str:

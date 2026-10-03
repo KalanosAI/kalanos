@@ -39,6 +39,11 @@ class _StrictLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 def safe_load_strict(text: str) -> Any:
     """`yaml.safe_load`, except that a duplicate key raises `DuplicateKeyError`."""
 

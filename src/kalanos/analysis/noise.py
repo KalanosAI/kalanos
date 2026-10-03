@@ -1,11 +1,24 @@
 """Applicability and reference evidence for smooth/residual diagnostics."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
+from typing import Any
 
+# Internal
 from kalanos.analysis.models.binding import Quantity, Representation
+from kalanos.analysis.models.metrics import ChannelContext
 
 
-def snr_exclusion(ctx):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def snr_exclusion(ctx: ChannelContext) -> str | None:
     """Return known semantic exclusions; unknown semantics remain diagnostic only."""
     binding = ctx.channel.binding
     if ctx.taxonomy_type.startswith(("reward.", "annotation.", "metadata.")):
@@ -20,7 +33,9 @@ def snr_exclusion(ctx):
     return None
 
 
-def noise_assessment(ctx, rate_hz, residual_std, signal_std):
+def noise_assessment(
+    ctx: ChannelContext, rate_hz: float, residual_std: float, signal_std: float
+) -> dict[str, Any]:
     """Compare with a scoped reference only after all required evidence matches.
 
     Parameters

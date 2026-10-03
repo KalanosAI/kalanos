@@ -63,20 +63,13 @@ _PRECEDENCE = [
 ]
 
 
-def worst_status(statuses: list[EligibilityStatus]) -> EligibilityStatus:
-    """The status that takes precedence among several; `PASS` for an empty list."""
-
-    if not statuses:
-        return EligibilityStatus.PASS
-    return min(statuses, key=_PRECEDENCE.index)
-
-
 class Consequence(str, Enum):
     """What a policy says a finding does to eligibility.
 
-    Severity is an assessment of a measurement; consequence is the policy's
-    decision about it. The two are recorded separately so a contextual rule can
-    be critical-severity yet review-only until its blocking evidence exists.
+    Severity is an assessment of a measurement;
+    consequence is the policy's decision about it.
+    The two are recorded separately so a contextual rule can be critical-severity
+    yet review-only until its blocking evidence exists.
     """
 
     # fmt: off
@@ -89,9 +82,10 @@ class Consequence(str, Enum):
 class BlockingRoute(str, Enum):
     """Which of the two routes justified a `BLOCK` consequence.
 
-    A contract violation needs no calibration: a declared invariant was broken
-    with direct evidence. A statistical rule may block only when an accepted
-    calibration manifest covers its scope; otherwise it resolves to review.
+    A contract violation needs no calibration:
+    a declared invariant was broken with direct evidence.
+    A statistical rule may block only when an accepted calibration manifest
+    covers its scope; otherwise it resolves to review.
     """
 
     # fmt: off
@@ -230,11 +224,12 @@ class EligibilityCounts(BaseModel):
 class Readiness(BaseModel):
     """The readiness index and the conditions under which it is defined.
 
-    `score` is `sum(quality of pass episodes) / total known episodes`, on the
-    0-100 scale, and only when every episode is pass or blocked, every pass has
-    a quality score, and the inventory is complete and non-empty. Otherwise it
-    is `None` and `reasons` says why. It summarises eligibility and quality; it
-    never establishes sufficient training data.
+    `score` is `sum(quality of pass episodes) / total known episodes`,
+    on the 0-100 scale, and only when every episode is pass or blocked,
+    every pass has a quality score, and the inventory is complete and non-empty.
+    Otherwise it is `None` and `reasons` says why.
+    It summarises eligibility and quality;
+    it never establishes sufficient training data.
 
     Attributes
     ----------
@@ -312,6 +307,19 @@ class Sufficiency(BaseModel):
 
     status: SufficiencyStatus
     checks: list[SufficiencyCheck] = Field(default_factory=list)
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def worst_status(statuses: list[EligibilityStatus]) -> EligibilityStatus:
+    """The status that takes precedence among several; `PASS` for an empty list."""
+
+    if not statuses:
+        return EligibilityStatus.PASS
+    return min(statuses, key=_PRECEDENCE.index)
 
 
 __all__ = [

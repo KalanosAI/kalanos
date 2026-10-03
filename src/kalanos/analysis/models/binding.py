@@ -1,16 +1,16 @@
 """Channel bindings and the configuration bundle.
 
-A binding says what a channel *is*: which source field and index, what kind of
-actuator, which physical quantity, in what unit, commanded how. Older mapping
-inputs (`--map`, `--map-file`, `kalanos-map.yaml`) type a whole feature at
-once; they remain supported and are normalised into this representation with
-their origin recorded. Nothing here validates a physical claim: a declaration
-is a declaration, an override is an assertion, and validation is a separate
-record with its own evidence.
+A binding says what a channel *is*: which source field and index,
+what kind of actuator, which physical quantity, in what unit, commanded how.
+Older mapping inputs (`--map`, `--map-file`, `kalanos-map.yaml`)
+type a whole feature at once; they remain supported and are normalised into
+this representation with their origin recorded.
+Nothing here validates a physical claim: a declaration is a declaration,
+an override is an assertion, and validation is a separate record with its own evidence.
 
-The bundle carries four logical sections with separate identities. Reducing
-the execution tier never reduces the requirements; a sidecar can assert
-mappings but never change requirements, policy or tier.
+The bundle carries four logical sections with separate identities.
+Reducing the execution tier never reduces the requirements;
+a sidecar can assert mappings but never change requirements, policy or tier.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -128,16 +128,13 @@ class BindingOrigin(str, Enum):
 _PRECEDENCE = list(BindingOrigin)
 
 
-def _rank(origin: BindingOrigin) -> int:
-    return _PRECEDENCE.index(origin)
-
-
 class ValidationStatus(str, Enum):
     """Whether a binding property has been checked against evidence.
 
-    Precedence does not validate. An argument override outranks a sidecar and is
-    still an assertion; only a validation record with evidence makes a property
-    validated, and replacing a validated value invalidates it.
+    Precedence does not validate.
+    An argument override outranks a sidecar and is still an assertion;
+    only a validation record with evidence makes a property validated,
+    and replacing a validated value invalidates it.
     """
 
     # fmt: off
@@ -194,8 +191,9 @@ class CapabilityCheck(BaseModel):
 class NoiseFloor(BaseModel):
     """A residual standard-deviation reference already expressed in native units.
 
-    A reference must match the estimator, sample rate, sensor configuration and
-    scale transform. Its declaration alone is not validation or block authority.
+    A reference must match the estimator, sample rate, sensor configuration
+    and scale transform.
+    Its declaration alone is not validation or block authority.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -210,7 +208,7 @@ class NoiseFloor(BaseModel):
     scale_transform: str | None = None
 
     @model_validator(mode="after")
-    def bandwidth_within_nyquist(self):
+    def bandwidth_within_nyquist(self) -> "NoiseFloor":
         """Reject bandwidth beyond the declared sampled signal's Nyquist limit."""
         if self.bandwidth_hz > self.sample_rate_hz / 2:
             raise ValueError("noise reference bandwidth exceeds Nyquist")
@@ -362,83 +360,6 @@ class SamePriorityConflict(ValueError):
     """Two assertions at the same precedence disagreed: a configuration error."""
 
 
-def resolve_feature_types(
-    assertions: Iterable[FeatureAssertion],
-) -> ResolvedFeatureTypes:
-    """Merge feature-level assertions by origin precedence, recording every conflict.
-
-    Parameters
-    ----------
-    assertions : Iterable[FeatureAssertion]
-        From any source, in any order; the origin decides precedence.
-
-    Returns
-    -------
-    ResolvedFeatureTypes
-        The winner per feature and the displaced disagreements.
-
-    Raises
-    ------
-    SamePriorityConflict
-        If two assertions at the same origin give one feature different types.
-    """
-
-    by_feature: dict[str, list[FeatureAssertion]] = {}
-    for assertion in assertions:
-        by_feature.setdefault(assertion.feature, []).append(assertion)
-
-    types: dict[str, FeatureAssertion] = {}
-    conflicts: list[BindingConflict] = []
-    for feature, group in by_feature.items():
-        ordered = sorted(group, key=lambda a: _rank(a.origin))
-        winner = ordered[0]
-        # Disagreement within *any* origin group is a configuration error,
-        # even one a higher-priority assertion would have outranked: a
-        # contradiction is not resolved by being hidden.
-        by_origin: dict[BindingOrigin, set[str]] = {}
-        for a in ordered:
-            by_origin.setdefault(a.origin, set()).add(a.taxonomy_type)
-        for origin, asserted in by_origin.items():
-            if len(asserted) > 1:
-                raise SamePriorityConflict(
-                    f"{feature}: conflicting {origin.value} assertions "
-                    f"({', '.join(sorted(asserted))})"
-                )
-        displaced = [
-            a
-            for a in ordered
-            if a.origin != winner.origin and a.taxonomy_type != winner.taxonomy_type
-        ]
-        types[feature] = winner
-        if displaced:
-            conflicts.append(
-                BindingConflict(feature=feature, winner=winner, displaced=displaced)
-            )
-    return ResolvedFeatureTypes(types=types, conflicts=conflicts)
-
-
-def assertions_from_overrides(
-    overrides: Sequence[MappingOverride],
-) -> list[FeatureAssertion]:
-    """Normalise legacy mapping overrides into feature assertions, origin preserved."""
-
-    origin_of = {
-        OverrideOrigin.ARGUMENT: BindingOrigin.ARGUMENT,
-        OverrideOrigin.FILE: BindingOrigin.FILE,
-        OverrideOrigin.BUNDLE: BindingOrigin.BUNDLE,
-        OverrideOrigin.SIDECAR: BindingOrigin.SIDECAR,
-    }
-    return [
-        FeatureAssertion(
-            feature=o.feature,
-            taxonomy_type=o.taxonomy_type,
-            origin=origin_of[o.origin],
-            path=o.path,
-        )
-        for o in overrides
-    ]
-
-
 class BindingSection(BaseModel):
     """The bundle's `binding` section: what the channels are.
 
@@ -482,11 +403,11 @@ class RequirementsSection(BaseModel):
     require_resolved_bindings : bool
         Whether an episode with any unmapped stream is `unknown`.
     require_numeric_payloads : bool
-        Whether every stream that declares channels must have had its
-        payload read and graded. `True` under numeric-core: a stream with a
-        missing, skipped or errored payload makes the episode `unknown`,
-        however well another stream scored. Streams without channels
-        (video, text) are not required by this.
+        Whether every stream that declares channels
+        must have had its payload read and graded.
+        `True` under numeric-core: a stream with a missing, skipped or errored
+        payload makes the episode `unknown`, however well another stream scored.
+        Streams without channels (video, text) are not required by this.
     min_pass_episodes : int or None
         A dataset-level sufficiency constraint, evaluated in 0.7.
     """
@@ -610,6 +531,92 @@ class EvaluationScope(BaseModel):
     policy_id: str
     binding_id: str | None = None
     tier: ExecutionTier = ExecutionTier.STANDARD
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _rank(origin: BindingOrigin) -> int:
+    return _PRECEDENCE.index(origin)
+
+
+def resolve_feature_types(
+    assertions: Iterable[FeatureAssertion],
+) -> ResolvedFeatureTypes:
+    """Merge feature-level assertions by origin precedence, recording every conflict.
+
+    Parameters
+    ----------
+    assertions : Iterable[FeatureAssertion]
+        From any source, in any order; the origin decides precedence.
+
+    Returns
+    -------
+    ResolvedFeatureTypes
+        The winner per feature and the displaced disagreements.
+
+    Raises
+    ------
+    SamePriorityConflict
+        If two assertions at the same origin give one feature different types.
+    """
+
+    by_feature: dict[str, list[FeatureAssertion]] = {}
+    for assertion in assertions:
+        by_feature.setdefault(assertion.feature, []).append(assertion)
+
+    types: dict[str, FeatureAssertion] = {}
+    conflicts: list[BindingConflict] = []
+    for feature, group in by_feature.items():
+        ordered = sorted(group, key=lambda a: _rank(a.origin))
+        winner = ordered[0]
+        # Disagreement within *any* origin group is a configuration error,
+        # even one a higher-priority assertion would have outranked: a
+        # contradiction is not resolved by being hidden.
+        by_origin: dict[BindingOrigin, set[str]] = {}
+        for a in ordered:
+            by_origin.setdefault(a.origin, set()).add(a.taxonomy_type)
+        for origin, asserted in by_origin.items():
+            if len(asserted) > 1:
+                raise SamePriorityConflict(
+                    f"{feature}: conflicting {origin.value} assertions "
+                    f"({', '.join(sorted(asserted))})"
+                )
+        displaced = [
+            a
+            for a in ordered
+            if a.origin != winner.origin and a.taxonomy_type != winner.taxonomy_type
+        ]
+        types[feature] = winner
+        if displaced:
+            conflicts.append(
+                BindingConflict(feature=feature, winner=winner, displaced=displaced)
+            )
+    return ResolvedFeatureTypes(types=types, conflicts=conflicts)
+
+
+def assertions_from_overrides(
+    overrides: Sequence[MappingOverride],
+) -> list[FeatureAssertion]:
+    """Normalise legacy mapping overrides into feature assertions, origin preserved."""
+
+    origin_of = {
+        OverrideOrigin.ARGUMENT: BindingOrigin.ARGUMENT,
+        OverrideOrigin.FILE: BindingOrigin.FILE,
+        OverrideOrigin.BUNDLE: BindingOrigin.BUNDLE,
+        OverrideOrigin.SIDECAR: BindingOrigin.SIDECAR,
+    }
+    return [
+        FeatureAssertion(
+            feature=o.feature,
+            taxonomy_type=o.taxonomy_type,
+            origin=origin_of[o.origin],
+            path=o.path,
+        )
+        for o in overrides
+    ]
 
 
 __all__ = [

@@ -1,16 +1,62 @@
 """Read-only comparison: identify differences without inventing causal attribution."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+import os
 from typing import Any
 
+# External
 from pydantic import BaseModel, Field
+from upath import UPath
 
+# Internal
 from kalanos.analysis.models.legacy import LegacyReport, load_any
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.source_identity import CANONICALIZATION
 
 
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
 class Comparison(BaseModel):
+    """What differs between two saved reports, and whether their decisions compare.
+
+    Attributes
+    ----------
+    comparable : bool
+        Whether no reason against comparing was found:
+        identities present and matching, inventories complete and equal, runs complete.
+    reasons : list[str]
+        Every reason the reports are not comparable, sorted and deduplicated.
+    identity_changes : list[str]
+        Identities that differ between the reports:
+        source, binding, dictionary, policy, requirements, execution, metrics, adapters,
+        scope, diagnostics or calibration outcome.
+    added_episodes : list[str]
+        Episode ids only the new report has.
+    removed_episodes : list[str]
+        Episode ids only the old report has.
+    episode_changes : list[dict[str, Any]]
+        Episodes in both whose eligibility or quality score changed,
+        with the old and new status and score.
+    metric_changes : list[dict[str, Any]]
+        Metric results that differ between shared episodes,
+        keyed by episode and metric address.
+    attribution : str
+        A fixed caveat that an identity change is only a possible cause.
+    readiness_delta : float or None
+        New readiness minus old,
+        set only when the reports are comparable and both scores are defined.
+    diagnostic_changes : list[dict[str, Any]]
+        Diagnostic results that differ, keyed by episode, kind and id.
+    """
+
     comparable: bool
     reasons: list[str] = Field(default_factory=list)
     identity_changes: list[str] = Field(default_factory=list)
@@ -23,6 +69,11 @@ class Comparison(BaseModel):
     )
     readiness_delta: float | None = None
     diagnostic_changes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _source(report):
@@ -76,7 +127,37 @@ def _metrics(episode):
     return items
 
 
-def compare_reports(old, new):
+def compare_reports(
+    old: Report | LegacyReport | str | os.PathLike[str] | UPath,
+    new: Report | LegacyReport | str | os.PathLike[str] | UPath,
+) -> Comparison:
+    """List what differs between two reports, and whether their decisions compare.
+
+    Parameters
+    ----------
+    old : Report, LegacyReport, str, PathLike or UPath
+        The earlier report, or where its JSON is.
+    new : Report, LegacyReport, str, PathLike or UPath
+        The later report, or where its JSON is.
+
+    Returns
+    -------
+    Comparison
+        Never comparable when either report is legacy.
+        Otherwise every difference in identities, scope, inventories,
+        diagnostics, episodes and metrics,
+        with `comparable` set only when no reason against it was found.
+
+    Raises
+    ------
+    OSError
+        If a report path cannot be read.
+    ValueError
+        If a report file does not load,
+        a report repeats an episode id,
+        or one episode holds two metrics at the same address.
+    """
+
     old = load_any(old) if not isinstance(old, (Report, LegacyReport)) else old
     new = load_any(new) if not isinstance(new, (Report, LegacyReport)) else new
     if isinstance(old, LegacyReport) or isinstance(new, LegacyReport):

@@ -1,24 +1,38 @@
 """Fail-closed statistical promotion, matched to the exact recorded run context."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
+# Internal
+from kalanos.analysis.models.binding import EvaluationScope
+from kalanos.analysis.models.calibration import CalibrationManifest
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
-from kalanos.analysis.models.provenance import content_digest
-from kalanos.analysis.models.scoring import Severity
+from kalanos.analysis.models.policy import MetricPolicy, Policy
+from kalanos.analysis.models.provenance import Producer, RunInfo, content_digest
+from kalanos.analysis.models.scoring import Finding, Severity
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 @lru_cache(maxsize=128)
-def binomial_upper(successes, trials, alpha=0.05):
+def binomial_upper(successes: int, trials: int, alpha: float = 0.05) -> float:
     """One-sided exact upper bound; independent Bernoulli trials are required."""
     if not trials or successes == trials:
         return 1.0
     if successes == 0:
         return -math.expm1(math.log(alpha) / trials)
 
-    def cdf(p):
+    def cdf(p: float) -> float:
         terms = [
             math.lgamma(trials + 1)
             - math.lgamma(i + 1)
@@ -40,7 +54,7 @@ def binomial_upper(successes, trials, alpha=0.05):
     return hi
 
 
-def validation_reason(m, now):
+def validation_reason(m: CalibrationManifest, now: datetime) -> str | None:
     if m.status != "accepted" or not m.accepted_by or not m.accepted_at:
         return "manifest has no recorded acceptance"
     if m.accepted_at > now or (m.valid_until and m.valid_until <= now):
@@ -69,7 +83,15 @@ def validation_reason(m, now):
     return None
 
 
-def context_for(run, scope, producer, metric_id, metric_policy, taxonomy_type, policy):
+def context_for(
+    run: Any,
+    scope: EvaluationScope | None,
+    producer: Producer | None,
+    metric_id: str,
+    metric_policy: MetricPolicy,
+    taxonomy_type: str,
+    policy: Policy,
+) -> dict[str, Any]:
     known_adapters = (
         producer is not None
         and bool(producer.adapters)
@@ -103,7 +125,9 @@ def context_for(run, scope, producer, metric_id, metric_policy, taxonomy_type, p
     }
 
 
-def evaluate(policy, context, now=None):
+def evaluate(
+    policy: Policy, context: dict[str, Any], now: datetime | None = None
+) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     if any(v is None or v == "unknown" for v in context.values()):
         return {
@@ -137,7 +161,13 @@ def evaluate(policy, context, now=None):
     }
 
 
-def apply_calibration(findings, policies, run, scope, producer):
+def apply_calibration(
+    findings: list[Finding],
+    policies: dict[str, Policy],
+    run: RunInfo | None,
+    scope: EvaluationScope | None,
+    producer: Producer | None,
+) -> list[Finding]:
     """Called before the one eligibility calculation; no surface can promote later."""
     result = []
     for f in findings:

@@ -1,10 +1,17 @@
 """Explicit training-window evidence without editing or exporting source data."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import bisect
 import math
 from collections import Counter
+from collections.abc import Sequence
 from fractions import Fraction
 
+# Internal
 from kalanos.analysis.diagnostics.common import (
     Unavailable,
     axis,
@@ -15,13 +22,26 @@ from kalanos.analysis.diagnostics.common import (
     select,
 )
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.domain import FramePayload
+from kalanos.analysis.models.diagnostics import DiagnosticResult, WindowSpec
+from kalanos.analysis.models.domain import Channel, Episode, FramePayload, Stream
+from kalanos.analysis.models.scoring import Finding
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 _PRIORITY = {"pass": 0, "review": 1, "unknown": 2, "blocked": 3}
 
 
-def overlap_finding(finding, stream, rows, channels):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def overlap_finding(
+    finding: Finding, stream: Stream, rows: Sequence[int], channels: Sequence[Channel]
+) -> bool:
     """Whether a consequential finding touches the consumed source rows."""
     if finding.source_path is not None and finding.source_path != str(
         stream.source_path
@@ -54,7 +74,12 @@ def overlap_finding(finding, stream, rows, channels):
     )
 
 
-def windows(episode, spec, findings=(), visual=()):
+def windows(
+    episode: Episode,
+    spec: WindowSpec,
+    findings: Sequence[Finding] = (),
+    visual: Sequence[DiagnosticResult] = (),
+) -> DiagnosticResult:
     """Count complete history/future windows on a declared grid, with bounded probes."""
     anchor, _ = select(episode, spec.anchor)
     _, _, at = axis(anchor, exact=True)

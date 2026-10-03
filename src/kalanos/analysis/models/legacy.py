@@ -1,11 +1,11 @@
 """Read reports written under schema 6.3, 6.4 and 6.5 without rewriting them.
 
-A historical report is evidence of what an older build decided. This loader
-returns its values untouched, names the schema, points out where the old
-fields contradict each other (an episode `train_ready: true` that the gate
-also lists as failing), and labels anything schema 7 would have recorded but
-the old file lacks as unknown. It never invents producer identity, clock
-provenance, defect intervals or eligibility.
+A historical report is evidence of what an older build decided.
+This loader returns its values untouched and names the schema.
+It points out where the old fields contradict each other,
+such as an episode `train_ready: true` that the gate also lists as failing,
+and labels anything schema 7 would have recorded but the old file lacks as unknown.
+It never invents producer identity, clock provenance, defect intervals or eligibility.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -15,6 +15,7 @@ provenance, defect intervals or eligibility.
 # Built-in
 import hashlib
 import json
+import os
 from typing import Any
 
 # External
@@ -159,8 +160,8 @@ def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
     Raises
     ------
     UnsupportedSchema
-        If the file is not one of `LEGACY_SCHEMAS`. A schema-7 file is not
-        legacy: read it with `Report.model_validate_json`.
+        If the file is not one of `LEGACY_SCHEMAS`.
+        A schema-7 file is not legacy: read it with `Report.model_validate_json`.
     """
 
     if isinstance(source, dict):
@@ -198,8 +199,30 @@ def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
     )
 
 
-def load_any(source: UPath | str) -> Report | LegacyReport:
-    """Load a report of any supported schema: current as `Report`, older as legacy."""
+def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
+    """Load a saved report of any supported schema.
+
+    Parameters
+    ----------
+    source : UPath, str or PathLike
+        Where the report JSON is, parsed as a `UPath`.
+
+    Returns
+    -------
+    Report or LegacyReport
+        A `Report` when the file declares the current schema,
+        otherwise the file loaded as a `LegacyReport`.
+
+    Raises
+    ------
+    OSError
+        If `source` cannot be read.
+    ValueError
+        If the file is not JSON,
+        or a current-schema file does not validate as a `Report`.
+    UnsupportedSchema
+        If the file declares neither the current schema nor one of `LEGACY_SCHEMAS`.
+    """
 
     raw = UPath(source).read_bytes()
     version = str(json.loads(raw).get("schema_version", ""))

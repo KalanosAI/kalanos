@@ -1,17 +1,29 @@
 """Conservative implementation identities; shared helper changes invalidate evidence."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import hashlib
 import inspect
 import platform
+from collections.abc import Iterable
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+# Internal
 from kalanos.analysis.models.provenance import content_digest
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 @lru_cache(maxsize=1)
-def analysis_digest():
+def analysis_digest() -> str:
     root = Path(__file__).parent.parent
     files = sorted(
         [
@@ -40,7 +52,7 @@ def analysis_digest():
     return content_digest(identities)
 
 
-def detector_versions():
+def detector_versions() -> dict[str, str]:
     from kalanos.analysis.metrics.registry import registered_metrics
 
     versions = {}
@@ -66,7 +78,7 @@ def detector_versions():
     return versions
 
 
-def adapter_versions(names):
+def adapter_versions(names: Iterable[str]) -> dict[str, str]:
     builtins = {
         "csv",
         "json",

@@ -1,22 +1,38 @@
 """Opt-in complete local byte identity; never follow hidden symlink targets."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import hashlib
 import os
 from pathlib import Path
+from typing import Any
 
+# Internal
 from kalanos.analysis.models.errors import SourceUnavailable
 from kalanos.analysis.models.provenance import HashScope, SourceEvidence, content_digest
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
 CANONICALIZATION = "sorted-relative-path-content-sha256-v1"
 
 
-def hash_local_source(root):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def hash_local_source(root: Any) -> SourceEvidence:
     if getattr(root, "protocol", "") not in ("", "file", "local"):
         raise SourceUnavailable("complete hashing requires a materialized local source")
     path = Path(root)
 
-    def fail(error):
+    def fail(error: OSError) -> None:
         raise error
 
     try:

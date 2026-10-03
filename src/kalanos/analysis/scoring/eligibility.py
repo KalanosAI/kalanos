@@ -1,8 +1,9 @@
 """Decide eligibility once, after every metric has run, and derive the rest from it.
 
-The gate, the dataset counts, the readiness index, the CI exit code and the
-compatibility `train_ready` boolean all read what this module writes. No other
-code path may answer "is this episode usable?".
+The gate, the dataset counts, the readiness index,
+the CI exit code and the compatibility `train_ready` boolean
+all read what this module writes.
+No other code path may answer "is this episode usable?".
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -33,11 +34,6 @@ from kalanos.analysis.models.eligibility import (
 from kalanos.analysis.models.provenance import Inventory
 from kalanos.analysis.models.report import GradedEpisode, PayloadStatus
 from kalanos.analysis.models.scoring import Finding
-
-
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
-# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
-# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -302,9 +298,10 @@ def readiness_of(
 ) -> Readiness:
     """The readiness index, or `None` with the reasons it is undefined.
 
-    Defined only when the inventory is complete and non-empty, every episode
-    is pass or blocked, and every pass has a quality score. A known all-blocked
-    inventory scores 0; a fully passing one scores its mean quality.
+    Defined only when the inventory is complete and non-empty,
+    every episode is pass or blocked,
+    and every pass has a quality score.
+    A known all-blocked inventory scores 0; a fully passing one scores its mean quality.
     """
 
     reasons = []
@@ -337,10 +334,11 @@ def readiness_of(
 def dataset_train_ready(counts: EligibilityCounts) -> bool | None:
     """The dataset-level compatibility boolean, from the counts alone.
 
-    `False` when any episode is blocked; `True` only when the inventory is
-    complete, non-empty and every episode passed; `None` otherwise. It never
-    consults the optional letter gate, and it counts failed and unresolved
-    episodes because they are in `counts`.
+    `False` when any episode is blocked;
+    `True` only when the inventory is complete, non-empty and every episode passed;
+    `None` otherwise.
+    It never consults the optional letter gate,
+    and it counts failed and unresolved episodes because they are in `counts`.
     """
 
     if counts.blocked:
@@ -355,8 +353,9 @@ def sufficiency_of(
 ) -> Sufficiency:
     """Evaluate the explicit dataset-level requirements the scope declares.
 
-    Only count-based requirements are evaluable in 0.7. A window or diversity
-    requirement, once declared, will report unknown until its runner exists;
+    Only count-based requirements are evaluable in 0.7.
+    A window or diversity requirement, once declared,
+    will report unknown until its runner exists;
     it never reports sufficient by omission.
     """
 

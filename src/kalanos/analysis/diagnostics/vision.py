@@ -3,26 +3,41 @@
 The frames come from the vision metrics' read; nothing here decodes beyond previews.
 """
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 from types import SimpleNamespace
+from typing import cast
 
+# Internal
+from kalanos.analysis.adapters.video import SampledFrames
 from kalanos.analysis.diagnostics.common import Unavailable, result
 from kalanos.analysis.localization import support_for
 from kalanos.analysis.metrics.vision import thumbnail
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.diagnostics import DiagnosticReviewPolicy
+from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticReviewPolicy
+from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.report import CameraFrames
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def vision(
-    episode,
-    stream,
-    frames,
-    identifier,
-    review=None,
+    episode: Episode,
+    stream: Stream,
+    frames: CameraFrames | None,
+    identifier: str,
+    review: DiagnosticReviewPolicy | None = None,
     *,
-    segment_frames=None,
-    reason=None,
-):
+    segment_frames: int | None = None,
+    reason: str | None = None,
+) -> DiagnosticResult:
     """Publish a camera's shared read; duplicate images remain candidates, not faults.
 
     Parameters
@@ -77,8 +92,11 @@ def vision(
             "luma_sha256": frame.luma_sha256,
         }
         if len(observations) < parameters["preview_frames"]:
+            # Vision metrics read only SampledFrames; a non-None frames implies one.
             preview = thumbnail(
-                stream.payload, frame.source_row, parameters["preview_size"]
+                cast(SampledFrames, stream.payload),
+                frame.source_row,
+                parameters["preview_size"],
             )
             if preview is not None:
                 item["thumbnail_png_base64"] = preview

@@ -1,12 +1,27 @@
 """Accepted validation evidence; no benchmark automatically creates acceptance."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 from datetime import datetime
 from typing import Literal
 
+# External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
 Digest = str
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 class CalibrationManifest(BaseModel):
@@ -37,7 +52,7 @@ class CalibrationManifest(BaseModel):
     detected_faults: int = Field(ge=0)
 
     @model_validator(mode="after")
-    def valid_counts(self):
+    def valid_counts(self) -> "CalibrationManifest":
         if (
             self.false_blocks > self.valid_episodes
             or self.detected_faults > self.fault_episodes

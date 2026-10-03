@@ -1,19 +1,63 @@
 """Shared prerequisite checks and native source-coordinate access."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import bisect
 import math
+from collections.abc import Sequence
 from fractions import Fraction
+from types import SimpleNamespace
+from typing import Any, Literal, cast, overload
 
+# Internal
+from kalanos.analysis.models.binding import ChannelBinding
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.diagnostics import DiagnosticResult
-from kalanos.analysis.models.domain import FramePayload
+from kalanos.analysis.models.diagnostics import (
+    ClockRelation,
+    CohortSpec,
+    DiagnosticResult,
+    MotionSpec,
+    Selector,
+    TimingSpec,
+    TrackingSpec,
+    WindowSpec,
+)
+from kalanos.analysis.models.domain import Channel, Episode, FramePayload, Stream
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+
+# Source rows, payload positions and relative seconds, float-valued or exact.
+_Axis = tuple[list[int], list[int], list[float]]
+_ExactAxis = tuple[list[int], list[int], list[Fraction]]
+
+# One diagnostic's own spec; vision carries only the identifier result() uses.
+DiagnosticSpec = (
+    TimingSpec | TrackingSpec | MotionSpec | WindowSpec | CohortSpec | SimpleNamespace
+)
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 class Unavailable(ValueError):
     """Required evidence is absent; this is not a successful measurement."""
 
 
-def select(episode, selector):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def select(episode: Episode, selector: Selector) -> tuple[Stream, Channel | None]:
     """Resolve exactly one stream/channel; never choose the first ambiguous match."""
     streams = [
         s
@@ -39,7 +83,7 @@ def select(episode, selector):
     return stream, channels[0] if len(channels) == 1 else None
 
 
-def ordered(stream):
+def ordered(stream: Stream) -> tuple[list[int], list[int], list[float], float]:
     """Return source rows, payload positions and relative native seconds.
 
     Integer ticks are subtracted before conversion to retain epoch precision.
@@ -61,7 +105,10 @@ def ordered(stream):
     if values is not None:
         factor = (
             info.tick_period_s
-            or {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}.get(info.native_unit)
+            # A None or unknown unit matches no key and leaves the factor None.
+            or {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}.get(
+                cast(str, info.native_unit)
+            )
             if info
             else None
         )
@@ -77,17 +124,22 @@ def ordered(stream):
     return rows, positions, ticks, factor
 
 
-def _rational(value):
+def _rational(value: float) -> Fraction:
     """Preserve integer ticks and the recorded decimal value of float inputs.
 
-    No epsilon or rounding is applied: a distinct recorded future timestamp
-    remains distinct. Decimal scale/rate declarations do not introduce another
-    binary float multiplication or origin-subtraction error.
+    No epsilon or rounding is applied:
+    a distinct recorded future timestamp remains distinct.
+    Decimal scale/rate declarations do not introduce another binary float multiplication
+    or origin-subtraction error.
     """
     return Fraction(str(value))
 
 
-def axis(stream, *, exact=False):
+@overload
+def axis(stream: Stream, *, exact: Literal[False] = False) -> _Axis: ...
+@overload
+def axis(stream: Stream, *, exact: Literal[True]) -> _ExactAxis: ...
+def axis(stream: Stream, *, exact: bool = False) -> _Axis | _ExactAxis:
     """Return relative seconds, optionally rational for causal grid comparisons."""
     rows, positions, ticks, factor = ordered(stream)
     if exact:
@@ -96,7 +148,7 @@ def axis(stream, *, exact=False):
     return rows, positions, [(t - ticks[0]) * factor for t in ticks]
 
 
-def scope_of(stream):
+def scope_of(stream: Stream) -> str:
     """Use resolved source identity, falling back to the adapter's source path."""
     if stream.source_identity:
         return stream.source_identity
@@ -108,7 +160,21 @@ def scope_of(stream):
     return next(iter(scopes)) if len(scopes) == 1 else str(stream.source_path)
 
 
-def paired_axes(left, right, relation, *, exact=False):
+@overload
+def paired_axes(
+    left: Stream,
+    right: Stream,
+    relation: ClockRelation,
+    *,
+    exact: Literal[False] = False,
+) -> tuple[_Axis, _Axis]: ...
+@overload
+def paired_axes(
+    left: Stream, right: Stream, relation: ClockRelation, *, exact: Literal[True]
+) -> tuple[_ExactAxis, _ExactAxis]: ...
+def paired_axes(
+    left: Stream, right: Stream, relation: ClockRelation, *, exact: bool = False
+) -> tuple[_Axis, _Axis] | tuple[_ExactAxis, _ExactAxis]:
     """Apply only the declared right-to-left transform, recording no inferred sync."""
     if scope_of(left) != relation.left_scope or scope_of(right) != relation.right_scope:
         raise Unavailable("clock relation source scope does not match")
@@ -164,7 +230,11 @@ def paired_axes(left, right, relation, *, exact=False):
     return (lr, lp, left_t), (rr, rp, right_t)
 
 
-def nearest(times, target, mode="nearest"):
+def nearest(
+    times: Sequence[float] | Sequence[Fraction],
+    target: float | Fraction,
+    mode: Literal["nearest", "previous"] = "nearest",
+) -> int | None:
     """Find a nearest or causal index, with deterministic earlier-sample ties."""
     i = bisect.bisect_right(times, target)
     if mode == "previous":
@@ -177,7 +247,9 @@ def nearest(times, target, mode="nearest"):
     )
 
 
-def numeric(stream, channel, positions):
+def numeric(
+    stream: Stream, channel: Channel | None, positions: Sequence[int]
+) -> list[float | int]:
     """Read one scalar payload without invoking an unbounded lazy fetch."""
     if channel is None or not isinstance(stream.payload, FramePayload):
         raise Unavailable("one numeric channel with an eager payload is required")
@@ -187,7 +259,9 @@ def numeric(stream, channel, positions):
     return [values[i] for i in positions]
 
 
-def validated(channel, properties, capability):
+def validated(
+    channel: Channel | None, properties: Sequence[str], capability: str
+) -> ChannelBinding:
     """Require current, scoped per-property evidence for a physical comparison."""
     b = channel.binding if channel else None
     if b is None or not b.source_identity:
@@ -209,12 +283,17 @@ def validated(channel, properties, capability):
     return b
 
 
-def finite(v):
+def finite(v: float | None) -> bool:
     """Whether a scalar contributes observed finite evidence."""
     return v is not None and math.isfinite(v)
 
 
-def result(kind, spec, episode=None, **kwargs):
+def result(
+    kind: Literal["timing", "tracking", "motion", "vision", "windows", "cohort"],
+    spec: DiagnosticSpec,
+    episode: Episode | None = None,
+    **kwargs: Any,
+) -> DiagnosticResult:
     """Construct one consistently addressed result."""
     return DiagnosticResult(
         id=spec.id,

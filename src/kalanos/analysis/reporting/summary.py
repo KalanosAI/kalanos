@@ -1,9 +1,23 @@
 """Shared review groups; member ids retain the complete underlying evidence."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 from collections import defaultdict
+from typing import Any
+
+# Internal
+from kalanos.analysis.models.report import Report
 
 
-def finding_groups(report):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def finding_groups(report: Report) -> list[dict[str, Any]]:
     episodes = {e.id: e for e in report.episodes}
     groups = defaultdict(list)
     for f in report.findings:

@@ -1,8 +1,19 @@
 """Sample support shared by measurements and findings."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 from enum import Enum
 
+# External
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
 class SupportKind(str, Enum):
@@ -56,20 +67,20 @@ class SampleInterval(BaseModel):
 class TemporalSupport(BaseModel):
     """Where in time a finding's evidence lives, separate from what it is about.
 
-    A channel-level spectrum result is about one channel and supports the
-    whole episode; a stream-level dropout is about the stream and supports an
-    interval. The subject (episode/stream/channel) and the support are
-    different axes and are recorded separately.
+    A channel-level spectrum result is about one channel and supports the whole episode;
+    a stream-level dropout is about the stream and supports an interval.
+    The subject (episode/stream/channel) and the support are different axes
+    and are recorded separately.
 
     Attributes
     ----------
     kind : SupportKind
     index_space : str or None
-        Which stream's sample index the intervals count in; `None` for
-        `WHOLE_EPISODE`. Source order unless `SourceOrder` says otherwise.
+        Which stream's sample index the intervals count in; `None` for `WHOLE_EPISODE`.
+        Source order unless `SourceOrder` says otherwise.
     intervals : list[SampleInterval]
-        Empty for `WHOLE_EPISODE`. A metric that measured the whole episode
-        never invents an interval.
+        Empty for `WHOLE_EPISODE`.
+        A metric that measured the whole episode never invents an interval.
     """
 
     kind: SupportKind = SupportKind.WHOLE_EPISODE

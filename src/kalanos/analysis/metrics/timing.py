@@ -1,13 +1,21 @@
 """Recorded timeline diagnostics and acquisition timing have separate claims.
 
-Ordering always uses adjacent source rows. Recorded cadence/spread/drop estimates
-are descriptive and do not establish sensor capture timing. The historical
-rate/jitter/drop metrics require explicit producer evidence for capture time.
+Ordering always uses adjacent source rows.
+Recorded cadence/spread/drop estimates are descriptive
+and do not establish sensor capture timing.
+The historical rate/jitter/drop metrics
+require explicit producer evidence for capture time.
 Uniformity alone neither proves generation nor disproves measured capture time.
 """
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import statistics
 
+# Internal
 from kalanos.analysis.clocks import clock_evidence, samples
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.models.domain import ClockInfo
@@ -21,8 +29,17 @@ from kalanos.analysis.models.metrics import (
 )
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
 _UNGRADED_REASON = "grading needs policy thresholds, which this stage does not read"
 _RECORDED_REASON = "recorded timeline diagnostic; does not certify acquisition timing"
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _cadence(ctx: StreamContext, *, acquisition: bool, kind: str) -> MetricResult:
@@ -124,8 +141,9 @@ def recorded_drop_estimate(ctx: StreamContext) -> MetricResult:
 def monotonic_violations(ctx: StreamContext) -> MetricResult:
     """Repeated/backwards adjacent steps, addressed in original source rows.
 
-    Invalid timestamps break adjacency. Missing rows are never removed and then
-    bridged to invent a step. Clock origin does not suppress structural evidence.
+    Invalid timestamps break adjacency.
+    Missing rows are never removed and then bridged to invent a step.
+    Clock origin does not suppress structural evidence.
     """
     data = samples(ctx.stream)
     evidence = clock_evidence(ctx.stream, data)

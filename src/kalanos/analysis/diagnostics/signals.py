@@ -1,9 +1,16 @@
 """Declared clock comparisons, command response and dimensionless motion."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import math
 import statistics
+from collections.abc import Sequence
 from typing import cast
 
+# Internal
 from kalanos.analysis.diagnostics.common import (
     Unavailable,
     axis,
@@ -16,10 +23,22 @@ from kalanos.analysis.diagnostics.common import (
     validated,
 )
 from kalanos.analysis.localization import support_for
-from kalanos.analysis.models.diagnostics import DiagnosticReviewPolicy
+from kalanos.analysis.models.diagnostics import (
+    DiagnosticResult,
+    DiagnosticReviewPolicy,
+    MotionSpec,
+    TimingSpec,
+    TrackingSpec,
+)
+from kalanos.analysis.models.domain import Episode
 
 
-def percentile(values, fraction):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def percentile(values: Sequence[float], fraction: float) -> float | None:
     """Return a linearly interpolated empirical quantile, or None for no data."""
     if not values:
         return None
@@ -29,7 +48,9 @@ def percentile(values, fraction):
     return xs[lo] + (xs[min(lo + 1, len(xs) - 1)] - xs[lo]) * (p - lo)
 
 
-def timing(episode, spec, review=None):
+def timing(
+    episode: Episode, spec: TimingSpec, review: DiagnosticReviewPolicy | None = None
+) -> DiagnosticResult:
     """Measure pair coverage/skew and optionally fit explicitly corresponding events."""
     review = review or DiagnosticReviewPolicy()
     limit = review.timing_max_unmatched_fraction.get(spec.id)
@@ -114,7 +135,9 @@ def timing(episode, spec, review=None):
     )
 
 
-def tracking(episode, spec, review=None):
+def tracking(
+    episode: Episode, spec: TrackingSpec, review: DiagnosticReviewPolicy | None = None
+) -> DiagnosticResult:
     """Compare absolute/rate commands, or delta commands relative to state at issue."""
     review = review or DiagnosticReviewPolicy()
     limit = review.tracking_max_abs_error.get(spec.id)
@@ -207,7 +230,9 @@ def tracking(episode, spec, review=None):
     )
 
 
-def motion(episode, spec, review=None):
+def motion(
+    episode: Episode, spec: MotionSpec, review: DiagnosticReviewPolicy | None = None
+) -> DiagnosticResult:
     """Compute segment-wise dimensionless jerk and physical-limit observations."""
     review = review or DiagnosticReviewPolicy()
     try:

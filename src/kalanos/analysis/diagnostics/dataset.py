@@ -1,9 +1,16 @@
 """Dataset-level execution over explicitly comparable, named cohorts."""
 
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 
+# Internal
 from kalanos.analysis.diagnostics.common import (
     Unavailable,
     axis,
@@ -13,14 +20,24 @@ from kalanos.analysis.diagnostics.common import (
     validated,
 )
 from kalanos.analysis.models.coverage import Availability
+from kalanos.analysis.models.diagnostics import CohortSpec, DiagnosticResult
+from kalanos.analysis.models.domain import Episode
 
 
-def cohort(episodes, spec, decisions):
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def cohort(
+    episodes: Sequence[Episode], spec: CohortSpec, decisions: Mapping[str, str]
+) -> DiagnosticResult:
     """Measure occupancy, dimension, trajectory repetition and labelled phase balance.
 
-    No inferred task labels, fitted transition model or universal good/bad
-    threshold is used. Raw finite observations and passing-only summaries remain
-    separate; passing alone does not establish a representative training set.
+    No inferred task labels, fitted transition model
+    or universal good/bad threshold is used.
+    Raw finite observations and passing-only summaries remain separate;
+    passing alone does not establish a representative training set.
     """
     try:
         import numpy as np
@@ -309,7 +326,15 @@ def cohort(episodes, spec, decisions):
     return measured
 
 
-def run_dataset_diagnostics(episodes, specs, decisions, execute):
+def run_dataset_diagnostics(
+    episodes: Sequence[Episode],
+    specs: Sequence[CohortSpec],
+    decisions: Mapping[str, str],
+    execute: Callable[
+        [str, CohortSpec, Episode | None, Callable[[], DiagnosticResult]],
+        DiagnosticResult,
+    ],
+) -> list[DiagnosticResult]:
     """Execute dataset-level checks independently of the episode score rollup."""
     return [
         execute(
