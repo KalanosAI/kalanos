@@ -93,28 +93,6 @@ _METRIC_BUCKETS: dict[MetricStatus, str] = {
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _grade_cell(score: ScoreResult) -> Text:
-    """Render one ScoreResult's grade letter, styled by how good it is.
-
-    Parameters
-    ----------
-    score : ScoreResult
-        The score to render.
-
-    Returns
-    -------
-    Text
-        The grade letter, styled by severity when the `Console` has color enabled.
-        `"–"` when `score.score` is `None`, so an ungraded row never reads as an "F".
-    """
-
-    if score.score is None:
-        return Text(text="–")
-    if score.grade is None:
-        return Text(text="?")
-    return Text(text=score.grade.value, style=_GRADE_STYLE.get(score.grade, ""))
-
-
 def _readiness_cell(report: Report) -> Text:
     """The plate's headline: readiness, or why it is undefined, and the counts.
 
@@ -221,28 +199,6 @@ def _score_rail_cell(score: ScoreResult, *, rail: bool) -> Text:
     if not rail:
         return figure
     return Text.assemble(_rail(score), " ", figure)
-
-
-def _verdict_cell(score: ScoreResult) -> Text:
-    """Render one ScoreResult's train-readiness verdict.
-
-    Parameters
-    ----------
-    score : ScoreResult
-        The score to read `train_ready` from.
-
-    Returns
-    -------
-    Text
-        A reverse-video pill reading `TRAIN READY` or `NOT TRAIN READY` for
-        `True`/`False`, or plain italic `train-readiness unknown` for `None`.
-    """
-
-    if score.train_ready is None:
-        return Text(text="train-readiness unknown", style=f"italic {_RULE}")
-    if score.train_ready:
-        return Text(text="▌ TRAIN READY ▐", style=f"bold {_PLATE} on {_GOOD}")
-    return Text(text="▌ NOT TRAIN READY ▐", style=f"bold {_PAPER} on {_ACCENT}")
 
 
 def _counts_line(report: Report) -> str:

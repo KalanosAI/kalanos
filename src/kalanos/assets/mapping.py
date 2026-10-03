@@ -138,27 +138,6 @@ def parse_map_argument(text: str) -> tuple[str, str]:
     return feature, taxonomy_type
 
 
-def merge_overrides(*sources: Sequence[MappingOverride]) -> list[MappingOverride]:
-    """Merge override sources per feature, a later source winning.
-
-    Parameters
-    ----------
-    *sources : Sequence[MappingOverride]
-        The sources, lowest priority first: sidecar, file, argument.
-
-    Returns
-    -------
-    list[MappingOverride]
-        One override per feature, in the order each feature was first seen.
-    """
-
-    merged: dict[str, MappingOverride] = {}
-    for source in sources:
-        for override in source:
-            merged[override.feature] = override
-    return list(merged.values())
-
-
 def check_taxonomy_types(
     overrides: Sequence[MappingOverride], dictionary: Dictionary
 ) -> None:

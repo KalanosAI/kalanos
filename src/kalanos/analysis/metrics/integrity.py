@@ -90,27 +90,6 @@ _SWITCH_REASON = (
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _sampling_rate(ctx: ChannelContext) -> float | None:
-    """The stream's sampling rate, from the median positive gap between timestamps.
-
-    Parameters
-    ----------
-    ctx : ChannelContext
-        The channel whose stream's timestamps are read.
-
-    Returns
-    -------
-    float or None
-        Samples per second, or `None` when no gap is positive.
-    """
-
-    stamps = [t for t in ctx.stream.timestamps.to_list() if t is not None]
-    gaps = sorted(b - a for a, b in zip(stamps, stamps[1:], strict=False) if b > a)
-    if not gaps:
-        return None
-    return 1.0 / gaps[len(gaps) // 2]
-
-
 def _is_switch(values: pl.Series) -> bool:
     """Check whether a numeric channel only ever takes exactly two values.
 

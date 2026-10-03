@@ -15,7 +15,7 @@ It never writes a file; its caller, such as the CLI, does that with
 
 # Built-in
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from time import perf_counter
 
@@ -36,7 +36,7 @@ from kalanos.analysis.models.discovery import (
     SourceCandidate,
     SourceInfo,
 )
-from kalanos.analysis.models.domain import Episode, MappingSource
+from kalanos.analysis.models.domain import Episode
 from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import DEFAULT_VISION_SAMPLES
@@ -125,59 +125,6 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
         )
         for episode in episodes
     ]
-
-
-def _apply_overrides(
-    episodes: list[Episode],
-    by_feature: Mapping[str, MappingOverride],
-    matched: set[str],
-    seen: set[str],
-) -> list[Episode]:
-    """Retype every stream whose `source_field` a mapping override names.
-
-    An override replaces a dictionary match as well as an unmapped fallback.
-
-    Parameters
-    ----------
-    episodes : list[Episode]
-        Everything one adapter read from a candidate.
-    by_feature : Mapping[str, MappingOverride]
-        The run's overrides, keyed by the source field each matches.
-    matched : set[str]
-        Grown in place with every override feature that matched a stream.
-    seen : set[str]
-        Grown in place with every source field read.
-        An unmatched override's error lists them.
-
-    Returns
-    -------
-    list[Episode]
-        The same episodes, in the same order, with matching streams retyped.
-    """
-
-    retyped: list[Episode] = []
-    for episode in episodes:
-        streams = []
-        for stream in episode.streams:
-            if stream.source_field is None:
-                streams.append(stream)
-                continue
-            seen.add(stream.source_field)
-            override = by_feature.get(stream.source_field)
-            if override is None:
-                streams.append(stream)
-                continue
-            matched.add(override.feature)
-            streams.append(
-                stream.model_copy(
-                    update={
-                        "taxonomy_type": override.taxonomy_type,
-                        "mapping_source": MappingSource.OVERRIDE,
-                    }
-                )
-            )
-        retyped.append(episode.model_copy(update={"streams": streams}))
-    return retyped
 
 
 def _unmatched_override_error(
