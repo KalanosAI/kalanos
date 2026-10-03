@@ -12,6 +12,7 @@ metrics:
   # episode fails. Decided by intended use rather than calibrated — no real
   # dataset graded so far lacked one (2,897 episodes across seven datasets).
   annotation.task_instruction_missing:
+    route: contract
     thresholds:
       default:
         good: 0.0

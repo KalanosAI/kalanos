@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.6.5"
+version = "0.7.0"
 description = "Grade robot training data before you train on it: a 0-100 readiness score, the blocking episodes to exclude, and the evidence behind every finding, for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -52,11 +52,14 @@ dependencies = [
 # `all` self-references each extra (PEP 621, supported by pip>=21.2, uv, hatch)
 # instead of repeating its pins, so a new extra is one line added to both lists.
 [project.optional-dependencies]
-all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]"]
+all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]", "kalanos[numeric]"]
 video = ["av>=13", "numpy"]
 hdf5 = ["h5py>=3"]
 mcap = ["mcap>=1.4", "mcap-ros2-support>=0.5"]
 hf = ["huggingface-hub>=1.31.0"]
+numeric = [
+    "numpy>=2.2.6",
+]
 
 [project.urls]
 Homepage = "https://kalanos.ai"
@@ -85,6 +88,7 @@ timing = "kalanos.analysis.metrics.timing"
 integrity = "kalanos.analysis.metrics.integrity"
 annotation = "kalanos.analysis.metrics.annotation"
 motion = "kalanos.analysis.metrics.motion"
+vision = "kalanos.analysis.metrics.vision"
 
 [project.entry-points."kalanos.reporters"]
 render = "kalanos.analysis.reporting.render"
@@ -103,13 +107,16 @@ packages = ["src/kalanos"]
 # The sdist is an allowlist, not "everything git tracks": only what is needed to
 # build the wheel and run the tests from source. pyproject.toml, README.md and
 # LICENSE are always added by hatchling. Anything not listed here (scripts/,
-# .github/, uv.lock, local output) never reaches PyPI.
+# .github/, uv.lock, local output) never reaches PyPI, except the explicit
+# release-check script included below for its metadata tests.
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
     "/tests",
     "/docs",
     "/CONTRIBUTING.md",
+    "/CITATION.cff",
+    "/scripts/check_release.py",
     "/SECURITY.md",
 ]
 

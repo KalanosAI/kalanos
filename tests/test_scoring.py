@@ -145,7 +145,7 @@ def _score(
         level=level,
         score=score,
         grade=grade_for(score, policy) if score is not None else None,
-        train_ready=score >= 70.0 if score is not None else None,
+        train_ready=None,
         n_contributing=1 if score is not None else 0,
         families=families or {},
     )
@@ -465,7 +465,8 @@ def test_a_channel_graded_only_on_drop_rate_scores_from_that_alone():
     assert score.level == Level.CHANNEL
     assert score.score == pytest.approx(100.0)
     assert score.grade == Grade.A
-    assert score.train_ready is True
+    # Since schema 7 scoring sets no train-readiness: eligibility does.
+    assert score.train_ready is None
     assert score.n_contributing == 1
 
 
@@ -511,7 +512,7 @@ def test_a_critical_drop_rate_alone_scores_the_channel_zero():
 
     assert score.score == pytest.approx(0.0)
     assert score.grade == Grade.F
-    assert score.train_ready is False
+    assert score.train_ready is None
     [finding] = findings
     assert finding.severity == Severity.CRITICAL
     assert finding.metric_id == "timing.drop_rate"
@@ -540,7 +541,7 @@ def test_a_drop_rate_at_the_midpoint_scores_the_channel_fifty():
 
     assert score.score == pytest.approx(50.0)
     assert score.grade == Grade.F
-    assert score.train_ready is False
+    assert score.train_ready is None
     [finding] = findings
     assert finding.severity == Severity.WARNING
     assert finding.points == pytest.approx(50.0)
@@ -1073,7 +1074,7 @@ def test_rollup_composes_unchanged_from_stream_through_dataset():
         assert result.level == level
         assert result.score == pytest.approx(70.0)
         assert result.grade == Grade.C
-        assert result.train_ready is True
+        assert result.train_ready is None
 
 
 def test_flatline_pct_grades_a_mystery_channel_as_critical():

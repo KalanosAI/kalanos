@@ -8,11 +8,13 @@ coverage, and the packaged policies that switch it on, off, or extend it.
 
 # Built-in
 from pathlib import Path
+from typing import cast
 
 # External
 import h5py
 import numpy as np
 import pytest
+from calibration_helpers import grade_with_test_calibration
 
 # Internal
 from kalanos.analysis.models.policy import GatePolicy
@@ -21,29 +23,8 @@ from kalanos.analysis.scoring.gate import cap_for, dataset_traits, task_traits, 
 from kalanos.api import grade
 from kalanos.assets.policy import load_default_policy, load_policy
 
-
-def _write_arm(path: Path, n_episodes: int, glitched: set[int], tasks=None) -> None:
-    """Smooth 50 Hz joint motion; `glitched` episodes get large command jumps."""
-
-    rng = np.random.default_rng(0)
-    t = np.arange(200) * 0.02
-    with h5py.File(str(path), "w") as store:
-        data = store.create_group("data")
-        data.attrs["fps"] = 50.0
-        for index in range(n_episodes):
-            group = data.create_group(f"demo_{index}")
-            actions = np.stack(
-                [0.2 * np.sin(2 * np.pi * 0.4 * t + phase) for phase in range(6)], 1
-            )
-            if index in glitched:
-                rows = rng.choice(np.arange(1, 199), size=20, replace=False)
-                actions[rows] += rng.choice([-1, 1], (20, 6)) * rng.uniform(
-                    2, 3, (20, 6)
-                )
-            group.create_dataset("actions", data=actions)
-            group.create_dataset("timestamps", data=t)
-            if tasks is not None and tasks[index] is not None:
-                group.attrs["task"] = tasks[index]
+# Local
+from helpers import write_arm as _write_arm
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -120,7 +101,7 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     gate = report.gate
 
     assert gate is not None
@@ -135,8 +116,15 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     assert report.score.grade == Grade.C
     assert gate.uncapped_grade is not None and gate.uncapped_grade != Grade.C
     assert report.score.train_ready is False
-    assert gate.pruned_grade == Grade.A
-    assert gate.train_ready_after_pruning is True
+    # `pruned_score` describes the non-blocked candidate set; since schema 7
+    # nothing claims that set is train-ready or sufficient.
+    assert report.score.score is not None
+    assert gate.pruned_score is not None and gate.pruned_score > report.score.score
+    assert not hasattr(gate, "train_ready_after_pruning")
+    assert not hasattr(gate, "pruned_grade")
+    assert (
+        report.sufficiency is not None and report.sufficiency.status.value == "unknown"
+    )
     assert "4 of 20 episodes" in gate.summary
     assert all(f.reasons for f in gate.failing_episodes)
 
@@ -249,12 +237,15 @@ def test_a_small_dataset_has_no_dataset_traits():
     assert dataset_traits(critical, episodes, 20, min_share=0.95) == set()
 
 
-def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
-    """End to end: a channel stuck in every episode is reported, not counted.
+def test_a_blocking_finding_on_every_episode_is_reported_as_a_trait_and_still_blocks(
+    tmp_path,
+):
+    """A stuck channel in every episode is a dataset trait *and* blocks every episode.
 
-    The channel moves for its first samples, then freezes for the rest of every
-    episode: a stuck sensor (critical), on every episode, so a dataset trait.
-    The glitched episodes still cap the grade.
+    Since schema 7 prevalence exempts nothing: the report cannot tell a
+    recording convention from corruption in every episode, so it names the
+    pattern as a descriptive trait and leaves every episode blocked. A scoped
+    policy rule may exempt it explicitly; the gate never does on its own.
     """
 
     path = tmp_path / "arm.hdf5"
@@ -262,9 +253,10 @@ def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
     stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
     with h5py.File(str(path), "a") as store:
         for index in range(20):
-            store[f"data/demo_{index}"].create_dataset("unused_dim", data=stuck)
+            group = cast(h5py.Group, store[f"data/demo_{index}"])
+            group.create_dataset("unused_dim", data=stuck)
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     gate = report.gate
 
     assert gate is not None
@@ -272,13 +264,14 @@ def test_a_constant_channel_in_every_episode_does_not_cap_the_grade(tmp_path):
         "unused_dim.integrity.flatline_pct"
     ]
     assert gate.dataset_traits[0].n_with_finding == 20
-    assert {f.episode_id.rsplit("_", 1)[-1] for f in gate.failing_episodes} == {
-        "2",
-        "7",
-        "11",
-        "16",
-    }
-    assert report.score.grade == Grade.C
+    assert len(gate.failing_episodes) == 20
+    assert all(
+        any(r.endswith("unused_dim.integrity.flatline_pct") for r in f.reasons)
+        for f in gate.failing_episodes
+    )
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 20
+    assert report.readiness is not None and report.readiness.score == 0.0
     assert "dataset traits" in gate.summary
 
 
@@ -293,7 +286,8 @@ def test_a_channel_that_never_changes_is_a_warning_not_a_failure(tmp_path):
     _write_arm(path, 20, glitched=set())
     with h5py.File(str(path), "a") as store:
         for index in range(0, 20, 3):
-            store[f"data/demo_{index}"].create_dataset("unused_dim", data=np.zeros(200))
+            group = cast(h5py.Group, store[f"data/demo_{index}"])
+            group.create_dataset("unused_dim", data=np.zeros(200))
 
     report = grade(path)
 
@@ -309,9 +303,10 @@ def test_a_channel_that_freezes_partway_is_still_a_stuck_sensor(tmp_path):
     _write_arm(path, 20, glitched=set())
     stuck = np.concatenate([np.linspace(0.0, 1.0, 6), np.ones(194)])
     with h5py.File(str(path), "a") as store:
-        store["data/demo_3"].create_dataset("unused_dim", data=stuck)
+        group = cast(h5py.Group, store["data/demo_3"])
+        group.create_dataset("unused_dim", data=stuck)
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     assert report.gate is not None
     assert [f.episode_id.rsplit("_", 1)[-1] for f in report.gate.failing_episodes] == [
@@ -325,20 +320,24 @@ def test_readiness_counts_blocking_episodes_as_zero(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
 
-    report = grade(path)
+    report = grade_with_test_calibration(path)
     r = report.readiness
 
-    assert r is not None
-    assert (r.evaluated_episodes, r.passing_episodes, r.blocking_episodes) == (
-        20,
-        16,
-        4,
-    )
+    assert r is not None and r.passing_quality is not None
+    assert report.gate is not None
+    c = report.eligibility_counts
+    assert c is not None
+    assert (c.total, c.pass_count, c.blocked, c.review, c.unknown) == (20, 16, 4, 0, 0)
+    assert c.confirmed_eligible_share == pytest.approx(0.8)
+    assert r.formula_id == "pass-quality-over-known-inventory-v1"
+    assert r.reasons == []
     passing = [
         e.score.score
         for e in report.episodes
         if e.id not in {f.episode_id for f in report.gate.failing_episodes}
+        and e.score.score is not None
     ]
+    assert len(passing) == 16
     assert r.passing_quality == pytest.approx(sum(passing) / 16)
     assert r.score == pytest.approx(sum(passing) / 20)
     assert r.score == pytest.approx(r.passing_quality * 16 / 20)
@@ -351,19 +350,32 @@ def test_a_clean_dataset_reads_as_its_mean(tmp_path):
     path = tmp_path / "clean.hdf5"
     _write_arm(path, 20, glitched=set())
 
-    r = grade(path).readiness
+    report = grade(path)
+    r = report.readiness
 
-    assert r is not None and r.blocking_episodes == 0
+    assert r is not None
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 0
     assert r.score == pytest.approx(r.passing_quality)
 
 
-def test_without_a_gate_there_is_no_readiness(tmp_path):
-    """legacy_0_5 has no blocking rule, so no readiness."""
+def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
+    """legacy_0_5 has no gate; eligibility, counts and readiness exist regardless.
+
+    The gate only caps a compatibility letter. The decision lives on each
+    episode, so a policy without a gate still decides and still reports.
+    """
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2})
 
-    assert grade(path, policy=load_policy(Path("legacy_0_5"))).readiness is None
+    report = grade_with_test_calibration(path, policy=load_policy(Path("legacy_0_5")))
+
+    assert report.gate is None
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 1
+    assert report.readiness is not None and report.readiness.score is not None
+    assert all(e.eligibility is not None for e in report.episodes)
 
 
 def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
@@ -373,15 +385,30 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
-    report = grade(path)
+    report = grade_with_test_calibration(path)
 
     text = render_terminal(report, width=120)
 
+    assert report.readiness is not None
     assert f"READINESS {report.readiness.score:.0f}/100" in text
-    assert "4 blocking" in text
+    assert "16/20 pass, 4 blocked" in text
     assert text.count("BLOCK ") >= 4
     header = text.splitlines()[:8]
     assert not any(
         line.split() and line.split()[-1] in {"A", "B", "C", "D", "F"}
         for line in header
     )
+
+
+def test_jitter_alone_cannot_make_an_unknown_clock_observable(tmp_path):
+    """Two jittery time axes provide no producer declaration of capture origin."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched=set(), jittered={0, 1})
+
+    report = grade(path)
+
+    assert report.gate is not None
+    not_observable = {item.metric: item for item in report.gate.coverage.not_observable}
+    assert {"effective_hz", "drop_rate"} <= not_observable.keys()
+    assert not_observable["drop_rate"].share == pytest.approx(1.0)

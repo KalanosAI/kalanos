@@ -16,7 +16,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
-from kalanos.analysis.models.domain import Kind
+from kalanos.analysis.models.domain import Clock, Kind, TimestampDtype
 from kalanos.testing import check_adapter
 
 # Local
@@ -91,7 +91,7 @@ def test_each_episode_is_its_own_parquet():
 def test_a_camera_mp4_holds_exactly_its_own_episode(monkeypatch):
     """Verify each episode's video payload spans only its own frames."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: pytest.fail("_load_av() was called"))
+    monkeypatch.setattr(video, "av", None)
 
     first, second = _episodes(LEROBOT_V2_0_FIXTURE)
     [first_video] = [s for s in first.streams if s.kind == Kind.VIDEO]
@@ -150,3 +150,13 @@ def test_a_v3_dataset_is_declined(tmp_path):
     (root / "meta" / "info.json").write_text(json.dumps({"codebase_version": "v3.0"}))
 
     assert LeRobotV2Adapter().detect(UPath(root)) == 0.0
+
+
+@pytest.mark.parametrize("fixture", [LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE])
+def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock(fixture):
+    """LeRobot stamps frames as float32 `frame_index / fps`; so do the fixtures."""
+
+    for episode in _episodes(fixture):
+        for stream in episode.streams:
+            assert stream.timestamp_dtype is TimestampDtype.FLOAT32
+            assert stream.clock is Clock.RECONSTRUCTED

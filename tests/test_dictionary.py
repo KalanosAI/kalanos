@@ -16,6 +16,7 @@ import yaml
 
 # Internal
 from kalanos.analysis.models.dictionary import (
+    CategoryGroup,
     Dictionary,
     DictionaryEntry,
     GroupHintKind,
@@ -44,7 +45,6 @@ from helpers import CSV_FIXTURE
 # never grew — every key here is one the reference tables actually supply.
 _JOINT_TORQUE = {
     "label": "Joint torque",
-    "category": "proprioceptive_state",
     "modality": "numeric",
     "kind": "series",
     "unit": "N.m",
@@ -55,10 +55,17 @@ _JOINT_TORQUE = {
     "group_hint": "indexed",
 }
 
+# A categories table covering every family the dictionaries below use.
+_CATEGORIES = {
+    "proprio": {"slug": "proprioceptive_state", "group": "sensor"},
+    "derived": {"slug": "derived_estimated_state", "group": "derived"},
+    "sync": {"slug": "calibration_sync", "group": "context"},
+    "control": {"slug": "action_control", "group": "command"},
+}
+
 # The minimum an entry needs, for tests about something other than its content.
 _BARE = {
     "label": "Anything",
-    "category": "proprioceptive_state",
     "modality": "numeric",
     "kind": "series",
     "shape": "scalar",
@@ -90,7 +97,8 @@ def _dictionary(**entries: dict) -> Dictionary:
 
     return Dictionary.model_validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "categories": _CATEGORIES,
             "entries": {
                 key.replace("_", ".", 1): value for key, value in entries.items()
             },
@@ -322,6 +330,46 @@ def test_two_entries_whose_keys_differ_only_by_family_are_rejected():
         _dictionary(proprio_position=_BARE, derived_position=_BARE)
 
 
+def test_an_entry_in_an_undeclared_family_is_rejected():
+    """Verify every key's family has to be declared in the `categories` table."""
+
+    with pytest.raises(ValueError, match=r"undeclared families.*mystery\.anything"):
+        _dictionary(mystery_anything=_BARE)
+
+
+def test_two_families_sharing_a_category_are_rejected():
+    """Verify one category cannot be claimed by two families."""
+
+    with pytest.raises(ValueError, match="one family each"):
+        Dictionary.model_validate(
+            {
+                "schema_version": 2,
+                "categories": {**_CATEGORIES, "extero": _CATEGORIES["proprio"]},
+                "entries": {},
+            }
+        )
+
+
+def test_a_dictionary_without_categories_fails_to_load(tmp_path):
+    """Verify the `categories` table is required."""
+
+    path = _written(
+        tmp_path, {"schema_version": 2, "entries": {"proprio.joint_torque": _BARE}}
+    )
+
+    with pytest.raises(ValueError, match="does not match the dictionary schema"):
+        load_dictionary(path)
+
+
+def test_category_of_follows_the_family_and_names_nothing_for_an_unmapped_type():
+    """Verify `category_of` reads the key's family, and returns `None` with no entry."""
+
+    dictionary = _dictionary(derived_tcp_position=_BARE)
+
+    assert dictionary.category_of("derived.tcp_position") == "derived_estimated_state"
+    assert dictionary.category_of("unmapped.foo") is None
+
+
 def test_an_alias_that_normalises_away_to_nothing_is_rejected():
     """Verify a punctuation-only alias fails to load.
 
@@ -387,7 +435,11 @@ def test_a_taxonomy_key_that_is_not_family_dot_name_is_rejected():
 
     with pytest.raises(ValueError, match=r"family\.name"):
         Dictionary.model_validate(
-            {"schema_version": 1, "entries": {"joint_torque": _BARE}}
+            {
+                "schema_version": 2,
+                "categories": _CATEGORIES,
+                "entries": {"joint_torque": _BARE},
+            }
         )
 
 
@@ -396,7 +448,11 @@ def test_the_sketched_entry_loads_with_every_field_intact(tmp_path):
 
     path = _written(
         tmp_path,
-        {"schema_version": 1, "entries": {"proprio.joint_torque": _JOINT_TORQUE}},
+        {
+            "schema_version": 2,
+            "categories": _CATEGORIES,
+            "entries": {"proprio.joint_torque": _JOINT_TORQUE},
+        },
     )
 
     entry = load_dictionary(path).entries["proprio.joint_torque"]
@@ -430,11 +486,11 @@ def test_a_schema_invalid_dictionary_fails_at_load_not_at_first_use(tmp_path):
     path = _written(
         tmp_path,
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "categories": _CATEGORIES,
             "entries": {
                 "proprio.joint_torque": {
                     "label": "Joint torque",
-                    "category": "proprioceptive_state",
                     "kind": "series",
                 }
             },
@@ -459,7 +515,11 @@ def test_use_dictionary_installs_an_override_that_load_default_dictionary_return
 
     path = _written(
         tmp_path,
-        {"schema_version": 1, "entries": {"proprio.joint_torque": _JOINT_TORQUE}},
+        {
+            "schema_version": 2,
+            "categories": _CATEGORIES,
+            "entries": {"proprio.joint_torque": _JOINT_TORQUE},
+        },
     )
     override = load_dictionary(path)
 
@@ -474,7 +534,11 @@ def test_clear_active_dictionary_restores_the_packaged_default(tmp_path):
     packaged = load_default_dictionary()
     path = _written(
         tmp_path,
-        {"schema_version": 1, "entries": {"proprio.joint_torque": _JOINT_TORQUE}},
+        {
+            "schema_version": 2,
+            "categories": _CATEGORIES,
+            "entries": {"proprio.joint_torque": _JOINT_TORQUE},
+        },
     )
     use_dictionary(load_dictionary(path))
 
@@ -503,6 +567,19 @@ def test_the_packaged_dictionary_holds_every_reference_type():
     """Verify the shipped dictionary carries all 202 types from the source tables."""
 
     assert len(_PACKAGED.entries) == 202
+
+
+def test_the_packaged_dictionary_declares_every_category_and_only_two_sensors():
+    """Verify all 16 categories are declared, and only onboard sensing is a sensor."""
+
+    sensors = {
+        slug
+        for slug, group in _PACKAGED.category_groups.items()
+        if group is CategoryGroup.SENSOR
+    }
+
+    assert len(_PACKAGED.categories) == 16
+    assert sensors == {"proprioceptive_state", "exteroceptive_streams"}
 
 
 def test_the_documented_metric_taxonomy_types_exist():

@@ -33,8 +33,14 @@ PACKAGE_ROOT = REPO_ROOT / "src" / "kalanos"
 LOADER_SOURCE = PACKAGE_ROOT / "assets" / "policy.py"
 
 # Reading a YAML file is a privilege the asset loaders hold and nothing else does:
-# one loader per packaged asset, each owning its own schema.
-ASSET_LOADERS = {LOADER_SOURCE, PACKAGE_ROOT / "assets" / "dictionary.py"}
+# one loader per YAML shape, each owning its own schema.
+ASSET_LOADERS = {
+    LOADER_SOURCE,
+    PACKAGE_ROOT / "assets" / "dictionary.py",
+    PACKAGE_ROOT / "assets" / "mapping.py",
+    PACKAGE_ROOT / "assets" / "bundle.py",
+    PACKAGE_ROOT / "assets" / "yaml_strict.py",
+}
 
 # render.py writes a Report as YAML; it never reads a configuration file, so it
 # is exempt from the import ban without being an asset loader itself.
@@ -210,6 +216,18 @@ def test_the_jerk_metrics_are_report_only_until_they_are_dimensionless():
     policy = load_default_policy()
 
     for name in ("mean_jerk_norm", "max_abs_jerk"):
+        assert _entry(policy, name).report_only is True, name
+
+
+def test_velocity_spike_and_dimensionless_jerk_are_report_only_with_no_band():
+    """Verify velocity_spike_pct and log_dimensionless_jerk measure but don't grade.
+
+    No band has been set against real recordings for either yet.
+    """
+
+    policy = load_default_policy()
+
+    for name in ("velocity_spike_pct", "log_dimensionless_jerk"):
         assert _entry(policy, name).report_only is True, name
 
 

@@ -1,17 +1,10 @@
-"""The dataset gate: failing episodes cap the dataset's letter.
+"""The dataset gate: derive the blocked list and the coverage from decided episodes.
 
-Averaging lets a minority of bad episodes hide: eight glitched episodes in fifty
-still average to an A. The gate counts the episodes that fail — any metric graded
-`critical`, per docs/METRICS.md's train-ready rule — and caps the dataset's letter
-by their share, reporting the grade the dataset would get without them.
-
-A critical finding shared by every episode of one task, and by no episode of any
-other, is a task trait rather than a fault (a sweeping task never closes the
-gripper, so its gripper state never moves) and does not fail those episodes.
-
-Every gated report also states what its grade rests on — the families graded,
-the checks per episode, and which metrics could not observe the data and why —
-so an A on thin evidence reads differently from an A on thick.
+Since schema 7 this module decides nothing. `scoring.eligibility` decides each
+episode once; the gate lists the blocked ones, caps the compatibility letter by
+their share, reports task/dataset-wide patterns as descriptive traits, and
+states what the grade rests on. Prevalence exempts nothing: a blocking finding
+on every episode is a blocking finding on every episode.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -24,6 +17,14 @@ import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 
+from kalanos.analysis.coverage import state_of
+from kalanos.analysis.models.coverage import Availability
+from kalanos.analysis.models.eligibility import (
+    Consequence,
+    EligibilityStatus,
+    EpisodeEligibility,
+)
+
 # Internal
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import GatePolicy, Policy
@@ -34,10 +35,9 @@ from kalanos.analysis.models.report import (
     Gate,
     GradedEpisode,
     NotObservable,
-    Readiness,
     TaskTrait,
 )
-from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 from kalanos.analysis.scoring.score import rollup
 
 
@@ -72,11 +72,14 @@ def finding_key(finding: Finding) -> str:
 
 
 def critical_keys_by_episode(findings: Iterable[Finding]) -> dict[str, set[str]]:
-    """Each episode's critical findings, keyed by `finding_key`."""
+    """Each episode's blocking findings, keyed by `finding_key`.
+
+    Blocking means `consequence == BLOCK`; severity alone does not block.
+    """
 
     keys: dict[str, set[str]] = defaultdict(set)
     for finding in findings:
-        if finding.severity == Severity.CRITICAL:
+        if finding.consequence == Consequence.BLOCK:
             keys[finding.episode_id].add(finding_key(finding))
     return dict(keys)
 
@@ -111,9 +114,11 @@ def task_traits(
     traits = {}
     for key, episodes in on.items():
         tasks = {task_of.get(episode) for episode in episodes}
-        if len(tasks) != 1 or None in tasks:
+        if len(tasks) != 1:
             continue
         [task] = tasks
+        if task is None:
+            continue
         if len(episodes) == size[task] >= min_episodes:
             traits[key] = (task, size[task])
     return traits
@@ -158,40 +163,6 @@ def dataset_traits(
     return {key for key, count in counts.items() if count >= needed}
 
 
-def readiness_of(
-    episodes: Sequence[GradedEpisode], gate: Gate | None
-) -> Readiness | None:
-    """Readiness: blocking episodes contribute 0, the rest their quality score.
-
-    Parameters
-    ----------
-    episodes : Sequence[GradedEpisode]
-        Every graded episode.
-    gate : Gate or None
-        The gate's verdict, which names the blocking episodes; without a gate
-        there is no blocking rule, and so no readiness.
-
-    Returns
-    -------
-    Readiness or None
-        The readiness summary, or `None` without a gate.
-    """
-
-    if gate is None:
-        return None
-    blocking = {item.episode_id for item in gate.failing_episodes}
-    scores = [(e.id, e.score.score) for e in episodes if e.score.score is not None]
-    passing = [score for episode, score in scores if episode not in blocking]
-    evaluated = len(scores)
-    return Readiness(
-        score=sum(passing) / evaluated if evaluated else None,
-        evaluated_episodes=evaluated,
-        passing_episodes=len(passing),
-        blocking_episodes=evaluated - len(passing),
-        passing_quality=statistics.fmean(passing) if passing else None,
-    )
-
-
 def cap_for(share: float, gate: GatePolicy) -> Grade | None:
     """The best letter a dataset with this share of failing episodes may get."""
 
@@ -229,6 +200,8 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
     for episode in episodes:
         graded = 0
         for name, result in _results(episode):
+            if state_of(result) == Availability.NOT_APPLICABLE:
+                continue
             total[name] += 1
             if result.status in _GRADED:
                 graded += 1
@@ -236,12 +209,6 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
                 not_applicable[name] += 1
                 reason.setdefault(name, str(result.evidence.get("reason", "")))
         graded_per_episode.append(graded)
-    graded_names = {
-        name
-        for episode in episodes
-        for name, result in _results(episode)
-        if result.status in _GRADED
-    }
     unobservable = [
         NotObservable(
             metric=name,
@@ -249,9 +216,7 @@ def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
             share=not_applicable[name] / total[name],
         )
         for name in sorted(not_applicable)
-        if name not in graded_names
-        and not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE
-        and reason[name]
+        if not_applicable[name] / total[name] >= _NOT_OBSERVABLE_SHARE and reason[name]
     ]
     return Coverage(
         families_graded=sorted(score.families),
@@ -273,7 +238,7 @@ def _summary(
     """One plain-language line: readiness, why, and what it rests on."""
 
     if readiness is None:
-        head = "Not graded: no episode could be evaluated"
+        head = "Readiness undefined"
     elif failing:
         head = (
             f"Readiness {readiness:.0f}/100: {failing} of {total} episodes "
@@ -308,6 +273,10 @@ def apply_gate(
     findings: Sequence[Finding],
     score: ScoreResult,
     policy: Policy,
+    *,
+    decisions: Mapping[str, EpisodeEligibility],
+    readiness_score: float | None = None,
+    passing_quality: float | None = None,
 ) -> tuple[ScoreResult, Gate | None]:
     """Cap the dataset's letter by its share of failing episodes.
 
@@ -321,12 +290,17 @@ def apply_gate(
         The dataset's rolled-up score: the mean of its episodes.
     policy : Policy
         The policy; without a `gate`, `score` is returned unchanged.
+    decisions : Mapping[str, EpisodeEligibility]
+        Every episode's decided eligibility, keyed by id. The gate derives
+        its blocked list from these.
+    readiness_score, passing_quality : float or None
+        Already computed by `scoring.eligibility`, for the summary line.
 
     Returns
     -------
     tuple[ScoreResult, Gate or None]
-        The dataset score with the gate's letter and train-readiness (its number
-        stays the mean), and the gate's verdict; `(score, None)` without a gate.
+        The dataset score with the compatibility letter and train-readiness,
+        and the gate; `(score, None)` without a gate.
     """
 
     if policy.gate is None:
@@ -337,39 +311,41 @@ def apply_gate(
         episode.id: next((t for t in (episode.tasks or []) if t.strip()), None)
         for episode in graded
     }
-    critical = {
-        episode: keys
-        for episode, keys in critical_keys_by_episode(findings).items()
-        if episode in task_of
-    }
+    critical = critical_keys_by_episode(findings)
     min_episodes = policy.gate.task_trait_min_episodes
-    # The share of episodes a letter may lose for free; a finding missing from no
-    # more than that share of episodes is on every episode that matters.
     allowance = next(
         (row.max_failing_share for row in policy.gate.caps if row.letter is None), 0.0
     )
+    # Traits are reported, not set aside: `everywhere` and `traits` describe
+    # patterns, and every episode in `critical` stays blocked.
     everywhere = dataset_traits(critical, task_of, min_episodes, 1.0 - allowance)
-    remaining = {episode: keys - everywhere for episode, keys in critical.items()}
-    traits = task_traits(remaining, task_of, min_episodes)
-    set_aside = everywhere | traits.keys()
+    traits = task_traits(critical, task_of, min_episodes)
+
+    # The blocked list is the eligibility's, not the gate's own reading of
+    # the findings, so the two can never disagree.
     failing = [
-        FailingEpisode(episode_id=episode, reasons=sorted(keys - set_aside))
-        for episode, keys in sorted(critical.items())
-        if keys - set_aside
+        FailingEpisode(
+            episode_id=episode.id,
+            reasons=sorted(
+                r.id
+                for r in decisions[episode.id].reasons
+                if r.status == EligibilityStatus.BLOCKED
+            ),
+        )
+        for episode in episodes
+        if decisions[episode.id].status == EligibilityStatus.BLOCKED
     ]
-    total = len(graded)
+    total = len(episodes)
     share = len(failing) / total if total else 0.0
     cap = cap_for(share, policy.gate)
     grade = worse(score.grade, cap)
 
-    pruned_score = pruned_grade = pruned_ready = None
+    pruned_score = None
     if failing:
         failing_ids = {item.episode_id for item in failing}
         kept = [e.score for e in graded if e.id not in failing_ids]
         if kept:
-            pruned = rollup(Level.DATASET, kept, policy=policy)
-            pruned_score, pruned_grade = pruned.score, pruned.grade
-            pruned_ready = pruned.train_ready
+            pruned_score = rollup(Level.DATASET, kept, policy=policy).score
 
     cover = coverage(graded, score)
     gate = Gate(
@@ -391,40 +367,24 @@ def apply_gate(
         uncapped_grade=score.grade,
         cap=cap,
         pruned_score=pruned_score,
-        pruned_grade=pruned_grade,
-        train_ready_after_pruning=pruned_ready,
         coverage=cover,
-        summary="",
+        summary=_summary(
+            readiness_score,
+            passing_quality,
+            len(failing),
+            total,
+            cover,
+            len(everywhere),
+        ),
     )
-    ready = readiness_of(graded, gate)
-    gate = gate.model_copy(
-        update={
-            "summary": _summary(
-                ready.score if ready else None,
-                ready.passing_quality if ready else None,
-                len(failing),
-                total,
-                cover,
-                len(everywhere),
-            )
-        }
-    )
-    gated = score.model_copy(
-        update={
-            "grade": grade,
-            "train_ready": (
-                None
-                if score.train_ready is None
-                else bool(score.train_ready and cap is None)
-            ),
-        }
-    )
+    # Dataset-level train_ready is not the gate's to decide: assembly sets it
+    # from the counts and the inventory, gate or no gate.
+    gated = score.model_copy(update={"grade": grade})
     return gated, gate
 
 
 __all__ = [
     "apply_gate",
-    "readiness_of",
     "cap_for",
     "coverage",
     "dataset_traits",

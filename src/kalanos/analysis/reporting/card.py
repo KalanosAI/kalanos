@@ -21,10 +21,14 @@ from rich.table import Table
 from rich.text import Text
 from upath import UPath
 
+from kalanos.analysis.coverage import coverage_lines
+from kalanos.analysis.diagnostics.runner import diagnostic_lines
+
 # Internal
 from kalanos.analysis.models.metrics import MetricStatus
 from kalanos.analysis.models.report import GradedEpisode, Report
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
+from kalanos.analysis.reporting.summary import finding_groups
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -89,53 +93,39 @@ _METRIC_BUCKETS: dict[MetricStatus, str] = {
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _grade_cell(score: ScoreResult) -> Text:
-    """Render one ScoreResult's grade letter, styled by how good it is.
-
-    Parameters
-    ----------
-    score : ScoreResult
-        The score to render.
-
-    Returns
-    -------
-    Text
-        The grade letter, styled by severity when the `Console` has color enabled.
-        `"–"` when `score.score` is `None`, so an ungraded row never reads as an "F".
-    """
-
-    if score.score is None:
-        return Text(text="–")
-    if score.grade is None:
-        return Text(text="?")
-    return Text(text=score.grade.value, style=_GRADE_STYLE.get(score.grade, ""))
-
-
 def _readiness_cell(report: Report) -> Text:
-    """The plate's headline: readiness out of 100 and the blocking episodes.
+    """The plate's headline: readiness, or why it is undefined, and the counts.
 
-    Falls back to the mean score for a report without a gate (legacy_0_5),
-    labelled as such. No letter grade: the number is the headline.
+    Reads the eligibility counts, never the gate: the two are derived from
+    the same decisions, and the counts are the ones that carry `review` and
+    `unknown`. No letter grade: the number, or its absence, is the headline.
     """
 
-    r = report.readiness
-    if r is None:
+    r, c = report.readiness, report.eligibility_counts
+    if r is None or c is None:
         if report.score.score is None:
             return Text("NOT GRADED", style=_ACCENT)
         return Text.assemble(
             ("SCORE ", f"{_PAPER} dim"), (f"{report.score.score:.0f}/100", "bold")
         )
-    if r.score is None:
-        return Text("NOT GRADED", style=_ACCENT)
-    blocking = (
-        f"  {r.blocking_episodes} blocking"
-        if r.blocking_episodes
-        else "  no blocking episodes"
+    counts = (
+        f"  {c.pass_count}/{c.total} pass"
+        + (f", {c.blocked} blocked" if c.blocked else "")
+        + (f", {c.review} review" if c.review else "")
+        + (f", {c.unknown} unknown" if c.unknown else "")
     )
+    tone = _ACCENT if (c.blocked or c.review or c.unknown) else _GOOD
+    if r.score is None:
+        return Text.assemble(
+            ("READINESS ", f"{_PAPER} dim"),
+            ("undefined", "bold"),
+            (counts, tone),
+            (f"  ({'; '.join(r.reasons)})", f"italic {_RULE}"),
+        )
     return Text.assemble(
         ("READINESS ", f"{_PAPER} dim"),
         (f"{r.score:.0f}/100", "bold"),
-        (blocking, _ACCENT if r.blocking_episodes else _GOOD),
+        (counts, tone),
     )
 
 
@@ -209,28 +199,6 @@ def _score_rail_cell(score: ScoreResult, *, rail: bool) -> Text:
     if not rail:
         return figure
     return Text.assemble(_rail(score), " ", figure)
-
-
-def _verdict_cell(score: ScoreResult) -> Text:
-    """Render one ScoreResult's train-readiness verdict.
-
-    Parameters
-    ----------
-    score : ScoreResult
-        The score to read `train_ready` from.
-
-    Returns
-    -------
-    Text
-        A reverse-video pill reading `TRAIN READY` or `NOT TRAIN READY` for
-        `True`/`False`, or plain italic `train-readiness unknown` for `None`.
-    """
-
-    if score.train_ready is None:
-        return Text(text="train-readiness unknown", style=f"italic {_RULE}")
-    if score.train_ready:
-        return Text(text="▌ TRAIN READY ▐", style=f"bold {_PLATE} on {_GOOD}")
-    return Text(text="▌ NOT TRAIN READY ▐", style=f"bold {_PAPER} on {_ACCENT}")
 
 
 def _counts_line(report: Report) -> str:
@@ -595,6 +563,11 @@ def render_terminal(
         )
     )
 
+    if report.sufficiency:
+        console.print(f"Sufficiency: {report.sufficiency.status.value}")
+    for line in coverage_lines(report.coverage) + diagnostic_lines(report.diagnostics):
+        console.print(line)
+
     # Step 2: the dataset-level row and every episode row share one table,
     # so rich measures every cell's visible width together and pads them
     # to the same columns, whether or not a given cell carries a style.
@@ -702,6 +675,12 @@ def render_terminal(
     # Step 3: report.findings arrives already sorted worst-first via sort_findings,
     # so the card only slices it and never re-sorts.
     console.print(_eyebrow("FINDINGS"))
+    for group in finding_groups(report):
+        console.print(
+            f"{group['metric']} / {group['role']}: {group['count']} findings in "
+            f"{group['episode_count']} episodes; {group['consequence']}; "
+            f"adapter={group['adapter']}; tasks={group['tasks']}"
+        )
     findings = report.findings[:_MAX_FINDINGS]
     if findings:
         # Severity and address are one assembled Text, not separate columns,
@@ -712,8 +691,31 @@ def render_terminal(
                 _severity_cell(finding), " ", _finding_location(finding)
             )
             console.print(address, no_wrap=True, overflow="ellipsis")
-            detail = Text(text=f"    {_finding_detail(finding)}", style=_RULE)
+            detail = Text(
+                text=(
+                    f"    {_finding_detail(finding)}; "
+                    f"consequence={finding.consequence.value}; "
+                    f"support={finding.support.kind.value}"
+                ),
+                style=_RULE,
+            )
             console.print(detail, no_wrap=True, overflow="ellipsis")
+            if finding.support.intervals:
+                intervals = ", ".join(
+                    f"[{i.start}, {i.end_exclusive})"
+                    + (
+                        f" support [{i.support_start}, {i.support_end_exclusive})"
+                        if i.support_start is not None
+                        else ""
+                    )
+                    for i in finding.support.intervals[:3]
+                )
+                more = len(finding.support.intervals) - 3
+                suffix = f"; {more} more in JSON/inspect" if more > 0 else ""
+                console.print(
+                    Text(f"    source rows: {intervals}{suffix}", style=_RULE)
+                )
+
     else:
         console.print(Text(text="  no findings", style=_GOOD))
 

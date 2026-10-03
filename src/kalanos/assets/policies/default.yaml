@@ -10,6 +10,11 @@
 schema_version: 1
 
 metrics:
+  # Recorded-axis diagnostics are report-only. They establish no capture quality.
+  timing.recorded_hz: {}
+  timing.recorded_dt_spread_ms: {}
+  timing.recorded_drop_estimate: {}
+
   # Both bounds decided: good < 1%, bad > 5%.
   timing.drop_rate:
     thresholds:
@@ -30,6 +35,40 @@ metrics:
   # every report, but it grades nothing until a band is settled against real
   # recordings.
   timing.monotonic_violations: {}
+
+  # Calibrated on pusht, cmu_stretch and aloha_static_towel: good just below the worst clean camera stream, bad at the median stream blurred by a 5x5 box.
+  vision.sharpness_score:
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 0.74
+        bad: 0.55
+
+  # Calibrated on pusht, cmu_stretch and aloha_static_towel: good at the worst clean camera stream, bad at the median stream with 40% of its frames clipped.
+  vision.exposure_shift_pct:
+    thresholds:
+      default:
+        good: 10.0
+        bad: 40.0
+
+  # Reported, never graded: a white simulator scene and an overexposed camera
+  # read alike here; Report.cameras compares each camera across episodes instead.
+  vision.exposure_level: {}
+
+  # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
+  # real recordings.
+  vision.frame_count_vs_timebase:
+    thresholds:
+      default:
+        good: 0.01
+        bad: 0.05
+
+  # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
+  vision.frozen_frame_pct:
+    thresholds:
+      default:
+        good: 0.01
+        bad: 10.0
 
   # Candidate: the 10%/25% deviation bounds are unconfirmed against real
   # recordings.
@@ -165,6 +204,16 @@ metrics:
       default:
         good: 0.1
         bad: 0.5
+
+  # Report-only: no band is decided. One waits on the detector benchmark measuring
+  # how often this fires on clean real recordings.
+  motion.velocity_spike_pct:
+    report_only: true
+
+  # Report-only: dimensionless, unlike mean_jerk_norm, but no smoothness band has
+  # been set against real recordings.
+  motion.log_dimensionless_jerk:
+    report_only: true
 
   # No bound decided; docs/METRICS.md marks it to define.
   motion.action_chatter: {}

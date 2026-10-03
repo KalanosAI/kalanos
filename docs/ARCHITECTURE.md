@@ -34,12 +34,13 @@ A Stream carries:
 | `timestamps` | canonical seconds, eager |
 | `payload` | the data, lazy |
 | `source_path`, `source_field` | which file it came from and what it was called there |
-| `clock` | capture, receive, log, or unknown |
+| `clock` | capture, receive, log, reconstructed, or unknown |
+| `timestamp_dtype` | the float format the timestamps were stored in at the source: float16, float32 or float64 |
 | `is_regular` | whether the sampling behind this stream classified as regular |
 
 Timestamps are eager because every timing metric needs them and they are cheap. Payloads are lazy because decoding a camera stream is not, and most of a grade can be computed without doing it.
 
-`clock` exists so a synthesised timebase can be told apart from a recorded one. Some formats record no wall-clock time per sample and only declare a nominal rate. A latency measured against timestamps derived from that rate would be a restatement of the rate, so a metric that depends on real timing reports lower confidence rather than a number that looks measured.
+`clock` exists so a synthesised timebase can be told apart from a recorded one. Some formats record no wall-clock time per sample and only declare a nominal rate. A timebase an adapter synthesises from that rate, or finds to be frame numbers divided by it, is labelled `reconstructed`. A latency measured against timestamps derived from that rate would be a restatement of the rate, so a metric that depends on real timing reports lower confidence rather than a number that looks measured.
 
 ### Why there is no file level
 
@@ -134,7 +135,7 @@ Use the cheapest thing that can decide the question: heuristic before statistica
 
 In inference, most of the work is deterministic. Delimiters, containers, comment headers, monotonic time columns and magnitude-based unit inference are all things a parser can decide. A model costs seconds or minutes per file on CPU, which is the entire runtime budget for a folder of hundreds, and it fails differently: a heuristic says which signal was missing, while a model produces a plausible wrong answer. Some schemas are exotic enough that no rule will reach them, with undocumented nesting or field names no alias table anticipates. Those are what a model backend is for. The accumulating `UnresolvedSource` records are both the trigger for adding one and the corpus to measure it against.
 
-The same ordering applies to video. Decoding every frame of every episode to grade a dataset is not a plausible thing to do, so frame metrics run on a stratified sample and report how many frames they looked at. Frozen-frame detection needs no full decode at all, since hashing a strided subsample finds duplicates cheaply, and a camera that stopped updating looks fine in every other metric.
+The same ordering applies to video. Decoding every frame of every episode to grade a dataset is not a plausible thing to do, so frame metrics read a sample and report how many frames they looked at. Blur and exposure sample single frames. Frozen-frame detection reads a few windows of consecutive frames, since a freeze is only visible between neighbours, and the single frames are taken from inside those windows, so one decode serves all three. `--full-frame-scan` or `KALANOS_FULL_FRAME_SCAN` makes that one decode cover every frame, streamed so that only per-frame measurements are kept. Frozen-frame detection sees the episode's action streams through `StreamContext.episode_streams`, because a still camera over an idle robot is not a freeze, and a camera that stopped updating looks fine in every other metric.
 
 And in metrics generally. Descriptive statistics answer most questions about a signal, in a form a threshold can grade. Faults no fixed threshold catches, such as drift, regime change, or a pattern anomalous only relative to the rest of the recording, want a time-series detector instead. Either way the output is a `MetricResult` and the requirements gate applies unchanged, so scoring never learns which kind of thing produced a number.
 
@@ -187,6 +188,8 @@ Two files, split between facts and policy.
 |---|---|---|
 | `dictionary.yaml` | *What is this signal?* Taxonomy types, aliases, unit, expected shape, plausible range. | Rarely. Ships in the wheel. Required. |
 | `policy.yaml` | *How do I grade this deployment?* Thresholds, weights, severities, declared limits. | Per deployment. A default ships; users override it. |
+
+`dictionary.yaml` also files each key family under its reference-taxonomy category, and puts each category in one group: sensor, command, derived, outcome or context. An entry takes its category from its key's family, and a dictionary with a family missing from that table fails to load.
 
 The split exists because thresholds vary by signal and by installation while physics does not. Joint velocity wants a different noise floor than joint acceleration, and a servo vendor and a factory team want different tolerances for the same signal. Combining them would mean overriding one number requires forking the whole dictionary.
 
@@ -242,7 +245,7 @@ Bands are keyed by taxonomy type, since the same metric can want a different ban
 
 ## Reporting
 
-The report renders to the terminal, JSON, YAML and HTML from one model. The terminal card leads with the score, then names what is wrong through its own findings block.
+The report renders to the terminal, JSON, YAML and HTML from one model. The terminal card leads with the score, then names what is wrong through its own findings block. Each graded stream carries its category, which is null when the stream is unmapped, and the report maps every category to its group.
 
 Two display rules hold in every format:
 
@@ -270,9 +273,26 @@ Two display rules hold in every format:
 ## What is not built yet
 
 - `--plugin` as a CLI flag for loading a single-file adapter without publishing a package.
-- Every metric family beyond `timing`, `integrity` and `motion`: `consistency`, `vision`, `coverage`, `calibration`, `annotation` and `schema`.
+- Every metric family beyond `timing`, `integrity`, `annotation`, `motion` and `vision`: `consistency`, `coverage`, `calibration` and `schema`.
 - Running an out-of-tree metric, or writing a report through an out-of-tree reporter. Both groups are discovered and listed; neither is wired into a run.
-- Frame decoding: video streams are carried as lazy payloads, but no vision metric decodes one yet, so a frame is never graded.
-- The CLI beyond `grade`, the plugin listings and `new` — namely `inspect`, `--fail-under` and `--sample`.
+- A `--fail-under` flag on `grade`.
 
 The issue tracker holds the sequence. This document describes the design those issues implement.
+
+
+## Explicit diagnostic execution (0.7.0)
+
+The diagnostic extension needs configured stream pairs, bounded media access,
+window contracts and dataset populations, which the scalar metric registry does
+not represent. It therefore has a typed plan/result boundary and dedicated
+runners under `analysis/diagnostics`, orchestrated by `assemble_report`.
+
+Existing core findings are calibrated first. Diagnostic measurements then run;
+explicit policy triggers add review findings. Coverage and eligibility are
+calculated once, followed by dataset summaries and window sufficiency. Renderers
+consume the resulting report and cannot promote decisions. Dataset results are
+measurements of explicit cohorts, not a rollup of episode quality scores.
+
+No diagnostics plan means no additional decoding or dataset work. The new
+measurement implementation hashes participate in the conservative analysis
+identity, and optional plan/policy changes participate in their own run identities.

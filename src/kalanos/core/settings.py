@@ -59,6 +59,14 @@ class Settings(BaseSettings):
         Refuse a remote root listing more files than this,
         overridden for one invocation by the CLI's `--max-remote-files` option.
         Defaults to 10,000; `None` lifts the limit.
+    vision_samples : int or None
+        How many frames blur and exposure sample, and windows frozen frames read,
+        overridden for one invocation by the CLI's `--vision-samples` option.
+        `None` leaves it to the bundle's `vision` section, 10 by default.
+    full_frame_scan : bool or None
+        Make frame metrics read every frame instead of a sample,
+        overridden for one invocation by the CLI's `--full-frame-scan` option.
+        `None` leaves it to the bundle's `vision` section, off by default.
     """
 
     model_config = SettingsConfigDict(
@@ -77,6 +85,8 @@ class Settings(BaseSettings):
     verbosity: Verbosity = Verbosity.WARNING
     remote_max_bytes: int | None = 20_000_000_000
     remote_max_files: int | None = 10_000
+    vision_samples: int | None = Field(default=None, ge=1)
+    full_frame_scan: bool | None = None
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀

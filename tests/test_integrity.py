@@ -6,11 +6,11 @@
 
 # Built-in
 import math
-from collections.abc import Sequence
 
 # External
 import polars as pl
 import pytest
+from pydantic import ValidationError
 from upath import UPath
 
 # Internal
@@ -22,9 +22,22 @@ from kalanos.analysis.metrics.integrity import (
     snr_db,
     spike_pct,
 )
-from kalanos.analysis.models.domain import Channel, Clock, FramePayload, Kind, Stream
-from kalanos.analysis.models.metrics import ChannelContext, MetricStatus, StreamContext
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    FramePayload,
+    Kind,
+    SourceOrder,
+    Stream,
+    TimestampDtype,
+)
+from kalanos.analysis.models.metrics import MetricStatus, StreamContext
+from kalanos.analysis.models.scoring import SupportKind, TemporalSupport
+from kalanos.analysis.models.support import SampleInterval
 from kalanos.testing import clean_taxels, skew_unloading, stream_context
+
+# Local
+from helpers import channel_ctx as _channel_ctx
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -40,28 +53,6 @@ _SOURCE_PATH = UPath("test_integrity.csv")
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _channel_ctx(
-    values: Sequence[float | None], *, rate_hz: float = 100.0
-) -> ChannelContext:
-    """Wrap a plain list of values in a ChannelContext, on a regular clock."""
-
-    timestamps = pl.Series("time_s", [index / rate_hz for index in range(len(values))])
-    payload = FramePayload(frame=pl.DataFrame({"value": values}))
-    stream = Stream(
-        taxonomy_type="unmapped.test",
-        kind=Kind.SERIES,
-        timestamps=timestamps,
-        payload=payload,
-        source_path=_SOURCE_PATH,
-        clock=Clock.CAPTURE,
-        channels=[Channel(name="value")],
-    )
-    stream_ctx = StreamContext(stream=stream, is_regular=True)
-    return ChannelContext(
-        channel=stream.channels[0], values=payload.frame["value"], stream=stream_ctx
-    )
-
-
 def _taxel_stream_ctx(columns: dict[str, list[float]]) -> StreamContext:
     """Wrap a dict of cell columns in a StreamContext, on a regular 50 Hz clock."""
 
@@ -73,6 +64,7 @@ def _taxel_stream_ctx(columns: dict[str, list[float]]) -> StreamContext:
         timestamps=timestamps,
         payload=FramePayload(frame=pl.DataFrame(columns)),
         source_path=_SOURCE_PATH,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         clock=Clock.CAPTURE,
         channels=[Channel(name=name) for name in columns],
     )
@@ -254,3 +246,92 @@ def test_snr_is_not_applicable_when_sampled_too_slowly_to_tell_noise_from_motion
     assert (
         "too slowly to separate sensor noise from motion" in (result.evidence["reason"])
     )
+
+
+@pytest.mark.parametrize("invalid", [None, float("nan"), float("inf")])
+def test_flatline_intervals_break_at_invalid_rows(invalid):
+    ctx = _channel_ctx([1.0, 1.0, invalid, 1.0, 1.0, 2.0, 3.0])
+    result = flatline_pct(ctx)
+    assert result.support.kind.value == "intervals"
+    assert [(i.start, i.end_exclusive) for i in result.support.intervals] == [
+        (0, 2),
+        (3, 5),
+    ]
+    assert result.evidence["n_pairs"] == 4
+    assert result.value == 50
+
+
+def test_flatline_addresses_follow_source_map_and_split_gaps():
+    ctx = _channel_ctx([1.0, 1.0, 1.0, 2.0, 3.0])
+    ctx.stream.stream.source_order = SourceOrder(original_index=[0, 2, 4, 6, 8])
+    result = flatline_pct(ctx)
+    assert [(i.start, i.end_exclusive) for i in result.support.intervals] == [
+        (0, 1),
+        (2, 3),
+        (4, 5),
+    ]
+
+
+def test_transformed_flatline_without_row_map_abstains():
+    ctx = _channel_ctx([1.0, 1.0, 1.0, 2.0, 3.0])
+    ctx.stream.stream.source_order = SourceOrder(preserved=False, transform="sorted")
+    assert flatline_pct(ctx).value is None
+
+
+def test_flatline_duration_requires_known_timestamp_units():
+    import polars as pl
+
+    from kalanos.analysis.models.domain import ClockInfo
+
+    ctx = _channel_ctx([1.0, 1.0, 1.0, 2.0, 3.0])
+    ctx.stream.stream.native_timestamps = pl.Series([0, 1, 2, 3, 4])
+    ctx.stream.stream.clock_info = ClockInfo(native_unit="unknown")
+    result = flatline_pct(ctx)
+    assert result.evidence["longest_run"] == 3
+    assert result.evidence["longest_run_s"] is None
+    assert result.support.intervals[0].start == 0
+    assert result.support.intervals[0].end_exclusive == 3
+
+
+def test_spike_marks_sample_and_wider_filter_support():
+    values = [math.sin(i * 0.13) for i in range(101)]
+    values[50] = 100
+    result = spike_pct(_channel_ctx(values))
+    match = next(i for i in result.support.intervals if i.start == 50)
+    assert match.end_exclusive == 51
+    assert (match.support_start, match.support_end_exclusive) == (25, 76)
+
+
+def test_empty_or_half_specified_intervals_are_rejected():
+    with pytest.raises(ValidationError):
+        SampleInterval(start=2, end_exclusive=2)
+    with pytest.raises(ValidationError):
+        SampleInterval(start=2, end_exclusive=3, support_start=0)
+
+
+def test_whole_episode_support_carries_no_intervals_and_intervals_need_an_index_space():
+    assert TemporalSupport().kind == SupportKind.WHOLE_EPISODE
+    with pytest.raises(ValueError):
+        TemporalSupport(
+            kind=SupportKind.WHOLE_EPISODE,
+            intervals=[SampleInterval(start=0, end_exclusive=1)],
+        )
+    with pytest.raises(ValueError):
+        TemporalSupport(
+            kind=SupportKind.INTERVALS,
+            intervals=[SampleInterval(start=0, end_exclusive=1)],
+        )
+    ok = TemporalSupport(
+        kind=SupportKind.INTERVALS,
+        index_space="joint_pos",
+        intervals=[
+            SampleInterval(
+                start=50, end_exclusive=60, support_start=45, support_end_exclusive=65
+            )
+        ],
+    )
+    assert ok.intervals[0].support_start == 45
+    with pytest.raises(ValueError):
+        SampleInterval(start=5, end_exclusive=3)
+    with pytest.raises(ValueError):
+        SampleInterval(start=5, end_exclusive=8, support_start=6)

@@ -1,0 +1,269 @@
+{
+  "schema_version": "6.5.0",
+  "root": {
+    "path": "tests/fixtures/lerobot_v3_tiny",
+    "protocol": "",
+    "storage_options": {}
+  },
+  "score": {
+    "level": "dataset",
+    "score": 100.0,
+    "grade": "A",
+    "train_ready": true,
+    "n_contributing": 2,
+    "families": {
+      "integrity": 100.0
+    }
+  },
+  "episodes": [
+    {
+      "id": "lerobot_v3_tiny::episode_000000",
+      "adapter": "lerobot_v3",
+      "adapter_confidence": 0.95,
+      "source_paths": [
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/data/chunk-000/file-000.parquet",
+          "protocol": "",
+          "storage_options": {}
+        },
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/videos/observation.images.up/chunk-000/file-000.mp4",
+          "protocol": "",
+          "storage_options": {}
+        }
+      ],
+      "duration_s": 0.23333333432674408,
+      "sample_count": 8,
+      "score": {
+        "level": "episode",
+        "score": 100.0,
+        "grade": "A",
+        "train_ready": true,
+        "n_contributing": 2,
+        "families": {
+          "integrity": 100.0
+        }
+      },
+      "metrics": {
+        "task_instruction_missing": {
+          "value": 0.0,
+          "unit": "flag",
+          "status": "report_only",
+          "evidence": {
+            "n_tasks": 1,
+            "n_blank": 0,
+            "ungraded_reason": "no threshold band for 'episode' or 'default'"
+          }
+        },
+        "energy_proxy": {
+          "value": null,
+          "unit": null,
+          "status": "not_applicable",
+          "evidence": {
+            "reason": "episode carries no proprio.joint_torque stream"
+          }
+        }
+      },
+      "tasks": [
+        "pick up the cube"
+      ]
+    },
+    {
+      "id": "lerobot_v3_tiny::episode_000001",
+      "adapter": "lerobot_v3",
+      "adapter_confidence": 0.95,
+      "source_paths": [
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/data/chunk-000/file-000.parquet",
+          "protocol": "",
+          "storage_options": {}
+        },
+        {
+          "path": "tests/fixtures/lerobot_v3_tiny/videos/observation.images.up/chunk-000/file-000.mp4",
+          "protocol": "",
+          "storage_options": {}
+        }
+      ],
+      "duration_s": 0.1666666716337204,
+      "sample_count": 6,
+      "score": {
+        "level": "episode",
+        "score": 100.0,
+        "grade": "A",
+        "train_ready": true,
+        "n_contributing": 2,
+        "families": {
+          "integrity": 100.0
+        }
+      },
+      "metrics": {
+        "task_instruction_missing": {
+          "value": 0.0,
+          "unit": "flag",
+          "status": "report_only",
+          "evidence": {
+            "n_tasks": 1,
+            "n_blank": 0,
+            "ungraded_reason": "no threshold band for 'episode' or 'default'"
+          }
+        },
+        "energy_proxy": {
+          "value": null,
+          "unit": null,
+          "status": "not_applicable",
+          "evidence": {
+            "reason": "episode carries no proprio.joint_torque stream"
+          }
+        }
+      },
+      "tasks": [
+        "pick up the cube"
+      ]
+    }
+  ],
+  "findings": [],
+  "skipped": [],
+  "unresolved": [],
+  "policy_version": 1,
+  "duration_s": 0.12268826900000818,
+  "source": {
+    "uri": "tests/fixtures/lerobot_v3_tiny",
+    "protocol": "file",
+    "repo_id": null,
+    "revision": null,
+    "size_bytes": 12454,
+    "file_count": 4
+  },
+  "datasets": [
+    {
+      "adapter": "lerobot_v3",
+      "path": {
+        "path": "tests/fixtures/lerobot_v3_tiny",
+        "protocol": "",
+        "storage_options": {}
+      },
+      "episode_count": 2,
+      "nominal_rate_hz": 30.0,
+      "robot_type": "so100_follower"
+    }
+  ],
+  "mapping_overrides": [],
+  "gate": {
+    "n_episodes": 2,
+    "failing_episodes": [],
+    "failing_share": 0.0,
+    "task_traits": [],
+    "dataset_traits": [],
+    "uncapped_grade": "A",
+    "cap": null,
+    "pruned_score": null,
+    "pruned_grade": null,
+    "train_ready_after_pruning": null,
+    "coverage": {
+      "families_graded": [
+        "integrity"
+      ],
+      "graded_checks_per_episode": 22.0,
+      "not_observable": [
+        {
+          "metric": "action_chatter",
+          "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'",
+          "share": 0.6666666666666666
+        },
+        {
+          "metric": "dead_taxel_pct",
+          "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "drop_rate",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "dt_jitter_ms",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "effective_hz",
+          "reason": "the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable",
+          "share": 1.0
+        },
+        {
+          "metric": "energy_proxy",
+          "reason": "episode carries no proprio.joint_torque stream",
+          "share": 1.0
+        },
+        {
+          "metric": "hf_vibration_ratio",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "hysteresis",
+          "reason": "needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "limit_proximity_pct",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "max_abs_jerk",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "max_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "mean_jerk_norm",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "mean_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "p99_torque",
+          "reason": "needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "snr_db",
+          "reason": "sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s",
+          "share": 1.0
+        },
+        {
+          "metric": "spike_pct",
+          "reason": "fewer than 51 samples",
+          "share": 1.0
+        },
+        {
+          "metric": "still_drift",
+          "reason": "needs one of ['proprio.joint_position'], got 'unmapped.observation.state'",
+          "share": 1.0
+        },
+        {
+          "metric": "vel_saturation_pct",
+          "reason": "needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'",
+          "share": 0.5
+        }
+      ]
+    },
+    "summary": "Readiness 100/100: no blocking episodes. Graded on integrity, 22 checks per episode. Not observable \u2014 action_chatter: needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'; dead_taxel_pct: needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'; drop_rate: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; dt_jitter_ms: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; effective_hz: the source's timestamps are frame numbers divided by the declared rate, so capture timing is not observable; energy_proxy: episode carries no proprio.joint_torque stream; hf_vibration_ratio: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; hysteresis: needs one of ['extero.taxel_pressure'], got 'unmapped.observation.state'; limit_proximity_pct: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; max_abs_jerk: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; max_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; mean_jerk_norm: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; mean_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; p99_torque: needs one of ['proprio.joint_torque'], got 'unmapped.observation.state'; snr_db: sampled at 30 Hz, too slowly to separate sensor noise from motion: the 5-sample smoothing window spans 0.17 s, more than 0.1 s; spike_pct: fewer than 51 samples; still_drift: needs one of ['proprio.joint_position'], got 'unmapped.observation.state'; vel_saturation_pct: needs one of ['proprio.joint_velocity'], got 'unmapped.observation.state'."
+  },
+  "readiness": {
+    "score": 100.0,
+    "evaluated_episodes": 2,
+    "passing_episodes": 2,
+    "blocking_episodes": 0,
+    "passing_quality": 100.0
+  }
+}

@@ -10,21 +10,26 @@ everything under the subpackages may move.
 
 # Internal
 from kalanos.analysis.models.adapters import AdapterTie, DatasetInfo
-from kalanos.analysis.models.dictionary import Dictionary
+from kalanos.analysis.models.binding import Bundle
+from kalanos.analysis.models.dictionary import Category, CategoryGroup, Dictionary
 from kalanos.analysis.models.discovery import (
     SkippedSource,
     SkipReason,
     SourceInfo,
     SourceLimits,
 )
+from kalanos.analysis.models.domain import MappingSource
 from kalanos.analysis.models.errors import (
     KalanosError,
+    MappingOverrideError,
     NothingToGrade,
     SourceTooLarge,
     SourceUnavailable,
 )
+from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.metrics import Level, MetricResult
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     GradedChannel,
     GradedEpisode,
@@ -33,15 +38,23 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult, Severity
-from kalanos.api import grade
+from kalanos.api import compare, grade, load_report
 from kalanos.assets.dictionary import load_dictionary
 from kalanos.assets.policy import load_policy
 
 
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+
 __all__ = [
     "AdapterTie",
+    "Bundle",
+    "Category",
+    "CategoryGroup",
     "DatasetInfo",
     "Dictionary",
+    "ExecutionTier",
     "Finding",
     "Grade",
     "GradedChannel",
@@ -49,8 +62,12 @@ __all__ = [
     "GradedStream",
     "KalanosError",
     "Level",
+    "MappingOverride",
+    "MappingOverrideError",
+    "MappingSource",
     "MetricResult",
     "NothingToGrade",
+    "OverrideOrigin",
     "Policy",
     "Report",
     "ScoreResult",
@@ -62,7 +79,9 @@ __all__ = [
     "SourceTooLarge",
     "SourceUnavailable",
     "UnresolvedSource",
+    "compare",
     "grade",
     "load_dictionary",
     "load_policy",
+    "load_report",
 ]

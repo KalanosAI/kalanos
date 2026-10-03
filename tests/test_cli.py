@@ -15,15 +15,26 @@ import csv
 from pathlib import Path
 
 # External
+import pytest
 import yaml
 from typer.testing import CliRunner
 
+# Since schema 7, `grade` exits 1 when the decision gate (default
+# `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
+# so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
+from kalanos.analysis.metrics import vision
 from kalanos.analysis.models.report import Report
 from kalanos.cli import app
 
 # Local
-from helpers import CSV_FIXTURE, FIXTURES_DIR, ScoreAttributeCollector, score_attr
+from helpers import (
+    CSV_FIXTURE,
+    FIXTURES_DIR,
+    LEROBOT_FIXTURE,
+    ScoreAttributeCollector,
+    score_attr,
+)
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -101,7 +112,7 @@ def test_grade_a_file_prints_a_card_and_exits_zero():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
 
 
@@ -110,7 +121,7 @@ def test_grade_a_folder_prints_a_card_and_exits_zero():
 
     result = runner.invoke(app, ["grade", str(FIXTURES_DIR)])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" in result.stdout
     # README.md and the fixtures with no CSV pathology are real, explained
     # refusals — the card names each one rather than dropping it silently.
@@ -137,10 +148,40 @@ def test_json_flag_prints_the_model_with_no_card():
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert "OVERALL" not in result.stdout
+    assert len(result.stdout.splitlines()) == 1
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], (10, False)),
+        (["--vision-samples", "3"], (3, False)),
+        (["--full-frame-scan"], (10, True)),
+    ],
+    ids=["defaults", "vision_samples", "full_frame_scan"],
+)
+def test_frame_flags_reach_every_camera_stream(monkeypatch, flags, expected):
+    """Verify --vision-samples and --full-frame-scan reach the vision metrics' read."""
+
+    seen = []
+    layout = vision._layout
+
+    def recording(ctx, full_frame_scan):
+        seen.append((ctx.vision_samples, ctx.full_frame_scan))
+        return layout(ctx, full_frame_scan)
+
+    monkeypatch.setattr(vision, "_layout", recording)
+    vision.clear_cache()
+
+    result = runner.invoke(app, ["grade", str(LEROBOT_FIXTURE), "--json", *flags])
+
+    assert result.exit_code == 0
+    assert seen
+    assert set(seen) == {expected}
 
 
 def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
@@ -152,9 +193,11 @@ def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
+    assert "\n" not in destination.read_text()
     report = Report.model_validate_json(destination.read_text())
     assert report.episodes
+    assert runner.invoke(app, ["inspect", str(destination)]).exit_code == 0
 
 
 def test_report_yaml_writes_a_file_that_parses_back_into_the_model(tmp_path):
@@ -166,7 +209,7 @@ def test_report_yaml_writes_a_file_that_parses_back_into_the_model(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate(yaml.safe_load(destination.read_text()))
     assert report.episodes
 
@@ -180,7 +223,7 @@ def test_report_html_writes_a_rendered_page(tmp_path):
         app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     html = destination.read_text()
     assert str(CSV_FIXTURE) in html
 
@@ -202,7 +245,7 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
         ["grade", str(FIXTURES_DIR), "--json", "--report", str(html_path)],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     collector = ScoreAttributeCollector()
     collector.feed(html_path.read_text())
@@ -279,7 +322,7 @@ def test_a_source_loading_refuses_is_unresolved_rather_than_aborting_the_run(
 
     result = runner.invoke(app, ["grade", str(tmp_path), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     analysed = [
         path.name for episode in report.episodes for path in episode.source_paths
@@ -309,7 +352,7 @@ def test_a_source_that_fails_to_parse_is_unresolved_rather_than_aborting_the_run
 
     result = runner.invoke(app, ["grade", str(tmp_path), "--json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     report = Report.model_validate_json(result.stdout)
     analysed = [
         path.name for episode in report.episodes for path in episode.source_paths
@@ -326,7 +369,7 @@ def test_kalanos_reports_dir_redirects_a_relative_report_path(monkeypatch, tmp_p
 
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--report", "report.json"])
 
-    assert result.exit_code == 0
+    assert result.exit_code in (0, 1)
     assert (tmp_path / "report.json").exists()
 
 
@@ -348,9 +391,9 @@ def test_a_second_subcommand_can_be_added_without_touching_grade():
         ping_result = runner.invoke(app, ["ping"])
         grade_result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
-        assert ping_result.exit_code == 0
+        assert ping_result.exit_code in (0, 1)
         assert ping_result.stdout.strip() == "pong"
-        assert grade_result.exit_code == 0
+        assert grade_result.exit_code in (0, 1)
         assert "OVERALL" in grade_result.stdout
     finally:
         app.registered_commands = [
@@ -430,3 +473,82 @@ def test_new_adapter_twice_exits_two_without_overwriting(tmp_path):
 
     assert result.exit_code == 2
     assert written.read_text() == "# mine\n"
+
+
+def test_grade_map_types_a_field_and_the_json_carries_the_override():
+    result = runner.invoke(
+        app,
+        [
+            "grade",
+            str(FIXTURES_DIR / "lerobot_v3_tiny"),
+            "--map",
+            "observation.state=proprio.joint_position",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code in (0, 1), result.output
+    report = Report.model_validate_json(result.stdout)
+    [override] = report.mapping_overrides
+    assert override.feature == "observation.state"
+    assert override.taxonomy_type == "proprio.joint_position"
+
+
+@pytest.mark.parametrize("value", ["nonsense", "missing.field=proprio.joint_position"])
+def test_grade_map_that_cannot_apply_exits_two(value):
+    result = runner.invoke(
+        app, ["grade", str(FIXTURES_DIR / "lerobot_v3_tiny"), "--map", value]
+    )
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith("kalanos: ")
+    assert result.stdout == ""
+
+
+def test_profiles_commands_validate_structure_and_resolve_policy(tmp_path):
+    runner = CliRunner()
+    assert "numeric-core-v1" in runner.invoke(app, ["profiles", "list"]).stdout
+    shown = runner.invoke(app, ["profiles", "show", "vision-imitation-v1"])
+    assert shown.exit_code == 0 and "video_quality" in shown.stdout
+    assert runner.invoke(app, ["profiles", "show", "no-such-profile"]).exit_code == 2
+    bundle = tmp_path / "profile.yaml"
+    bundle.write_text("requirements:\n  id: numeric-core-v1\n")
+    assert runner.invoke(app, ["profiles", "validate", str(bundle)]).exit_code == 0
+    bundle.write_text("policy:\n  path: missing.yaml\n")
+    assert runner.invoke(app, ["profiles", "validate", str(bundle)]).exit_code == 2
+
+
+def test_new_cli_commands_are_registered_in_module_entrypoint():
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    result = subprocess.run(
+        [sys.executable, "-m", "kalanos.cli", "profiles", "list"],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0 and "vision-imitation-v1" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["numeric-core-v1", "vision-imitation-v1"])
+def test_grade_profile_accepts_a_built_in_profile_name(name):
+    """A name that `profiles list` prints works as `--profile` without a file."""
+
+    result = runner.invoke(
+        app, ["grade", str(CSV_FIXTURE), "--json", "--profile", name]
+    )
+
+    assert "no bundle" not in result.stderr
+    report = Report.model_validate_json(result.stdout)
+    assert report.scope is not None
+    assert report.scope.requirements_id == name
+
+
+def test_grade_profile_names_the_built_in_profiles_when_nothing_matches():
+    result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--profile", "no-such"])
+
+    assert result.exit_code == 2
+    assert "numeric-core-v1" in result.stderr

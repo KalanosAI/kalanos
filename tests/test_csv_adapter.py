@@ -36,10 +36,15 @@ _SPECIALISED_ADAPTER_FLOOR = 0.6
 
 _BARE_ENTRY = {
     "label": "Anything",
-    "category": "proprioceptive_state",
     "modality": "numeric",
     "kind": "series",
     "shape": "scalar",
+}
+
+# A categories table covering every family the dictionaries below use.
+_CATEGORIES = {
+    "proprio": {"slug": "proprioceptive_state", "group": "sensor"},
+    "derived": {"slug": "derived_estimated_state", "group": "derived"},
 }
 
 
@@ -181,12 +186,8 @@ def test_each_instances_stream_holds_only_its_own_rows_in_increasing_time_order(
         assert timestamps == sorted(timestamps)
 
 
-def test_an_out_of_order_source_is_sorted_per_instance(tmp_path):
-    """Verify rows out of time order in the source still come out sorted.
-
-    A fully descending series never clears inference's monotonicity gate,
-    so only the last two rows are swapped, which still forces the sort.
-    """
+def test_an_out_of_order_source_preserves_order_per_instance(tmp_path):
+    """Keep original timestamps and values paired so backwards steps remain visible."""
 
     times = list(range(0, 100, 10))
     times[-1], times[-2] = times[-2], times[-1]
@@ -197,7 +198,8 @@ def test_an_out_of_order_source_is_sorted_per_instance(tmp_path):
 
     [stream] = episode.streams
     timestamps = stream.timestamps.to_list()
-    assert timestamps == sorted(timestamps)
+    assert timestamps == [t / 1000 for t in times]
+    assert stream.payload.frame["x"].to_list() == times
 
 
 def test_t_ms_becomes_canonical_seconds(tmp_path):
@@ -246,7 +248,7 @@ def test_an_unknown_time_unit_leaves_the_time_column_unconverted(tmp_path):
     episode = next(CsvAdapter().episodes(path))
 
     [stream] = episode.streams
-    assert stream.timestamps.to_list() == [3, 5, 9]
+    assert stream.timestamps.to_list() == [5, 3, 9]
 
 
 def test_a_preexisting_unrelated_time_s_column_raises_adapter_refusal(tmp_path):
@@ -404,7 +406,8 @@ def test_an_ambiguous_stem_stays_unmapped_rather_than_picking_a_claimant(
 
     dictionary = Dictionary.model_validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "categories": _CATEGORIES,
             "entries": {
                 "proprio.joint_position": {**_BARE_ENTRY, "aliases": ["pos"]},
                 "derived.tcp_position": {**_BARE_ENTRY, "aliases": ["pos"]},

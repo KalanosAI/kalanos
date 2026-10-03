@@ -20,8 +20,20 @@ from typing import Any, Protocol, runtime_checkable
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kalanos.analysis.models.coverage import Availability
+from kalanos.analysis.models.diagnostics import VisionSpec
+
 # Internal
 from kalanos.analysis.models.domain import Channel, Episode, Payload, Stream
+from kalanos.analysis.models.support import TemporalSupport
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# Enough frames for a stable median of a per-frame property, at ten seeks a stream.
+DEFAULT_VISION_SAMPLES = 10
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -88,6 +100,8 @@ class MetricResult(BaseModel):
     unit: str | None
     status: MetricStatus
     evidence: dict[str, Any] = Field(default_factory=dict)
+    availability: Availability | None = None
+    support: TemporalSupport = Field(default_factory=TemporalSupport)
 
 
 class Requires(BaseModel):
@@ -113,6 +127,7 @@ class Requires(BaseModel):
     regular_sampling: bool = False
     min_samples: int = 0
     taxonomy: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
 
 
 @runtime_checkable
@@ -157,12 +172,31 @@ class StreamContext(BaseModel):
     is_regular : bool
         Whether inference classified this source's sampling as regular —
         read from that verdict, never recomputed here.
+    vision_samples : int
+        How many frames blur and exposure sample, and windows frozen frames read.
+    episode_streams : list of Stream or None
+        Every stream of the episode this stream belongs to, itself included.
+        `None` when the stream is graded on its own.
+    full_frame_scan : bool
+        Whether a frame metric should read every frame rather than a sample.
+    reads_payloads : bool
+        Whether the execution tier lets a metric read the payload at all;
+        `False` at the metadata tier, which promises not to.
+    vision : VisionSpec
+        Decode caps, previews and exposure levels.
+        The sample count and the full scan are read from `vision_samples`
+        and `full_frame_scan`, which callers fill from the same resolved spec.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     stream: Stream
     is_regular: bool
+    vision_samples: int = Field(default=DEFAULT_VISION_SAMPLES, ge=1)
+    episode_streams: list[Stream] | None = None
+    full_frame_scan: bool = False
+    reads_payloads: bool = True
+    vision: VisionSpec = Field(default_factory=VisionSpec)
 
     @property
     def timestamps(self) -> pl.Series:
@@ -266,6 +300,8 @@ class ChannelContext(BaseModel):
             `self.stream.taxonomy_type`.
         """
 
+        if self.channel.binding is not None:
+            return self.channel.binding.taxonomy_type
         return self.stream.taxonomy_type
 
     @model_validator(mode="after")

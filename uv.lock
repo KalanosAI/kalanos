@@ -340,7 +340,7 @@ wheels = [
 
 [[package]]
 name = "kalanos"
-version = "0.6.5"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
@@ -376,6 +376,11 @@ mcap = [
     { name = "mcap" },
     { name = "mcap-ros2-support" },
 ]
+numeric = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
 video = [
     { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -409,9 +414,11 @@ requires-dist = [
     { name = "kalanos", extras = ["hdf5"], marker = "extra == 'all'" },
     { name = "kalanos", extras = ["hf"], marker = "extra == 'all'" },
     { name = "kalanos", extras = ["mcap"], marker = "extra == 'all'" },
+    { name = "kalanos", extras = ["numeric"], marker = "extra == 'all'" },
     { name = "kalanos", extras = ["video"], marker = "extra == 'all'" },
     { name = "mcap", marker = "extra == 'mcap'", specifier = ">=1.4" },
     { name = "mcap-ros2-support", marker = "extra == 'mcap'", specifier = ">=0.5" },
+    { name = "numpy", marker = "extra == 'numeric'", specifier = ">=2.2.6" },
     { name = "numpy", marker = "extra == 'video'" },
     { name = "platformdirs", specifier = ">=4.11.5" },
     { name = "polars" },
@@ -422,7 +429,7 @@ requires-dist = [
     { name = "typer" },
     { name = "universal-pathlib", specifier = ">=0.3.10" },
 ]
-provides-extras = ["all", "video", "hdf5", "mcap", "hf"]
+provides-extras = ["all", "video", "hdf5", "mcap", "hf", "numeric"]
 
 [package.metadata.requires-dev]
 dev = [

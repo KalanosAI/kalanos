@@ -31,10 +31,13 @@ from kalanos.analysis.models.domain import (
     Attribution,
     Channel,
     Clock,
+    ClockInfo,
     Episode,
     FramePayload,
     Kind,
+    SourceOrder,
     Stream,
+    TimestampDtype,
 )
 from kalanos.analysis.models.schema import ColumnRole, RefusalCode
 from kalanos.assets.dictionary import load_default_dictionary
@@ -545,16 +548,24 @@ class TabularAdapter(ABC):
         # timing metrics need, and Episode/Stream have no field to carry it yet.
         # It is resolved here and discarded.
 
-        # Step 4: normalise time to canonical seconds, then sort the whole
-        # frame once so every instance's rows come out time-ordered.
+        # Step 4: normalise units while preserving native ticks and row order.
         # A time_s collision is a fact about this input file, not a bug.
+        native_column = "__kalanos_native_time"
+        while native_column in frame.columns:
+            native_column += "_"
+        row_column = "__kalanos_source_row"
+        while row_column in frame.columns:
+            row_column += "_"
+        native_dtype = str(frame[time_spec.column].dtype)
+        frame = frame.with_columns(
+            pl.col(time_spec.column).alias(native_column)
+        ).with_row_index(row_column)
         try:
-            frame, time_column, _, _ = _normalise_time(
+            frame, time_column, _, factor = _normalise_time(
                 frame, time_spec.column, time_spec.unit
             )
         except ValueError as exc:
             raise AdapterRefusal(path, reason=str(exc), schema_so_far=schema) from exc
-        frame = frame.sort(time_column, nulls_last=True, maintain_order=True)
 
         # Step 5: split into instances, logging when a null key produced an
         # unattributed group.
@@ -572,7 +583,7 @@ class TabularAdapter(ABC):
         # Step 6: resolve every column's stem, type and channel order once —
         # every group shares the same columns, only the rows differ.
         dictionary = self._resolve_dictionary()
-        excluded = {time_column}
+        excluded = {time_column, native_column, row_column}
         if key_column is not None:
             excluded.add(key_column)
 
@@ -613,6 +624,19 @@ class TabularAdapter(ABC):
                         source_path=path,
                         source_field=stem,
                         clock=Clock.UNKNOWN,
+                        clock_info=ClockInfo(
+                            source_field=time_spec.column,
+                            native_unit=time_spec.unit,
+                            native_dtype=native_dtype,
+                            transforms=[]
+                            if factor is None
+                            else [f"inferred {time_spec.unit}->s (factor {factor})"],
+                        ),
+                        native_timestamps=part[native_column],
+                        source_order=SourceOrder(
+                            original_index=part[row_column].to_list()
+                        ),
+                        timestamp_dtype=TimestampDtype.FLOAT64,
                         is_regular=time_spec.regularity.is_regular,
                         channels=[
                             Channel(name=column, axis=axis_by_column[column])

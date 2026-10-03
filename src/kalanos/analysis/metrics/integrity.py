@@ -12,10 +12,12 @@ so they attach at Level.STREAM and gate on `extero.taxel_pressure` instead.
 
 # Built-in
 import math
-from typing import cast
 
 # External
 import polars as pl
+
+from kalanos.analysis.clocks import samples as clock_samples
+from kalanos.analysis.localization import finite, source_values, support_for
 
 # Internal
 from kalanos.analysis.metrics.registry import metric
@@ -30,6 +32,7 @@ from kalanos.analysis.models.metrics import (
     Requires,
     StreamContext,
 )
+from kalanos.analysis.noise import noise_assessment, snr_exclusion
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -87,27 +90,6 @@ _SWITCH_REASON = (
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _sampling_rate(ctx: ChannelContext) -> float | None:
-    """The stream's sampling rate, from the median positive gap between timestamps.
-
-    Parameters
-    ----------
-    ctx : ChannelContext
-        The channel whose stream's timestamps are read.
-
-    Returns
-    -------
-    float or None
-        Samples per second, or `None` when no gap is positive.
-    """
-
-    stamps = [t for t in ctx.stream.timestamps.to_list() if t is not None]
-    gaps = sorted(b - a for a, b in zip(stamps, stamps[1:], strict=False) if b > a)
-    if not gaps:
-        return None
-    return 1.0 / gaps[len(gaps) // 2]
-
-
 def _is_switch(values: pl.Series) -> bool:
     """Check whether a numeric channel only ever takes exactly two values.
 
@@ -141,13 +123,13 @@ def missing_pct(ctx: ChannelContext) -> MetricResult:
     Returns
     -------
     MetricResult
-        `not_applicable` when the channel's dtype is not numeric;
+        `not_applicable` when the channel's dtype is neither numeric nor Boolean;
         `report_only` otherwise.
     """
 
-    if not ctx.values.dtype.is_numeric():
+    if not ctx.values.dtype.is_numeric() and ctx.values.dtype != pl.Boolean:
         return not_applicable(
-            "channel is not numeric; there is no missing value to count"
+            "channel is neither numeric nor Boolean; there is no missing value to count"
         )
 
     n_missing = ctx.values.null_count()
@@ -165,7 +147,7 @@ def missing_pct(ctx: ChannelContext) -> MetricResult:
 
 @metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_A_PAIR)
 def flatline_pct(ctx: ChannelContext) -> MetricResult:
-    """Share of consecutive non-null samples that did not change.
+    """Share of adjacent finite source-order samples that did not change.
 
     Parameters
     ----------
@@ -178,53 +160,72 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
         `not_applicable` when:
         - the dtype is not numeric
         - the channel takes exactly two values (a switch or flag)
-        - fewer than two non-null values survive
+        - no adjacent finite pair survives
         `report_only` otherwise, with the longest unchanged run in `evidence`.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is nothing to flatline")
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="flatline"))
+        return not_applicable(_SWITCH_REASON.format(what="flatline"), inapplicable=True)
 
-    values = ctx.values.to_list()
-    timestamps = ctx.stream.timestamps.to_list()
-    valid_indices = [index for index, value in enumerate(values) if value is not None]
-    if len(valid_indices) < 2:
-        return not_applicable("fewer than two non-null values survive")
-
-    n_pairs = 0
-    n_unchanged = 0
-    run_length = 1
-    run_start = valid_indices[0]
-    longest_run = 1
-    longest_run_start = valid_indices[0]
-    longest_run_end = valid_indices[0]
-
-    for previous_index, index in zip(valid_indices, valid_indices[1:], strict=False):
-        n_pairs += 1
-        if values[index] == values[previous_index]:
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    series, indices, timestamps = ordered
+    values = series.to_list()
+    n_pairs = n_unchanged = 0
+    ranges = []
+    run_start = None
+    for i in range(1, len(values)):
+        valid = finite(values[i - 1]) and finite(values[i])
+        if valid:
+            n_pairs += 1
+        if valid and values[i] == values[i - 1]:
             n_unchanged += 1
-            run_length += 1
-        else:
-            run_length = 1
-            run_start = index
-        if run_length > longest_run:
-            longest_run = run_length
-            longest_run_start = run_start
-            longest_run_end = index
-
+            if run_start is None:
+                run_start = i - 1
+        elif run_start is not None:
+            ranges.append((run_start, i))
+            run_start = None
+    if run_start is not None:
+        ranges.append((run_start, len(values)))
+    if not n_pairs:
+        return not_applicable("fewer than two adjacent finite values survive")
+    longest = max(ranges, key=lambda r: r[1] - r[0], default=(0, 1))
+    lo, hi = longest
+    ts = timestamps[lo:hi]
+    stream = ctx.stream.stream
+    info = stream.clock_info
+    known_seconds = stream.native_timestamps is None or (
+        info is not None
+        and (
+            info.tick_period_s is not None
+            or info.native_unit in ("s", "ms", "us", "ns")
+        )
+    )
+    duration = (
+        ts[-1] - ts[0]
+        if known_seconds
+        and ts
+        and all(finite(t) for t in ts)
+        and all(b > a for a, b in zip(ts, ts[1:], strict=False))
+        else None
+    )
     return MetricResult(
         value=100.0 * n_unchanged / n_pairs,
         unit="%",
         status=MetricStatus.REPORT_ONLY,
+        support=support_for(indices, ranges),
         evidence={
-            "longest_run": longest_run,
-            "longest_run_s": timestamps[longest_run_end]
-            - timestamps[longest_run_start],
-            # Never changed at all in this episode: an unused joint or a
-            # disconnected sensor, which the data alone cannot tell apart.
+            "longest_run": hi - lo,
+            "longest_run_s": duration,
             "never_changed": n_unchanged == n_pairs,
+            "n_pairs": n_pairs,
+            "n_unchanged": n_unchanged,
+            "n_samples": ctx.n_samples,
+            "longest_run_start": indices[lo],
+            "longest_run_end_exclusive": indices[hi - 1] + 1,
         },
     )
 
@@ -251,9 +252,15 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
             "channel is not numeric; there is no spread to measure a spike against"
         )
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="a spike check"))
+        return not_applicable(
+            _SWITCH_REASON.format(what="a spike check"), inapplicable=True
+        )
 
-    values = ctx.values.cast(pl.Float64)
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    ordered_values, indices, _ = ordered
+    values = ordered_values.cast(pl.Float64)
     window_sum = values.rolling_sum(window_size=_SPIKE_WINDOW, center=True)
     window_sq_sum = (values**2).rolling_sum(window_size=_SPIKE_WINDOW, center=True)
 
@@ -274,13 +281,18 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
 
     deviation = (values - other_mean).abs()
     is_spike = scored & (deviation > 6 * other_std)
+    positions = [i for i, flag in enumerate(is_spike.to_list()) if flag]
 
     return MetricResult(
-        value=100.0 * int(is_spike.sum()) / n_scored,
+        value=100.0 * len(positions) / n_scored,
+        support=support_for(
+            indices, [(i, i + 1) for i in positions], window=_SPIKE_WINDOW // 2
+        ),
         unit="%",
         status=MetricStatus.REPORT_ONLY,
         evidence={
             "n_scored": n_scored,
+            "sample_indices": [indices[i] for i in positions],
             "window_samples": _SPIKE_WINDOW,
             "window_is_undecided": True,
         },
@@ -360,34 +372,35 @@ def drift(ctx: ChannelContext) -> MetricResult:
     requires=_REQUIRES_REGULAR_AND_SMOOTHABLE,
 )
 def snr_db(ctx: ChannelContext) -> MetricResult:
-    """Ratio of a smoothed component's variance to its residual's, in decibels.
-
-    Parameters
-    ----------
-    ctx : ChannelContext
-        The channel to measure.
+    """Measure a five-sample smooth/residual ratio, with explicit physical context.
 
     Returns
     -------
     MetricResult
-        `not_applicable` when:
-        - the dtype is not numeric
-        - the channel takes exactly two values (a switch or flag)
-        - the stream is sampled too slowly for the smoothing window to stay
-          within `_SNR_MAX_SPAN_SECONDS` (below about 45 Hz)
-        - the smoothed signal variance is zero
-        - the residual variance is zero
-        `report_only` otherwise.
+        The diagnostic ratio and component standard deviations. A validated
+        matching reference can establish residual level relative to that
+        reference, never sensor health or automatic blocking authority.
     """
-
     if not ctx.values.dtype.is_numeric():
-        return not_applicable("channel is not numeric; there is no signal to measure")
+        return not_applicable("channel is not numeric", inapplicable=True)
+    exclusion = snr_exclusion(ctx)
+    if exclusion:
+        return not_applicable(exclusion, inapplicable=True)
     if _is_switch(ctx.values):
-        return not_applicable(_SWITCH_REASON.format(what="a signal-to-noise ratio"))
-
-    rate_hz = _sampling_rate(ctx)
-    if rate_hz is None:
-        return not_applicable("no positive gap between timestamps to take a rate from")
+        return not_applicable(
+            _SWITCH_REASON.format(what="a signal-to-noise ratio"), inapplicable=True
+        )
+    ordered = source_values(ctx)
+    ticks = clock_samples(ctx.stream.stream)
+    if ordered is None or ticks.reason:
+        return not_applicable("source row order is unavailable")
+    if not ticks.seconds:
+        return not_applicable("timestamp units do not establish seconds")
+    if ticks.invalid_rows or not ticks.gaps or any(g <= 0 for g in ticks.gaps):
+        return not_applicable("SNR needs a complete increasing time axis")
+    if not ctx.is_regular:
+        return not_applicable("sampling is not regular")
+    rate_hz = 1 / sorted(ticks.gaps)[len(ticks.gaps) // 2]
     span_s = _SNR_SMOOTHING_WINDOW / rate_hz
     if span_s > _SNR_MAX_SPAN_SECONDS * _SNR_SPAN_ALLOWANCE:
         return not_applicable(
@@ -395,36 +408,56 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
             f"motion: the {_SNR_SMOOTHING_WINDOW}-sample smoothing window spans "
             f"{span_s:.2g} s, more than {_SNR_MAX_SPAN_SECONDS} s"
         )
-
-    values = ctx.values.cast(pl.Float64)
+    ordered_values, _, _ = ordered
+    values = ordered_values.cast(pl.Float64)
+    invalid = values.is_null() | ~values.is_finite()
+    values = values.set(invalid, None)
     smoothed = values.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True)
     residual = values - smoothed
-    valid = smoothed.is_not_null()
-
-    smoothed_values = smoothed.filter(valid)
-    residual_values = residual.filter(valid)
-    if len(smoothed_values) < 2:
-        return not_applicable("too few samples survive smoothing to measure a ratio")
-
-    signal_variance = cast(float, smoothed_values.var())
-    noise_variance = cast(float, residual_values.var())
-    if signal_variance == 0:
-        return not_applicable("smoothed signal variance is zero")
-    if noise_variance == 0:
-        return not_applicable("residual variance is zero; the ratio would be infinite")
-
+    valid = smoothed.is_not_null() & residual.is_not_null()
+    smooth_values, residual_values = smoothed.filter(valid), residual.filter(valid)
+    if len(smooth_values) < 2:
+        return not_applicable("too few finite contiguous windows survive smoothing")
+    raw_signal_variance, raw_noise_variance = smooth_values.var(), residual_values.var()
+    # both series stay Float64 throughout, so var() returns a plain float here
+    assert isinstance(raw_signal_variance, (int, float))
+    assert isinstance(raw_noise_variance, (int, float))
+    signal_variance = float(raw_signal_variance)
+    noise_variance = float(raw_noise_variance)
+    if not all(math.isfinite(v) and v >= 0 for v in (signal_variance, noise_variance)):
+        return not_applicable("component variance is not finite")
+    signal_std, residual_std = math.sqrt(signal_variance), math.sqrt(noise_variance)
+    assessment = noise_assessment(ctx, rate_hz, residual_std, signal_std)
+    evidence = {
+        "signal_variance": signal_variance,
+        "noise_variance": noise_variance,
+        "signal_standard_deviation": signal_std,
+        "residual_standard_deviation": residual_std,
+        "amplitude_unit": ctx.channel.binding.unit if ctx.channel.binding else None,
+        "smoothing_window": _SNR_SMOOTHING_WINDOW,
+        "smoothing_span_s": span_s,
+        "rate_hz": rate_hz,
+        "n_samples": len(smooth_values),
+        "n_invalid_samples": int(invalid.sum()),
+        "estimator": "centered_mean_5_residual_std_v1",
+        "noise_assessment": assessment,
+        "interpretation": (
+            "smooth/residual diagnostic; neither measured sensor SNR "
+            "nor proof of health"
+        ),
+    }
+    if signal_variance == 0 or noise_variance == 0:
+        result = not_applicable(
+            "smoothed signal variance is zero"
+            if signal_variance == 0
+            else "residual variance is zero; the ratio would be infinite"
+        )
+        return result.model_copy(update={"evidence": {**evidence, **result.evidence}})
     return MetricResult(
-        value=10.0 * math.log10(signal_variance / noise_variance),
+        value=10.0 * (math.log10(signal_variance) - math.log10(noise_variance)),
         unit="dB",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "signal_variance": signal_variance,
-            "noise_variance": noise_variance,
-            "smoothing_window": _SNR_SMOOTHING_WINDOW,
-            "smoothing_span_s": span_s,
-            "rate_hz": rate_hz,
-            "n_samples": len(smoothed_values),
-        },
+        evidence=evidence,
     )
 
 

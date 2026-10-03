@@ -6,9 +6,31 @@ An adapter teaches Kalanos to read a format. It is the main extension point, and
 
 ## What an adapter does
 
-**An adapter reads files and produces episodes.** It does not apply thresholds, decide whether the data is good, or drop a field it fails to recognise. A column it cannot resolve becomes a stream typed `unmapped.<name>`, which reaches the report and tells the user a sensor was there. Drop it silently and the user loses a sensor without noticing.
+**An adapter reads files and produces episodes.** It does not apply thresholds, decide whether the data is good, or drop a field it fails to recognise. A column it cannot resolve becomes a stream typed `unmapped.<name>`, which reaches the report and tells the user a sensor was there. Drop it silently and the user loses a sensor without noticing. The `source_field` an adapter sets is what a user's `--map` override matches, so make it the name the source file uses.
 
 **Task instructions are optional, and exactly two states count.** If the format stores the natural-language instruction each episode was recorded under, set `Episode.tasks` to that episode's list of strings, blank ones included. Leave it `None` when the dataset carries no instruction for *any* episode, so the annotation metric reads it as not applicable rather than as every episode missing one. `kalanos.analysis.inference.tasks` holds the shared rule: `as_task_list` normalises what a source stored, and `dataset_tasks` returns `None` unless at least one episode has a non-blank instruction. Decide it from the whole dataset, not the sampled episodes.
+
+## Clock and row-order contract
+
+Preserve recorded row order and timestamp/payload alignment. Use `clock_info` to state origin, source field, native unit/dtype, known epoch/domain and transforms; leave unknown facts unset. `native_timestamps` retains numeric source ticks for precise differencing. For frame counters with a known rate, `tick_period_s` states seconds per native tick. These raw arrays stay inside the analysis stream.
+
+Use `origin=capture` with `origin_evidence=producer` only when the producer's schema or acquisition contract establishes capture semantics. A timestamp-like field name, jitter, a populated ROS header or a legacy `Clock.CAPTURE` label is insufficient. For example, an adapter for a documented capture-time field can set:
+
+```python
+ClockInfo(
+    origin=ClockOrigin.CAPTURE,
+    origin_evidence=OriginEvidence.PRODUCER,
+    source_field="capture_time_ns",
+    native_unit="ns",
+    native_dtype="int64",
+)
+```
+
+This is an adapter declaration, not authentication of external evidence. Generic built-in readers remain conservative where their source format provides no such contract. Do not assign a shared physical clock domain solely because streams have equal timestamp values or units.
+
+A clock the adapter builds itself, such as a grid derived from index and a declared rate, carries `origin=generated` with `origin_evidence=adapter`; one the adapter only pattern-matches, such as a recorded column that lines up with `frame_index / fps`, is `origin_evidence=inferred` instead. Neither authorizes acquisition-timing metrics, which need `origin=capture` with `origin_evidence=producer`.
+
+If a downstream view reorders rows, set `source_order.preserved=False` and provide `original_index` as the source row index of each current row. Without that map, source-order timing checks abstain. Validate source fidelity with format-specific fixtures: the generic contract helper cannot know which ordering existed in a file it does not parse independently.
 
 ## The protocol
 
@@ -89,7 +111,7 @@ def test_contract():
     )
 ```
 
-Both sides are required: a fixture the adapter reads, and a fixture it must decline. That asserts the properties every adapter has to have: confidence stays in range and is positive on a path you claim; `describe` names this adapter and this path, and a declared `episode_count` agrees with a full read; `episodes` returns an iterator rather than a materialised list, and iterating twice yields the same episodes in the same order; `sample=n` yields at most n; every stream has monotonic timestamps, float and non-null, and a payload whose length matches them; every stream has a taxonomy type or an explicit `unmapped.*`; and a path you do not support bids zero and either yields nothing or raises `AdapterRefusal` when read anyway.
+Both sides are required: a fixture the adapter reads, and a fixture it must decline. That asserts the properties every adapter has to have: confidence stays in range and is positive on a path you claim; `describe` names this adapter and this path, and a declared `episode_count` agrees with a full read; `episodes` returns an iterator rather than a materialised list, and iterating twice yields the same episodes in the same order; `sample=n` yields at most n; every stream has a canonical float timestamp axis, aligned native ticks/source-row indices where supplied, and a payload whose length matches it; source nulls, nonfinite values and backwards steps remain auditable rather than being repaired; every stream has a taxonomy type or an explicit `unmapped.*`; and a path you do not support bids zero and either yields nothing or raises `AdapterRefusal` when read anyway.
 
 When the contract changes, every plugin finds out at once by failing this test.
 

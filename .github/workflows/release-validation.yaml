@@ -1,0 +1,27 @@
+name: Release validation
+on:
+  pull_request:
+    branches: ["release/**"]
+  push:
+    branches: ["release/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: uv run python scripts/check_release.py
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - run: uv run pytest -m integration
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - run: uv run --isolated --no-project --with dist/*.whl kalanos --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kalanos-candidate
+          path: dist/*
+          if-no-files-found: error

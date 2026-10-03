@@ -12,6 +12,7 @@ import pytest
 # timing, integrity and motion alike — so the parametrised sweep below sees
 # the full built-in set the moment this module is collected.
 import kalanos.analysis.metrics  # noqa: F401
+from kalanos.analysis.metrics import vision
 from kalanos.analysis.metrics.registry import registered_metrics
 from kalanos.analysis.metrics.timing import dt_jitter_ms
 from kalanos.analysis.models.domain import FramePayload
@@ -27,6 +28,7 @@ from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
     Defect,
     check_metric,
+    clean_frames,
     clean_recording,
     clean_taxels,
     stream_context,
@@ -42,6 +44,9 @@ from kalanos.testing import (
 # A metric missing from here has no discrimination test — the sweep below fails on it.
 BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "effective_hz": Defect.CLOCK_DRIFT,
+    "recorded_hz": Defect.CLOCK_DRIFT,
+    "recorded_dt_spread_ms": Defect.JITTER,
+    "recorded_drop_estimate": Defect.DROPOUT,
     "dt_jitter_ms": Defect.JITTER,
     "monotonic_violations": Defect.REPEATED_TIMESTAMPS,
     "drop_rate": Defect.DROPOUT,
@@ -54,6 +59,8 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "hysteresis": Defect.HYSTERESIS,
     "mean_jerk_norm": Defect.SPIKE,
     "max_abs_jerk": Defect.SPIKE,
+    "velocity_spike_pct": Defect.STEP,
+    "log_dimensionless_jerk": Defect.SPIKE,
     "action_chatter": Defect.SPIKE,
     "still_drift": Defect.DRIFT,
     "vel_saturation_pct": Defect.SATURATION,
@@ -64,6 +71,11 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "mean_torque": Defect.SATURATION,
     "energy_proxy": None,
     "task_instruction_missing": None,
+    "sharpness_score": Defect.BLUR,
+    "exposure_shift_pct": None,
+    "exposure_level": None,
+    "frame_count_vs_timebase": None,
+    "frozen_frame_pct": Defect.FROZEN_FRAMES,
 }
 
 _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."
@@ -73,9 +85,9 @@ _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."
 _TAXEL_PRESSURE = "extero.taxel_pressure"
 
 
-# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
-# ░░█░░█▀▀░▀▀█░░█░░▀▀█
-# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _built_in_entries():
@@ -87,6 +99,23 @@ def _built_in_entries():
         for entry in registered_metrics(level)
         if entry.module.startswith(_BUILT_IN_MODULE_PREFIX)
     ]
+
+
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture(autouse=True)
+def _empty_vision_cache():
+    """Start every test with no frames sampled, so no test reads another's."""
+
+    vision.clear_cache()
+
+
+# ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
+# ░░█░░█▀▀░▀▀█░░█░░▀▀█
+# ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
 
 
 def test_every_built_in_metric_declares_the_defect_it_fires_on():
@@ -113,6 +142,7 @@ def test_every_built_in_metric_passes_the_contract(entry):
         entry.requires.taxonomy[0] if entry.requires.taxonomy else ("unmapped.tcp_pose")
     )
     samples = max(100, entry.requires.min_samples)
+    episode_streams = None
 
     if taxonomy_type == _TAXEL_PRESSURE:
         stream = clean_taxels(samples=samples)
@@ -124,6 +154,17 @@ def test_every_built_in_metric_passes_the_contract(entry):
         stream = clean_recording(
             samples=samples, settle=samples // 5, taxonomy_type=taxonomy_type
         )
+    elif entry.family is Family.VISION:
+        stream = clean_frames(frames=samples, height=128, width=128)
+        # frozen_frame_pct needs a moving action stream on the frames' own clock;
+        # the others ignore it.
+        episode_streams = [
+            clean_recording(
+                hz=30.0,
+                samples=samples,
+                taxonomy_type="action.joint_position_command",
+            )
+        ]
     else:
         stream = clean_recording(samples=samples, taxonomy_type=taxonomy_type)
 
@@ -136,7 +177,7 @@ def test_every_built_in_metric_passes_the_contract(entry):
             stream=stream_context(stream, is_regular=True),
         )
     else:
-        ctx = stream_context(stream, is_regular=True)
+        ctx = stream_context(stream, is_regular=True, episode_streams=episode_streams)
 
     check_metric(
         entry.func,

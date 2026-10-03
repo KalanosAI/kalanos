@@ -4,18 +4,28 @@
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from typing import cast
+
 # External
 import pytest
 
 # Internal
-from kalanos.analysis.models.domain import FramePayload
+from kalanos.analysis.models.domain import (
+    Clock,
+    ClockInfo,
+    FramePayload,
+    TimestampDtype,
+)
 from kalanos.testing import (
     Defect,
     add_noise,
     apply_defect,
+    blur_frames,
     clean_frames,
     clean_recording,
     clean_taxels,
+    clip_frames,
     drift_channel,
     drop_samples,
     freeze_frames,
@@ -26,6 +36,7 @@ from kalanos.testing import (
     saturate_channel,
     skew_unloading,
     spike_channel,
+    step_channel,
     stick_channel,
     stream_context,
     stretch_clock,
@@ -92,6 +103,24 @@ def test_dropping_samples_removes_timestamps_and_rows_together():
     surviving = dropped.timestamps.to_list()
     expected = clean.timestamps.to_list()[:40] + clean.timestamps.to_list()[50:]
     assert surviving == expected
+
+
+def test_dropout_preserves_clock_origin_and_keeps_the_dtype():
+    """A missing row does not turn generated timestamps into measured capture time."""
+
+    reconstructed = clean_recording().model_copy(
+        update={
+            "clock": Clock.RECONSTRUCTED,
+            "clock_info": ClockInfo.from_legacy(Clock.RECONSTRUCTED),
+            "timestamp_dtype": TimestampDtype.FLOAT32,
+        }
+    )
+    dropped = drop_samples(reconstructed)
+
+    assert dropped.clock is Clock.RECONSTRUCTED
+    assert dropped.clock_info is not None
+    assert not dropped.clock_info.certifies_acquisition
+    assert dropped.timestamp_dtype is TimestampDtype.FLOAT32
 
 
 def test_jittering_the_clock_keeps_the_timestamps_strictly_increasing():
@@ -228,6 +257,30 @@ def test_freezing_frames_repeats_the_predecessor_across_its_own_window():
     assert frozen.timestamps.to_list() == clean.timestamps.to_list()
 
 
+@pytest.mark.parametrize("inject", [blur_frames, clip_frames])
+def test_blurring_and_clipping_change_every_frame_and_nothing_else(inject):
+    """Both keep frame count, timestamps and shape; every frame's pixels change."""
+
+    numpy = pytest.importorskip("numpy")
+
+    clean = clean_frames(frames=12, height=16, width=16)
+    injected = inject(clean)
+
+    assert isinstance(injected.payload, SyntheticFrames) and isinstance(
+        clean.payload, SyntheticFrames
+    )
+    assert len(injected.payload.frames) == len(clean.payload.frames)
+    assert injected.timestamps.to_list() == clean.timestamps.to_list()
+    for before, after in zip(
+        clean.payload.frames, injected.payload.frames, strict=True
+    ):
+        assert after.shape == before.shape
+        assert not numpy.array_equal(after, before)
+
+    with pytest.raises(ValueError, match="SyntheticFrames"):
+        inject(clean_recording())
+
+
 def test_apply_defect_builds_frozen_frames_on_a_channelless_image_stream():
     """A `Kind.IMAGE` stream has no channels, and `FROZEN_FRAMES` needs none."""
 
@@ -316,6 +369,38 @@ def test_spike_channel_moves_exactly_one_sample_and_leaves_its_siblings_alone():
             == clean.payload.frame[other].to_list()
         )
     assert spiked.timestamps.to_list() == clean.timestamps.to_list()
+
+
+def test_step_channel_offsets_every_sample_from_its_index_and_no_sibling():
+    """Every sample from the midpoint on moves by the same `magnitude` standard
+    deviations; nothing before it, and no other channel, moves."""
+
+    clean = clean_recording()
+    stepped = step_channel(clean, "tcp_pose_x_mm", magnitude=20.0)
+
+    assert isinstance(stepped.payload, FramePayload) and isinstance(
+        clean.payload, FramePayload
+    )
+    clean_series = clean.payload.frame["tcp_pose_x_mm"]
+    offset = 20.0 * cast(float, clean_series.std())
+    clean_values = clean_series.to_list()
+    stepped_values = stepped.payload.frame["tcp_pose_x_mm"].to_list()
+    midpoint = len(clean_values) // 2
+
+    for index, (before, after) in enumerate(
+        zip(clean_values, stepped_values, strict=True)
+    ):
+        if index < midpoint:
+            assert after == before
+        else:
+            assert after == pytest.approx(before + offset)
+
+    for other in ("tcp_pose_y_mm", "tcp_pose_z_mm"):
+        assert (
+            stepped.payload.frame[other].to_list()
+            == clean.payload.frame[other].to_list()
+        )
+    assert stepped.timestamps.to_list() == clean.timestamps.to_list()
 
 
 def test_add_noise_raises_step_to_step_variation_without_moving_the_mean():

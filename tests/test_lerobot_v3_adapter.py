@@ -20,11 +20,19 @@ from upath import UPath
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
+    episode_clock,
     resolve_taxonomy,
     series_stream,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
-from kalanos.analysis.models.domain import Channel, FramePayload, Kind
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    FramePayload,
+    Kind,
+    MappingSource,
+    TimestampDtype,
+)
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.assets.dictionary import load_default_dictionary
@@ -134,11 +142,13 @@ def test_the_declared_rate_is_read_not_inferred(tmp_path):
     assert info.episode_count == 2
 
 
-def test_a_camera_stream_is_never_decoded_while_grading(monkeypatch):
-    """Verify grading the whole fixture never touches the video decoder."""
+def test_a_camera_stream_is_never_fully_decoded_while_grading(monkeypatch):
+    """Verify grading the whole fixture samples frames and never decodes them all."""
 
     monkeypatch.setattr(
-        video, "_load_av", lambda: pytest.fail("_load_av() was called while grading")
+        video.VideoPayload,
+        "fetch",
+        lambda self: pytest.fail("VideoPayload.fetch() was called while grading"),
     )
 
     policy = load_default_policy()
@@ -160,7 +170,7 @@ def test_a_camera_stream_is_never_decoded_while_grading(monkeypatch):
 def test_a_video_stream_carries_frames_it_has_not_read(monkeypatch):
     """Verify a video payload's length costs nothing, with the decoder patched out."""
 
-    monkeypatch.setattr(video, "_load_av", lambda: pytest.fail("_load_av() was called"))
+    monkeypatch.setattr(video, "av", None)
 
     [first, _] = _episodes()
     [video_stream] = [s for s in first.streams if s.kind == Kind.VIDEO]
@@ -178,6 +188,7 @@ def test_a_feature_key_resolves_through_the_dictionary():
     )
 
     assert velocity.taxonomy_type == "proprio.joint_velocity"
+    assert velocity.mapping_source is MappingSource.DICTIONARY
 
 
 def test_an_unresolvable_feature_reaches_the_report_unmapped():
@@ -187,6 +198,7 @@ def test_an_unresolvable_feature_reaches_the_report_unmapped():
     state = next(s for s in first.streams if s.source_field == "observation.state")
 
     assert state.taxonomy_type == "unmapped.observation.state"
+    assert state.mapping_source is None
     assert [c.name for c in state.channels] == _MOTOR_NAMES
 
 
@@ -198,11 +210,21 @@ def test_a_video_key_resolves_through_the_dictionary_by_its_own_key():
     test exercises the success path directly rather than through the fixture.
     """
 
-    taxonomy_type = resolve_taxonomy(
+    resolved = resolve_taxonomy(
         "observation.images.wrist", {"dtype": "video"}, load_default_dictionary()
     )
 
-    assert taxonomy_type == "extero.wrist_rgb"
+    assert resolved == ("extero.wrist_rgb", MappingSource.DICTIONARY)
+
+
+def test_a_feature_resolves_through_its_declared_names_when_its_key_does_not():
+    """Verify an unlisted key whose channel names agree on one type takes it."""
+
+    spec = {"dtype": "float32", "shape": [2], "names": ["joint_vel_0", "joint_vel_1"]}
+
+    resolved = resolve_taxonomy("observation.foo", spec, load_default_dictionary())
+
+    assert resolved == ("proprio.joint_velocity", MappingSource.DECLARED_NAMES)
 
 
 def test_a_v2_dataset_is_declined(tmp_path):
@@ -231,9 +253,40 @@ def test_a_fixed_size_array_feature_unnests_into_one_column_per_channel():
         "unmapped.observation.state",
         pl.Series([0.0, 0.1]),
         UPath("data/chunk-000/file-000.parquet"),
+        mapping_source=None,
+        clock=Clock.UNKNOWN,
+        timestamp_dtype=TimestampDtype.FLOAT64,
         is_regular=True,
     )
 
     assert isinstance(stream.payload, FramePayload)
     assert stream.payload.frame.columns == ["x", "y"]
     assert stream.payload.frame["y"].to_list() == [1.0, 3.0]
+
+
+def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock():
+    """LeRobot stamps frames as float32 `frame_index / fps`; so does the fixture."""
+
+    for episode in _episodes():
+        for stream in episode.streams:
+            assert stream.timestamp_dtype is TimestampDtype.FLOAT32
+            assert stream.clock is Clock.RECONSTRUCTED
+
+
+def test_a_skipped_frame_does_not_erase_inferred_generation():
+    """Generation inference survives a missing row, but needs a declared rate."""
+
+    def frame(indices):
+        return pl.DataFrame(
+            {
+                "frame_index": indices,
+                "timestamp": pl.Series([i / 30 for i in indices], dtype=pl.Float32),
+            }
+        )
+
+    whole, skipped = frame(list(range(10))), frame([0, 1, 2, 4, 5, 6])
+    dtype = TimestampDtype.FLOAT32
+
+    assert episode_clock(whole, 30.0, dtype) is Clock.RECONSTRUCTED
+    assert episode_clock(skipped, 30.0, dtype) is Clock.RECONSTRUCTED
+    assert episode_clock(whole, None, dtype) is Clock.UNKNOWN
