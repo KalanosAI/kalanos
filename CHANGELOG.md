@@ -32,7 +32,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 - A coverage ledger per episode and dataset, and findings localized to source-row intervals. ([#24](https://github.com/KalanosAI/kalanos/pull/24))
 - Contextual SNR that separates the smooth signal from the residual and accepts a validated `noise_floor` reference. ([#25](https://github.com/KalanosAI/kalanos/pull/25))
 - Optional deeper diagnostics, configured in the bundle: stream-pair timing, command response, sampled video, motion shape, training windows and dataset cohorts, with the new `numeric` extra and `kalanos diagnostics summarize-study`. ([#26](https://github.com/KalanosAI/kalanos/pull/26))
-- Dictionary categories, so each stream in the report carries its category and group. ([#28](https://github.com/KalanosAI/kalanos/pull/28))
+- Dictionary categories: each stream carries its category, and `report.categories` maps every category to its group. ([#28](https://github.com/KalanosAI/kalanos/pull/28))
 - `Bundle` and `ExecutionTier` exported from `kalanos`, and `--profile` accepts the preset names that `profiles list` prints.
 
 ### Changed
