@@ -10,6 +10,7 @@ everything under the subpackages may move.
 
 # Internal
 from kalanos.analysis.models.adapters import AdapterTie, DatasetInfo
+from kalanos.analysis.models.binding import Bundle
 from kalanos.analysis.models.dictionary import Category, CategoryGroup, Dictionary
 from kalanos.analysis.models.discovery import (
     SkippedSource,
@@ -28,6 +29,7 @@ from kalanos.analysis.models.errors import (
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.metrics import Level, MetricResult
 from kalanos.analysis.models.policy import Policy
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     GradedChannel,
     GradedEpisode,
@@ -43,10 +45,12 @@ from kalanos.assets.policy import load_policy
 
 __all__ = [
     "AdapterTie",
+    "Bundle",
     "Category",
     "CategoryGroup",
     "DatasetInfo",
     "Dictionary",
+    "ExecutionTier",
     "Finding",
     "Grade",
     "GradedChannel",
@@ -71,9 +75,9 @@ __all__ = [
     "SourceTooLarge",
     "SourceUnavailable",
     "UnresolvedSource",
-    "grade",
     "compare",
-    "load_report",
+    "grade",
     "load_dictionary",
     "load_policy",
+    "load_report",
 ]

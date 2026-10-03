@@ -43,7 +43,7 @@ from kalanos.assets.bundle import prepare_configuration
 from kalanos.core.settings import get_settings
 
 
-__all__ = ["grade", "compare", "load_report"]
+__all__ = ["compare", "grade", "load_report"]
 
 logger = logging.getLogger(__name__)
 

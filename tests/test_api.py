@@ -59,6 +59,8 @@ PUBLIC_SURFACE = {
     "MappingOverrideError",
     "MappingSource",
     "OverrideOrigin",
+    "Bundle",
+    "ExecutionTier",
 }
 
 
