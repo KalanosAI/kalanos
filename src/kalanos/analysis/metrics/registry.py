@@ -64,6 +64,9 @@ class RegisteredMetric:
     module : str
         The module that registered it, so discovery can attribute a metric to
         the entry point whose import put it here.
+    label : str or None
+        The condition a finding from this metric describes, in plain words.
+        `None` falls back to the name.
     """
 
     name: str
@@ -72,6 +75,7 @@ class RegisteredMetric:
     requires: Requires
     func: MetricFunction
     module: str
+    label: str | None = None
 
 
 # Populated by every @metric-decorated function as its module is imported.
@@ -86,7 +90,11 @@ _REGISTRY: list[RegisteredMetric] = []
 
 
 def metric(
-    *, level: Level, family: Family | str, requires: Requires | None = None
+    *,
+    level: Level,
+    family: Family | str,
+    requires: Requires | None = None,
+    label: str | None = None,
 ) -> Callable[[Callable[[CtxT], MetricResult]], Callable[[CtxT], MetricResult]]:
     """Register a function as a metric, keyed by its own name.
 
@@ -100,6 +108,9 @@ def metric(
     requires : Requires or None
         What a context must satisfy before the registry calls it.
         Defaults to no requirements at all.
+    label : str or None
+        The condition a finding from this metric describes, in plain words,
+        for the terminal summary. `None` falls back to the name.
 
     Returns
     -------
@@ -144,6 +155,7 @@ def metric(
                 requires=resolved_requires,
                 func=cast(MetricFunction, func),
                 module=func.__module__,
+                label=label,
             )
         )
         return func
@@ -166,6 +178,27 @@ def registered_metrics(level: Level | None = None) -> list[RegisteredMetric]:
     """
 
     return [entry for entry in _REGISTRY if level is None or entry.level == level]
+
+
+def metric_label(name: str) -> str:
+    """Name the condition a metric's findings describe, in plain words.
+
+    Parameters
+    ----------
+    name : str
+        The metric's bare name, without its family prefix.
+
+    Returns
+    -------
+    str
+        The label of the first registered metric by that name that sets one,
+        or `name` with underscores read as spaces.
+    """
+
+    for entry in _REGISTRY:
+        if entry.name == name and entry.label is not None:
+            return entry.label
+    return name.replace("_", " ")
 
 
 def _unmet_node_reason(

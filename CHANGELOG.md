@@ -4,6 +4,18 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Changed
+
+- `kalanos grade` prints a shorter card with the same sections for every format: the verdict and episode counts, the episodes that need attention, findings grouped by source in plain words, coverage for each capability that applies, and the files not analysed. Values, evidence and every episode stay in `--report` and `kalanos inspect`.
+- The card is plain ASCII when stdout is not a terminal.
+
+### Added
+
+- `--color/--no-color` on `kalanos grade`; a non-empty `NO_COLOR` acts as `--no-color`.
+- `label=` on `@metric`, naming the condition a finding describes for the terminal card.
+
 ## [0.7.0] - 2026-10-03
 
 Report schema 7.0.0.

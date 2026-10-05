@@ -28,6 +28,7 @@ from kalanos.analysis.models.metrics import (
     level=Level.STREAM,
     family=Family.{{ family_constant }},
     requires=Requires(regular_sampling=True, min_samples=2),
+    # label="what a finding describes, in plain words",
 )
 def {{ name }}(ctx: StreamContext) -> MetricResult:
     """Spread of the gaps between consecutive timestamps.

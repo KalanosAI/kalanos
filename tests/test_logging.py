@@ -111,7 +111,7 @@ def test_the_default_verbosity_leaves_stdout_to_the_report_card():
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
     for level in ("DEBUG", "INFO", "WARNING", "ERROR"):
         assert level not in result.stdout
 
@@ -131,7 +131,7 @@ def test_debug_verbosity_writes_the_inference_trace_to_stderr():
     result = runner.invoke(app, ["--verbosity", "debug", "grade", str(CSV_FIXTURE)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
     assert "kalanos.analysis.inference" in result.stderr
     assert "DEBUG" in result.stderr
 

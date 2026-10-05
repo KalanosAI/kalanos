@@ -13,7 +13,7 @@ import pytest
 # the full built-in set the moment this module is collected.
 import kalanos.analysis.metrics  # noqa: F401
 from kalanos.analysis.metrics import vision
-from kalanos.analysis.metrics.registry import registered_metrics
+from kalanos.analysis.metrics.registry import metric_label, registered_metrics
 from kalanos.analysis.metrics.timing import dt_jitter_ms
 from kalanos.analysis.models.domain import FramePayload
 from kalanos.analysis.models.metrics import (
@@ -259,3 +259,10 @@ def test_a_defect_the_clean_context_cannot_carry_fails_naming_the_metric():
             clean=stream_context(clean_recording()),
             fires_on=Defect.FROZEN_FRAMES,
         )
+
+
+def test_a_metric_label_is_its_registered_label_or_its_spaced_name():
+    """A built-in reads by its label; an unknown name by its spaced-out name."""
+
+    assert metric_label("flatline_pct") == "repeated values"
+    assert metric_label("not_a_registered_metric") == "not a registered metric"

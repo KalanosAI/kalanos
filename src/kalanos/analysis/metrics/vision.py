@@ -677,7 +677,7 @@ def _exposure(frames: _Frames) -> _Exposure:
     )
 
 
-@metric(level=Level.STREAM, family=Family.VISION)
+@metric(level=Level.STREAM, family=Family.VISION, label="low sharpness")
 def sharpness_score(ctx: StreamContext) -> MetricResult:
     """Median share of the sampled frames' edge energy a 3x3 box re-blur removes.
 
@@ -720,7 +720,7 @@ def sharpness_score(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.VISION)
+@metric(level=Level.STREAM, family=Family.VISION, label="brightness changes")
 def exposure_shift_pct(ctx: StreamContext) -> MetricResult:
     """Share of sampled frames exposed unlike the episode's typical frame, or blank.
 
@@ -777,7 +777,7 @@ def exposure_shift_pct(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.VISION)
+@metric(level=Level.STREAM, family=Family.VISION, label="exposure level")
 def exposure_level(ctx: StreamContext) -> MetricResult:
     """Median mean gray of the sampled frames, 0 to 255; reported, never graded.
 
@@ -819,7 +819,7 @@ def exposure_level(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.VISION)
+@metric(level=Level.STREAM, family=Family.VISION, label="frame-count mismatch")
 def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
     """Deviation between the frames the video holds and the frames its timestamps imply.
 
@@ -935,7 +935,7 @@ def _moves_over(
     return False
 
 
-@metric(level=Level.STREAM, family=Family.VISION)
+@metric(level=Level.STREAM, family=Family.VISION, label="repeated frames")
 def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
     """Share of frames read that repeat their predecessor while the robot moves.
 
