@@ -351,7 +351,7 @@ def run(
         if candidate.path.is_dir():
             claimed.append(candidate.path)
         if refusal is not None:
-            logger.warning(
+            logger.info(
                 "%s: unresolved after %d episode(s): %s",
                 refusal.path,
                 len(episodes),

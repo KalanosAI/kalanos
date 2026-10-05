@@ -34,9 +34,12 @@ class Verbosity(str, Enum):
     DEBUG : str
         Every inference guess, and everything below.
     INFO : str
-        Stage boundaries and per-file outcomes, and everything below.
+        Stage boundaries, per-file outcomes and the facts about the data
+        the report also records (a skipped or unresolved file, an unmapped stream),
+        and everything below.
     WARNING : str
-        A skip, an unresolved file, or an unmapped stream, and everything below.
+        Something that went wrong with the run itself, or data dropped
+        without a trace in the report, and everything below.
     ERROR : str
         A run-ending failure.
     CRITICAL : str

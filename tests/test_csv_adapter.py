@@ -481,7 +481,7 @@ def test_a_null_instance_key_becomes_its_own_unattributed_group(tmp_path, caplog
     """Verify a null instance key surfaces as its own Attribution.UNATTRIBUTED group.
 
     No stream reads `instance == "None"`; the real ids are unaffected;
-    a WARNING names the row count.
+    an INFO record names the row count.
     """
 
     rows = [
@@ -495,7 +495,7 @@ def test_a_null_instance_key_becomes_its_own_unattributed_group(tmp_path, caplog
     ]
     path = _csv(tmp_path, "null_key.csv", "\n".join(rows) + "\n")
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO, logger="kalanos"):
         episode = next(CsvAdapter().episodes(path))
 
     for stream in episode.streams:
