@@ -335,6 +335,25 @@ def test_counting_a_segment_past_the_end_of_the_file_finds_fewer_frames():
     assert len(payload.packet_times().pts) == 6
 
 
+def test_a_whole_file_payload_counts_past_its_segment():
+    """Verify a whole-file payload counts every packet the file holds, past `end_s`."""
+
+    av = pytest.importorskip("av")
+    with av.open(str(LEROBOT_VIDEO)) as container:
+        total = sum(
+            1
+            for packet in container.demux(container.streams.video[0])
+            if packet.pts is not None and packet.size
+        )
+    bounded = VideoPayload(path=LEROBOT_VIDEO, frame_count=4, start_s=0.0, end_s=4 / 30)
+    whole = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=4, start_s=0.0, end_s=4 / 30, whole_file=True
+    )
+
+    assert len(bounded.packet_times().pts) == 4
+    assert len(whole.packet_times().pts) == total > 4
+
+
 def test_sampling_and_counting_read_a_remote_path(remote_video):
     """Verify a non-local path is opened through its own file object."""
 

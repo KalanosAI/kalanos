@@ -27,6 +27,7 @@ from kalanos.analysis.metrics.vision import (
     frozen_frame_pct,
     sharpness_score,
 )
+from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import (
@@ -38,9 +39,10 @@ from kalanos.analysis.models.domain import (
     Stream,
     TimestampDtype,
 )
+from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 from kalanos.analysis.models.metrics import MetricStatus, StreamContext
 from kalanos.analysis.models.provenance import ExecutionTier
-from kalanos.analysis.reporting.assemble import grade_stream
+from kalanos.analysis.reporting.assemble import grade_stream, scope_policy
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
     check_metric,
@@ -144,6 +146,15 @@ def _full_scan_freeze(stream: Stream):
     )
 
 
+def _grade(stream: Stream, policy):
+    """Grade `stream` under `policy`, returning its findings by metric id."""
+
+    _graded, findings = grade_stream(
+        stream, policy=policy, is_regular=True, episode_id="episode_0", category=None
+    )
+    return {finding.metric_id: finding for finding in findings}
+
+
 def _assert_not_applicable(result) -> str:
     """Assert `result` is `not_applicable` with a reason, and return that reason."""
 
@@ -200,6 +211,29 @@ def test_a_corrupt_video_is_not_applicable_and_the_stream_still_grades(tmp_path)
     _assert_not_applicable(graded.metrics["sharpness_score"])
     _assert_not_applicable(graded.metrics["frame_count_vs_timebase"])
     assert graded.metrics["sharpness_score"].availability == Availability.UNAVAILABLE
+
+
+def test_a_short_video_blocks_only_under_a_video_scope():
+    """A frame-count mismatch blocks through its contract under a video scope."""
+
+    truncated = _video_stream(
+        VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30),
+        8,
+    )
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    default_scope = scope_policy(load_default_policy(), RequirementsSection())
+    metric_id = "vision.frame_count_vs_timebase"
+
+    finding = _grade(truncated, video_scope)[metric_id]
+    assert (finding.consequence, finding.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    reported = _grade(truncated, default_scope).get(metric_id)
+    assert reported is None or reported.consequence != Consequence.BLOCK
 
 
 def test_frame_count_vs_timebase_catches_a_truncated_video(_fixture_stream):

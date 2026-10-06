@@ -202,12 +202,16 @@ class VideoPayload:
         Where in `path` this stream's frames begin.
     end_s : float
         Where in `path` this stream's frames end.
+    whole_file : bool
+        Whether `path` holds this episode alone,
+        so frames past `end_s` still belong to it.
     """
 
     path: UPath
     frame_count: int
     start_s: float
     end_s: float
+    whole_file: bool = False
 
     def __len__(self) -> int:
         """Return the declared frame count, reading nothing.
@@ -444,6 +448,7 @@ class VideoPayload:
         """Read the timestamp of every packet in this segment, decoding nothing.
 
         The packets are what the container holds, not capped at `frame_count`.
+        On a `whole_file` payload the segment runs to the end of the file.
 
         Raises
         ------
@@ -465,6 +470,10 @@ class VideoPayload:
                 container.seek(lo, stream=stream)
                 for packet in container.demux(stream):
                     if packet.pts is None or packet.size == 0:
+                        continue
+                    if self.whole_file:
+                        if lo <= packet.pts:
+                            collected.append(packet.pts)
                         continue
                     # Packets arrive in decode order, so with B-frames a pts past hi
                     # can precede ones below it; dts never exceeds pts and only grows.

@@ -857,6 +857,8 @@ def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
     `present` counts the container's packets in the segment, decoding nothing,
     under a full scan too: a decode is bounded by the timestamps,
     so it could never find a frame past them.
+    On a whole-file payload the count runs to the end of the file,
+    so surplus frames past the timestamps show.
 
     Parameters
     ----------
