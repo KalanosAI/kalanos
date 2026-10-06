@@ -12,6 +12,8 @@ Every other module just calls `logging.getLogger(__name__)`.
 # Built-in
 import logging
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from enum import Enum
 from typing import TextIO
 
@@ -32,9 +34,12 @@ class Verbosity(str, Enum):
     DEBUG : str
         Every inference guess, and everything below.
     INFO : str
-        Stage boundaries and per-file outcomes, and everything below.
+        Stage boundaries, per-file outcomes and the facts about the data
+        the report also records (a skipped or unresolved file, an unmapped stream),
+        and everything below.
     WARNING : str
-        A skip, an unresolved file, or an unmapped stream, and everything below.
+        Something that went wrong with the run itself, or data dropped
+        without a trace in the report, and everything below.
     ERROR : str
         A run-ending failure.
     CRITICAL : str
@@ -97,3 +102,32 @@ def configure_logging(verbosity: Verbosity, *, stream: TextIO | None = None) -> 
     logger.addHandler(handler)
 
     logger.setLevel(verbosity.value.upper())
+
+
+@contextmanager
+def logging_to(stream: TextIO) -> Generator[None, None, None]:
+    """Send the CLI handler's records to `stream` for the duration of the block.
+
+    A rich live display swaps `sys.stderr` for a proxy that prints above it,
+    but the handler keeps the stream it was built with
+    and would write through the display.
+
+    Parameters
+    ----------
+    stream : TextIO
+        Where records go until the block exits.
+    """
+
+    handlers = [
+        handler
+        for handler in logging.getLogger(LOGGER_NAME).handlers
+        if handler.name == _HANDLER_NAME and isinstance(handler, logging.StreamHandler)
+    ]
+    previous = [handler.setStream(stream) for handler in handlers]
+    try:
+        yield
+    finally:
+        for handler, old in zip(handlers, previous, strict=True):
+            # setStream returns None when the stream was already `stream`.
+            if old is not None:
+                handler.setStream(old)

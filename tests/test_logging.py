@@ -111,7 +111,7 @@ def test_the_default_verbosity_leaves_stdout_to_the_report_card():
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
     for level in ("DEBUG", "INFO", "WARNING", "ERROR"):
         assert level not in result.stdout
 
@@ -131,7 +131,7 @@ def test_debug_verbosity_writes_the_inference_trace_to_stderr():
     result = runner.invoke(app, ["--verbosity", "debug", "grade", str(CSV_FIXTURE)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
     assert "kalanos.analysis.inference" in result.stderr
     assert "DEBUG" in result.stderr
 
@@ -152,8 +152,10 @@ def test_json_stdout_stays_parseable_at_debug_verbosity():
     assert report.episodes
 
 
-def test_an_unresolved_source_is_logged_as_a_warning(tmp_path, caplog):
-    """Verify pipeline.run logs an unresolved file as a WARNING, with no handler.
+def test_an_unresolved_source_is_logged_at_info(tmp_path, caplog):
+    """Verify pipeline.run logs an unresolved file at INFO, with no handler.
+
+    The report records the file as unresolved; the log is its trace, not its alarm.
 
     Calling the pipeline directly, rather than through the CLI, is
     deliberate: it proves the library logs without any handler being
@@ -167,14 +169,14 @@ def test_an_unresolved_source_is_logged_as_a_warning(tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="kalanos"):
         pipeline.run(tmp_path, policy=load_policy(None))
 
-    # Other files in the run may log warnings of their own,
+    # Other files in the run log records of their own,
     # so filter to the one naming ragged.csv rather than counting all of them.
-    ragged_warnings = [
+    ragged = [
         record
         for record in caplog.records
-        if record.levelno == logging.WARNING and "ragged.csv" in record.getMessage()
+        if "ragged.csv: unresolved after" in record.getMessage()
     ]
-    assert len(ragged_warnings) == 1
+    assert [record.levelno for record in ragged] == [logging.INFO]
 
 
 def test_every_module_logger_is_named_for_its_module():

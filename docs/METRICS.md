@@ -389,7 +389,7 @@ See [Calibration](#calibration) above for how benchmark results on the three LeR
 
 ## Adding a metric
 
-1. Write the function with its `@metric` decorator — `level=` and `family=`, both required — in the family's module under `src/kalanos/analysis/metrics/`. A `family=` outside the nine above fails at import.
+1. Write the function with its `@metric` decorator — `level=` and `family=`, both required — in the family's module under `src/kalanos/analysis/metrics/`. A `family=` outside the nine above fails at import. `label=` names the condition a finding from this metric describes, in plain words, for the terminal summary; without it the metric's name is used.
 2. Add its `good`, `bad` and weight to `src/kalanos/assets/policies/default.yaml`, keyed `family.metric_name`; that key's prefix is what makes it a member of the family. A bound that is not yet settled stays *to define* here and absent there. A *candidate* bound may ship, but only with a comment marking it unconfirmed — never as though it were decided.
 3. Add a contract test naming the defect it fires on, using an injector.
 4. Add a row above.

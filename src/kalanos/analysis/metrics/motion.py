@@ -174,7 +174,12 @@ def _normalized_jerk(
     return jerks, n_channels, median_dt
 
 
-@metric(level=Level.STREAM, family=Family.MOTION, requires=_REQUIRES_JERK)
+@metric(
+    level=Level.STREAM,
+    family=Family.MOTION,
+    requires=_REQUIRES_JERK,
+    label="jerky motion",
+)
 def mean_jerk_norm(ctx: StreamContext) -> MetricResult:
     """RMS of the normalised third derivative of joint position.
 
@@ -211,7 +216,12 @@ def mean_jerk_norm(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.MOTION, requires=_REQUIRES_JERK)
+@metric(
+    level=Level.STREAM,
+    family=Family.MOTION,
+    requires=_REQUIRES_JERK,
+    label="jerky motion",
+)
 def max_abs_jerk(ctx: StreamContext) -> MetricResult:
     """Maximum absolute normalised third derivative of joint position.
 
@@ -247,7 +257,12 @@ def max_abs_jerk(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_VELOCITY_SPIKE)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_VELOCITY_SPIKE,
+    label="velocity spikes",
+)
 def velocity_spike_pct(ctx: ChannelContext) -> MetricResult:
     """Share of step-to-step position changes more than 6σ from their own mean.
 
@@ -319,7 +334,10 @@ def velocity_spike_pct(ctx: ChannelContext) -> MetricResult:
 
 
 @metric(
-    level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_DIMENSIONLESS_JERK
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_DIMENSIONLESS_JERK,
+    label="jerky motion",
 )
 def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
     """Log dimensionless jerk of one joint, `-ln(T^5 · ∫ jerk² dt / range²)`.
@@ -405,7 +423,12 @@ def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.MOTION, requires=_REQUIRES_CHATTER)
+@metric(
+    level=Level.STREAM,
+    family=Family.MOTION,
+    requires=_REQUIRES_CHATTER,
+    label="action chatter",
+)
 def action_chatter(ctx: StreamContext) -> MetricResult:
     """Mean absolute step-to-step change in velocity, normalised by its own spread.
 
@@ -453,7 +476,12 @@ def action_chatter(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.MOTION, requires=_REQUIRES_STILL_DRIFT)
+@metric(
+    level=Level.STREAM,
+    family=Family.MOTION,
+    requires=_REQUIRES_STILL_DRIFT,
+    label="drift while still",
+)
 def still_drift(ctx: StreamContext) -> MetricResult:
     """How far joint readings wander in the recording's own settled tail.
 
@@ -530,7 +558,12 @@ def still_drift(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_VEL_SATURATION)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_VEL_SATURATION,
+    label="velocity saturation",
+)
 def vel_saturation_pct(ctx: ChannelContext) -> MetricResult:
     """Share of samples at or above 90% of this channel's own observed maximum.
 
@@ -567,7 +600,12 @@ def vel_saturation_pct(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_LIMIT_PROXIMITY)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_LIMIT_PROXIMITY,
+    label="near joint limits",
+)
 def limit_proximity_pct(ctx: ChannelContext) -> MetricResult:
     """Share of samples at or above 95% of this channel's own observed half-range.
 
@@ -610,7 +648,12 @@ def limit_proximity_pct(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_HF_VIBRATION)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_HF_VIBRATION,
+    label="high-frequency content",
+)
 def hf_vibration_ratio(ctx: ChannelContext) -> MetricResult:
     """Share of a torque channel's spectral energy above `_HF_CUTOFF_HZ`.
 
@@ -685,7 +728,12 @@ def _abs_nonnull(ctx: ChannelContext) -> pl.Series:
     return ctx.values.drop_nulls().abs()
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_TORQUE_STAT)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_TORQUE_STAT,
+    label="high torque",
+)
 def p99_torque(ctx: ChannelContext) -> MetricResult:
     """99th percentile of absolute torque. Report-only by design, not by omission.
 
@@ -713,7 +761,12 @@ def p99_torque(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_TORQUE_STAT)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_TORQUE_STAT,
+    label="high torque",
+)
 def max_torque(ctx: ChannelContext) -> MetricResult:
     """Maximum absolute torque. Report-only by design, not by omission.
 
@@ -741,7 +794,12 @@ def max_torque(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.MOTION, requires=_REQUIRES_TORQUE_STAT)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.MOTION,
+    requires=_REQUIRES_TORQUE_STAT,
+    label="high torque",
+)
 def mean_torque(ctx: ChannelContext) -> MetricResult:
     """Mean absolute torque. Report-only by design, not by omission.
 
@@ -769,7 +827,12 @@ def mean_torque(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.EPISODE, family=Family.MOTION, requires=_REQUIRES_ENERGY_PROXY)
+@metric(
+    level=Level.EPISODE,
+    family=Family.MOTION,
+    requires=_REQUIRES_ENERGY_PROXY,
+    label="high effort",
+)
 def energy_proxy(ctx: EpisodeContext) -> MetricResult:
     """Sum of |torque x velocity| x dt, a proxy for mechanical work done.
 

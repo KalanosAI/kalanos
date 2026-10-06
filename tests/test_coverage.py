@@ -161,7 +161,9 @@ def test_default_review_and_explicit_calibration_propagate_to_every_decision(tmp
     }
 
 
-def test_coverage_summary_is_shared_by_terminal_html_and_inspect(tmp_path):
+def test_coverage_summary_is_shared_by_html_and_inspect_and_counted_on_the_card(
+    tmp_path,
+):
     report = grade(LEROBOT_FIXTURE)
     path = tmp_path / "report.json"
     path.write_text(report.model_dump_json())
@@ -170,10 +172,13 @@ def test_coverage_summary_is_shared_by_terminal_html_and_inspect(tmp_path):
     inspected = CliRunner().invoke(app, ["inspect", str(path)])
     assert inspected.exit_code == 0
     for line in coverage_lines(report.coverage):
-        assert line in terminal
         assert line in html
         # CLI can wrap; compare collapsed whitespace.
         assert " ".join(line.split()) in " ".join(inspected.stdout.split())
+    assert report.coverage is not None
+    for row in report.coverage.capabilities:
+        if row.eligible:
+            assert f"{row.computed}/{row.eligible}" in terminal
     assert (
         CliRunner()
         .invoke(app, ["inspect", str(path), "--episode", "missing"])

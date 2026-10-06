@@ -101,43 +101,72 @@ def _cadence(ctx: StreamContext, *, acquisition: bool, kind: str) -> MetricResul
     )
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM,
+    family=Family.TIMING,
+    requires=Requires(),
+    label="low sample rate",
+)
 def effective_hz(ctx: StreamContext) -> MetricResult:
     """Capture rate from a producer-declared acquisition clock."""
     return _cadence(ctx, acquisition=True, kind="rate")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM, family=Family.TIMING, requires=Requires(), label="timing jitter"
+)
 def dt_jitter_ms(ctx: StreamContext) -> MetricResult:
     """Acquisition interval spread, requiring producer capture-clock evidence."""
     return _cadence(ctx, acquisition=True, kind="spread")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM,
+    family=Family.TIMING,
+    requires=Requires(),
+    label="dropped samples",
+)
 def drop_rate(ctx: StreamContext) -> MetricResult:
     """Missing-sample estimate on a verified capture timebase."""
     return _cadence(ctx, acquisition=True, kind="drop")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM, family=Family.TIMING, requires=Requires(), label="recorded rate"
+)
 def recorded_hz(ctx: StreamContext) -> MetricResult:
     """Median cadence of the recorded timeline, including generated grids."""
     return _cadence(ctx, acquisition=False, kind="rate")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM,
+    family=Family.TIMING,
+    requires=Requires(),
+    label="uneven recorded timing",
+)
 def recorded_dt_spread_ms(ctx: StreamContext) -> MetricResult:
     """Recorded interval spread; zero does not establish perfect capture timing."""
     return _cadence(ctx, acquisition=False, kind="spread")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM,
+    family=Family.TIMING,
+    requires=Requires(),
+    label="gaps in recorded timing",
+)
 def recorded_drop_estimate(ctx: StreamContext) -> MetricResult:
     """Estimated holes in the recorded grid, not verified sensor frame loss."""
     return _cadence(ctx, acquisition=False, kind="drop")
 
 
-@metric(level=Level.STREAM, family=Family.TIMING, requires=Requires())
+@metric(
+    level=Level.STREAM,
+    family=Family.TIMING,
+    requires=Requires(),
+    label="out-of-order timestamps",
+)
 def monotonic_violations(ctx: StreamContext) -> MetricResult:
     """Repeated/backwards adjacent steps, addressed in original source rows.
 

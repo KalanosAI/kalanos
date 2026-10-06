@@ -573,7 +573,7 @@ class TabularAdapter(ABC):
         groups = _split_by_instance(frame, key_column)
         for _, attribution, part in groups:
             if attribution is Attribution.UNATTRIBUTED:
-                logger.warning(
+                logger.info(
                     "%s: %d row(s) had no value for the instance key %r",
                     path,
                     part.height,
@@ -653,7 +653,7 @@ class TabularAdapter(ABC):
             "%s: %d stream(s) across %d instance(s)", path, len(streams), len(groups)
         )
         if unmapped_count:
-            logger.warning("%s: %d stream(s) left unmapped", path, unmapped_count)
+            logger.info("%s: %d stream(s) left unmapped", path, unmapped_count)
 
         # Step 8: a tabular file is one recording.
         yield Episode(id=path.stem, streams=streams)

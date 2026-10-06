@@ -7,6 +7,7 @@ coverage, and the packaged policies that switch it on, off, or extend it.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import re
 from pathlib import Path
 from typing import cast
 
@@ -379,7 +380,7 @@ def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
 
 
 def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
-    """The plate shows READINESS n/100 and the blocking count; rows mark BLOCK."""
+    """The headline shows Readiness n/100 and the blocking count, and no letter."""
 
     from kalanos.analysis.reporting.card import render_terminal
 
@@ -390,9 +391,9 @@ def test_the_terminal_card_leads_with_readiness_and_shows_no_letter(tmp_path):
     text = render_terminal(report, width=120)
 
     assert report.readiness is not None
-    assert f"READINESS {report.readiness.score:.0f}/100" in text
-    assert "16/20 pass, 4 blocked" in text
-    assert text.count("BLOCK ") >= 4
+    assert re.search(rf"^\s+Readiness\s+{report.readiness.score:.0f}/100", text, re.M)
+    assert "blocked 4" in text
+    assert "Assessment  Blocked episodes found" in text
     header = text.splitlines()[:8]
     assert not any(
         line.split() and line.split()[-1] in {"A", "B", "C", "D", "F"}

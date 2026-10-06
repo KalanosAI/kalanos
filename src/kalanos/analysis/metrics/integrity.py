@@ -108,7 +108,12 @@ def _is_switch(values: pl.Series) -> bool:
     return values.drop_nulls().n_unique() == _SWITCH_DISTINCT_VALUES
 
 
-@metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_ANY_VALUE)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_ANY_VALUE,
+    label="missing values",
+)
 def missing_pct(ctx: ChannelContext) -> MetricResult:
     """Share of a channel's samples that are null or NaN.
 
@@ -145,7 +150,12 @@ def missing_pct(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_A_PAIR)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_A_PAIR,
+    label="repeated values",
+)
 def flatline_pct(ctx: ChannelContext) -> MetricResult:
     """Share of adjacent finite source-order samples that did not change.
 
@@ -230,7 +240,12 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_SPIKE_WINDOW)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_SPIKE_WINDOW,
+    label="sudden changes",
+)
 def spike_pct(ctx: ChannelContext) -> MetricResult:
     """Share of samples more than 6 standard deviations from a centred local window.
 
@@ -299,7 +314,12 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.CHANNEL, family=Family.INTEGRITY, requires=_REQUIRES_A_TREND)
+@metric(
+    level=Level.CHANNEL,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_A_TREND,
+    label="drift",
+)
 def drift(ctx: ChannelContext) -> MetricResult:
     """Least-squares slope of a channel's value against time, in units per minute.
 
@@ -370,6 +390,7 @@ def drift(ctx: ChannelContext) -> MetricResult:
     level=Level.CHANNEL,
     family=Family.INTEGRITY,
     requires=_REQUIRES_REGULAR_AND_SMOOTHABLE,
+    label="low signal-to-noise",
 )
 def snr_db(ctx: ChannelContext) -> MetricResult:
     """Measure a five-sample smooth/residual ratio, with explicit physical context.
@@ -461,7 +482,12 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.INTEGRITY, requires=_REQUIRES_TAXEL_ARRAY)
+@metric(
+    level=Level.STREAM,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_TAXEL_ARRAY,
+    label="dead taxels",
+)
 def dead_taxel_pct(ctx: StreamContext) -> MetricResult:
     """Share of a tactile array's cells whose value never changes across the recording.
 
@@ -503,7 +529,12 @@ def dead_taxel_pct(ctx: StreamContext) -> MetricResult:
     )
 
 
-@metric(level=Level.STREAM, family=Family.INTEGRITY, requires=_REQUIRES_TAXEL_CYCLE)
+@metric(
+    level=Level.STREAM,
+    family=Family.INTEGRITY,
+    requires=_REQUIRES_TAXEL_CYCLE,
+    label="hysteresis",
+)
 def hysteresis(ctx: StreamContext) -> MetricResult:
     """Mean gap between a tactile array's loading and unloading response, as a fraction.
 
