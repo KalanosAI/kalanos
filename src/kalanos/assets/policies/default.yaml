@@ -66,6 +66,10 @@ metrics:
         good: 0.01
         bad: 0.05
 
+  # Reported, never graded: no band is decided.
+  vision.pts_defect_pct:
+    report_only: true
+
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:
     thresholds:

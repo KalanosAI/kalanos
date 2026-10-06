@@ -7,6 +7,7 @@
 # Built-in
 import json
 import random
+from fractions import Fraction
 
 # External
 import polars as pl
@@ -16,7 +17,7 @@ from upath import UPath
 # Internal
 import kalanos.api
 from kalanos.analysis.adapters import video
-from kalanos.analysis.adapters.video import DecodeFailed, VideoPayload
+from kalanos.analysis.adapters.video import DecodeFailed, SegmentPackets, VideoPayload
 from kalanos.analysis.coverage import coverage_lines, vision_metric_coverage
 from kalanos.analysis.metrics import vision
 from kalanos.analysis.metrics.vision import (
@@ -25,6 +26,7 @@ from kalanos.analysis.metrics.vision import (
     exposure_shift_pct,
     frame_count_vs_timebase,
     frozen_frame_pct,
+    pts_defect_pct,
     sharpness_score,
 )
 from kalanos.analysis.models.binding import RequirementsSection
@@ -69,7 +71,12 @@ LEROBOT_VIDEO = (
     LEROBOT_FIXTURE / "videos" / "observation.images.up" / "chunk-000" / "file-000.mp4"
 )
 
-VISION_METRICS = [sharpness_score, exposure_shift_pct, frame_count_vs_timebase]
+VISION_METRICS = [
+    sharpness_score,
+    exposure_shift_pct,
+    frame_count_vs_timebase,
+    pts_defect_pct,
+]
 
 ACTION_TYPE = "action.joint_position_command"
 
@@ -144,6 +151,28 @@ def _full_scan_freeze(stream: Stream):
             stream, episode_streams=[_moving_actions(100)], full_frame_scan=True
         )
     )
+
+
+def _write_paced_video(path: UPath, pts: list[int]) -> None:
+    """Encode one 64x64 gray frame at each of `pts`, in ticks of 1/30 s, at 30 fps."""
+
+    av = pytest.importorskip("av")
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=30, options={"bf": "0"})
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    stream.codec_context.time_base = Fraction(1, 30)
+    pixels = numpy.full((64, 64, 3), 128, dtype=numpy.uint8)
+    for tick in pts:
+        frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+        frame.pts = tick
+        frame.time_base = Fraction(1, 30)
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
 
 
 def _grade(stream: Stream, policy):
@@ -234,6 +263,52 @@ def test_a_short_video_blocks_only_under_a_video_scope():
     )
     reported = _grade(truncated, default_scope).get(metric_id)
     assert reported is None or reported.consequence != Consequence.BLOCK
+
+
+@pytest.mark.parametrize(
+    ("dropped", "declared", "gaps"),
+    [([10, 11, 12], 23, 1), (list(range(1, 40, 2)), 40, 19)],
+    ids=["one_gap", "every_other_frame"],
+)
+def test_pts_defect_pct_catches_dropped_frames(tmp_path, dropped, declared, gaps):
+    """Frames missing from a 30 fps timeline read as gaps, a steady drop included."""
+
+    clean_path, gapped_path = UPath(tmp_path / "clean.mp4"), UPath(tmp_path / "gap.mp4")
+    _write_paced_video(clean_path, list(range(declared)))
+    _write_paced_video(gapped_path, [t for t in range(declared) if t not in dropped])
+    clean, gapped = (
+        _video_stream(
+            VideoPayload(
+                path=path, frame_count=declared, start_s=0.0, end_s=declared / 30
+            ),
+            declared,
+        )
+        for path in (clean_path, gapped_path)
+    )
+
+    check_metric(
+        pts_defect_pct,
+        clean=stream_context(clean, is_regular=True),
+        defective=stream_context(gapped, is_regular=True),
+        policy=load_default_policy(),
+    )
+    result = pts_defect_pct(stream_context(gapped, is_regular=True))
+    assert (result.evidence["duplicates"], result.evidence["gaps"]) == (0, gaps)
+
+
+def test_pts_defect_pct_counts_duplicates(monkeypatch, _fixture_stream):
+    """Two packets presented at one instant count as a duplicate, not a gap."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "packet_times",
+        lambda self: SegmentPackets(pts=(0, 1, 1, 2), time_base=1 / 30, fps=30.0),
+    )
+
+    result = pts_defect_pct(stream_context(_fixture_stream, is_regular=True))
+
+    assert (result.evidence["duplicates"], result.evidence["gaps"]) == (1, 0)
+    assert result.value == pytest.approx(100 / 3)
 
 
 def test_frame_count_vs_timebase_catches_a_truncated_video(_fixture_stream):
@@ -686,7 +761,12 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         tier=ExecutionTier.METADATA,
     )
 
-    for name in ("sharpness_score", "exposure_shift_pct", "frame_count_vs_timebase"):
+    for name in (
+        "sharpness_score",
+        "exposure_shift_pct",
+        "frame_count_vs_timebase",
+        "pts_defect_pct",
+    ):
         assert "metadata tier" in _assert_not_applicable(graded.metrics[name])
 
 
