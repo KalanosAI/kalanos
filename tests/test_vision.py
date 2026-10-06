@@ -639,7 +639,7 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
     )
     monkeypatch.setattr(
         VideoPayload,
-        "count_frames",
+        "packet_times",
         lambda self: pytest.fail("metadata tier counted frames"),
     )
 

@@ -48,6 +48,7 @@ from kalanos.analysis.adapters.video import (
     DecodeLimitReached,
     DecoderUnavailable,
     SampledFrames,
+    SegmentPackets,
     VideoPayload,
 )
 from kalanos.analysis.diagnostics.previews import png_thumbnail
@@ -151,6 +152,12 @@ _CACHE_SIZE = 8
 # - payloads are immutable in normal use,
 #   so an in-place edit of a SyntheticFrames.frames list would read a stale sample.
 _CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Frames | MetricResult]]" = (
+    OrderedDict()
+)
+
+# The packet probe, keyed on id(payload).
+# The value holds the payload so its id is not reused while cached, as in `_CACHE`.
+_PACKETS: "OrderedDict[int, tuple[VideoPayload, SegmentPackets | DecodeFailed]]" = (
     OrderedDict()
 )
 
@@ -577,9 +584,33 @@ def _read(
 
 
 def clear_cache() -> None:
-    """Empty the frame cache."""
+    """Empty the frame and packet caches."""
 
     _CACHE.clear()
+    _PACKETS.clear()
+
+
+def _packets(payload: VideoPayload) -> SegmentPackets | DecodeFailed:
+    """Probe the payload's packets once, keeping a failure as the result.
+
+    Raises
+    ------
+    DecoderUnavailable
+        If PyAV is not installed in this process.
+    """
+
+    entry = _PACKETS.get(id(payload))
+    if entry is not None and entry[0] is payload:
+        _PACKETS.move_to_end(id(payload))
+        return entry[1]
+    try:
+        result: SegmentPackets | DecodeFailed = payload.packet_times()
+    except DecodeFailed as exc:
+        result = exc
+    _PACKETS[id(payload)] = (payload, result)
+    while len(_PACKETS) > _CACHE_SIZE:
+        _PACKETS.popitem(last=False)
+    return result
 
 
 def _laplacian_var(frame: "np.ndarray") -> float:
@@ -850,9 +881,12 @@ def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
         return not_applicable("the stream carries no timestamps")
 
     try:
-        present = payload.count_frames()
-    except (DecoderUnavailable, DecodeFailed) as exc:
+        packets = _packets(payload)
+    except DecoderUnavailable as exc:
         return not_applicable(str(exc))
+    if isinstance(packets, DecodeFailed):
+        return not_applicable(str(packets))
+    present = len(packets.pts)
 
     return MetricResult(
         value=float(abs(present - implied) / implied),
