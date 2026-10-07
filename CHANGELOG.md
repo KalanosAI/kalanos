@@ -16,6 +16,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - `--color/--no-color` on `kalanos grade`; a non-empty `NO_COLOR` acts as `--no-color`.
 - `label=` on `@metric`, naming the condition a finding describes for the terminal card.
+- `kalanos publish` sends a saved report to your private space on hub.kalanos.ai, authenticated with `KALANOS_API_KEY` or `--api-key`.
 
 ## [0.7.0] - 2026-10-03
 

@@ -67,6 +67,8 @@ class Settings(BaseSettings):
         Make frame metrics read every frame instead of a sample,
         overridden for one invocation by the CLI's `--full-frame-scan` option.
         `None` leaves it to the bundle's `vision` section, off by default.
+    hub_url : str
+        Where `kalanos publish` sends reports, set by `KALANOS_HUB_URL`.
     """
 
     model_config = SettingsConfigDict(
@@ -87,6 +89,7 @@ class Settings(BaseSettings):
     remote_max_files: int | None = 10_000
     vision_samples: int | None = Field(default=None, ge=1)
     full_frame_scan: bool | None = None
+    hub_url: str = "https://hub.kalanos.ai"
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀

@@ -276,6 +276,16 @@ kalanos compare old.json new.json --report comparison.json   # what changed betw
 
 `inspect` also reads reports written by 0.6 (schema 6.3–6.5) without changing them, and points out where their old fields contradict each other. `compare` aligns exact recorded subject identities and refuses a numeric readiness comparison when they're missing or incompatible; see [docs/DECISIONS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md#cli-gate) for its exit codes. Audit sampling remains planned.
 
+**Publish a report to your hub account**
+
+```bash
+export KALANOS_API_KEY=klns_live_…                   # create one at hub.kalanos.ai/settings
+kalanos publish report.json                          # a Hugging Face dataset publishes under its own name
+kalanos publish local.json --name acme/pick-place    # a local dataset needs one
+```
+
+Published reports are private to your account; a new dataset beyond your plan's limit is refused, and re-publishing a dataset you already have is always allowed.
+
 **Measure a metric's benign and detection rates**
 
 ```bash

@@ -55,6 +55,14 @@ from kalanos.benchmark import (
 from kalanos.core.log import Verbosity, configure_logging, logging_to
 from kalanos.core.settings import get_settings
 from kalanos.plugins import list_adapters, list_metrics, list_reporters
+from kalanos.publish import (
+    PublishError,
+    check_hub_url,
+    check_key,
+    check_name,
+    load_report,
+    publish_report,
+)
 from kalanos.scaffold import scaffold_adapter, scaffold_metric
 
 
@@ -668,6 +676,78 @@ def inspect(
         )
         table.add_row(item.id, e.status.value, reasons)
     console.print(table)
+
+
+@app.command(help="Publish a saved report to your private space on hub.kalanos.ai.")
+def publish(
+    report: Annotated[
+        Path,
+        typer.Argument(help="A report JSON written by `kalanos grade --report`."),
+    ],
+    api_key: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key",
+            envvar="KALANOS_API_KEY",
+            show_envvar=True,
+            help="Your hub API key. Prefer the KALANOS_API_KEY environment variable.",
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help=(
+                "ORG/NAME to publish a local dataset under. "
+                "Hosted datasets use their own name."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Send a saved report, unchanged, to the hub account `api_key` belongs to.
+
+    Any report `grade` wrote can be sent, whatever its exit code was.
+
+    Exit codes
+    ----------
+    0
+        The hub accepted the report.
+    2
+        Anything was refused or failed: a missing or malformed key,
+        an unreadable report, a local dataset without `name`,
+        or a hub that refused the report or could not be reached.
+        Nothing is published, and the reason goes to stderr.
+
+    Parameters
+    ----------
+    report : Path
+        The report JSON, read relative to the working directory.
+    api_key : str or None
+        A `klns_` key from the hub's settings page.
+        Only its first 16 characters ever appear in a message.
+    name : str or None
+        `ORG/NAME` for a report of a local dataset, which has no name of its own.
+
+    Raises
+    ------
+    typer.Exit
+        Code 2 on any `PublishError`.
+    """
+
+    try:
+        hub = check_hub_url(get_settings().hub_url)
+        key = check_key(api_key, hub)
+        payload = load_report(report)
+        name = check_name(payload, name)
+        published = publish_report(report=payload, api_key=key, name=name, hub_url=hub)
+    except PublishError as exc:
+        print(f"kalanos: {exc}", file=sys.stderr)
+        raise typer.Exit(code=2) from exc
+
+    print(f"Submitted {published.report_id}. It is private to your account.")
+    print(f"Check its status at {published.dashboard}")
+    if published.page:
+        print(f"Report: {published.page}")
 
 
 @app.command(
