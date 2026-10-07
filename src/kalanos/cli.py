@@ -17,7 +17,7 @@ import shutil
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TextIO
 
 # External
 import typer
@@ -56,6 +56,7 @@ from kalanos.core.log import Verbosity, configure_logging, logging_to
 from kalanos.core.settings import get_settings
 from kalanos.plugins import list_adapters, list_metrics, list_reporters
 from kalanos.publish import (
+    Published,
     PublishError,
     check_hub_url,
     check_key,
@@ -283,6 +284,32 @@ def grade(
             ),
         ),
     ] = "blocked,unknown",
+    publish: Annotated[
+        bool,
+        typer.Option(
+            "--publish",
+            help="Also publish the report to your private space on hub.kalanos.ai.",
+        ),
+    ] = False,
+    api_key: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key",
+            envvar="KALANOS_API_KEY",
+            show_envvar=True,
+            help="Your hub API key. Prefer the KALANOS_API_KEY environment variable.",
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help=(
+                "ORG/NAME to publish a local dataset under. "
+                "Hosted datasets use their own name."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Grade a recording, or every recording in a folder.
 
@@ -299,7 +326,8 @@ def grade(
         `review` and `unknown` say the data needs a decision or more evidence.
     2
         Invalid configuration or an operational failure: a missing path,
-        a malformed bundle, an unknown taxonomy type, an unwritable report.
+        a malformed bundle, an unknown taxonomy type, an unwritable report,
+        or, with `publish`, a report the hub did not accept.
         Takes precedence over 1 when both apply.
 
     Parameters
@@ -347,6 +375,12 @@ def grade(
         and withhold the report if they changed.
     fail_on : str
         Comma-separated eligibility statuses that fail the audit.
+    publish : bool
+        Send the report to the hub after printing it, whatever the gate decides.
+    api_key : str or None
+        A `klns_` key from the hub's settings page, used only with `publish`.
+    name : str or None
+        `ORG/NAME` for a local dataset, used only with `publish`.
 
     Raises
     ------
@@ -360,6 +394,9 @@ def grade(
         or when writing `report` failed: an unsupported suffix, a missing directory,
         an unwritable path.
         The reason goes to stderr and nothing is written to stdout.
+        Code 2 also when `name` is passed without `publish`,
+        when `publish` is set and the key, the hub URL or `name` is refused
+        before grading, or when publishing the graded report failed.
         Code 1 when the gate in `fail_on` trips.
     """
 
@@ -384,6 +421,22 @@ def grade(
         if color is not None
         else not os.environ.get("NO_COLOR") and sys.stdout.isatty()
     )
+
+    if not publish and name is not None:
+        print("kalanos: --name needs --publish", file=sys.stderr)
+        raise typer.Exit(code=2)
+    # (hub_url, api_key), set exactly when `publish` is.
+    credentials: tuple[str, str] | None = None
+    if publish:
+        try:
+            hub = check_hub_url(settings.hub_url)
+            credentials = (hub, check_key(api_key, hub))
+            # Only the format of `name` can be checked before grading: whether
+            # one is needed depends on the graded source.
+            check_name({"source": {"repo_id": "x"}}, name)
+        except PublishError as exc:
+            print(f"kalanos: {exc}", file=sys.stderr)
+            raise typer.Exit(code=2) from exc
 
     # Step 1: grade. The reason is printed, not logged: it explains a non-zero exit,
     # and must reach the user even at a verbosity that silences ERROR records.
@@ -447,6 +500,31 @@ def grade(
                 report_path=str(destination) if destination is not None else None,
             )
         )
+
+    # Step 3b: publish, on stderr so `--json` stdout stays one JSON document.
+    # A report with operational errors still goes: the hub decides what it can publish.
+    if credentials is not None:
+        hub, key = credentials
+        payload = json.loads(render_json(result))
+        try:
+            name = check_name(payload, name)
+        except PublishError as exc:
+            print(f"kalanos: {exc}", file=sys.stderr)
+            if destination is not None and destination.suffix == ".json":
+                print(
+                    f"kalanos: to publish it, run "
+                    f"`kalanos publish {destination} --name ORG/NAME`",
+                    file=sys.stderr,
+                )
+            raise typer.Exit(code=2) from exc
+        try:
+            published = publish_report(
+                report=payload, api_key=key, name=name, hub_url=hub
+            )
+        except PublishError as exc:
+            print(f"kalanos: {exc}", file=sys.stderr)
+            raise typer.Exit(code=2) from exc
+        _print_published(published, file=sys.stderr)
 
     # Step 4: the decision gate, from the one place decisions live. An
     # incomplete audit fails the default gate; operational errors already
@@ -744,10 +822,16 @@ def publish(
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
 
-    print(f"Submitted {published.report_id}. It is private to your account.")
-    print(f"Check its status at {published.dashboard}")
+    _print_published(published, file=sys.stdout)
+
+
+def _print_published(published: Published, file: TextIO) -> None:
+    """Tell the user where to follow a report the hub accepted."""
+
+    print(f"Submitted {published.report_id}. It is private to your account.", file=file)
+    print(f"Check its status at {published.dashboard}", file=file)
     if published.page:
-        print(f"Report: {published.page}")
+        print(f"Report: {published.page}", file=file)
 
 
 @app.command(

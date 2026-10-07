@@ -1,4 +1,6 @@
-"""Verifies `kalanos publish` against a local HTTP server standing in for the hub.
+"""Verifies `kalanos publish` and `kalanos grade --publish`.
+
+A local HTTP server stands in for the hub.
 
 The key must never reach output,
 so every CLI result passes through `_run`, which checks that.
@@ -20,9 +22,12 @@ import pytest
 from typer.testing import CliRunner
 
 # Internal
-from kalanos import publish
+from kalanos import api, publish
 from kalanos.cli import app
 from kalanos.publish import PublishError, check_hub_url
+
+# Local
+from helpers import CSV_FIXTURE, FIXTURES_DIR
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -328,6 +333,144 @@ def test_help_does_not_show_the_key():
     result = _run("publish", "--help", env={"KALANOS_API_KEY": KEY})
 
     assert result.exit_code == 0
+
+
+def test_grade_publish_sends_the_graded_report(hub):
+    hub.answers.append(ACCEPTED)
+
+    result = _run(
+        "grade",
+        str(CSV_FIXTURE),
+        "--publish",
+        "--name",
+        "acme/set",
+        env={"KALANOS_API_KEY": KEY},
+    )
+
+    assert result.exit_code == 0, result.stderr
+    [request] = hub.requests
+    assert request["body"]["name"] == "acme/set"
+    assert "Submitted rep_123" in result.stderr
+    assert "Submitted" not in result.stdout
+
+
+def test_grade_publish_json_keeps_stdout_one_document(hub):
+    hub.answers.append(ACCEPTED)
+
+    result = _run(
+        "grade",
+        str(CSV_FIXTURE),
+        "--json",
+        "--publish",
+        "--api-key",
+        KEY,
+        "--name",
+        "acme/set",
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert json.loads(result.stdout) == hub.requests[0]["body"]["report"]
+    assert "Submitted rep_123" in result.stderr
+
+
+def test_grade_publish_keeps_the_gate_exit_code(hub):
+    hub.answers.append(ACCEPTED)
+
+    result = _run(
+        "grade", str(FIXTURES_DIR), "--publish", "--api-key", KEY, "--name", "acme/set"
+    )
+
+    assert result.exit_code == 1, result.stderr
+    assert len(hub.requests) == 1
+
+
+def test_grade_publish_with_operational_errors_still_sends_then_exits_two(
+    hub, monkeypatch
+):
+    hub.answers.append(ACCEPTED)
+    graded = api.grade(str(CSV_FIXTURE))
+    broken = graded.model_copy(
+        update={"operational_errors": [{"stage": "test", "error": "failed"}]}
+    )
+    monkeypatch.setattr(api, "grade", lambda *args, **kwargs: broken)
+
+    result = _run(
+        "grade", str(CSV_FIXTURE), "--publish", "--api-key", KEY, "--name", "acme/set"
+    )
+
+    assert result.exit_code == 2
+    assert len(hub.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("flags", "reason"),
+    [
+        (["--name", "acme/set"], "KALANOS_API_KEY"),
+        (["--api-key", KEY, "--name", "a b/c"], "is not ORG/NAME"),
+    ],
+    ids=["no-key", "bad-name"],
+)
+def test_grade_publish_refuses_before_grading(hub, monkeypatch, flags, reason):
+    def fail(*args, **kwargs):
+        pytest.fail("grade ran")
+
+    monkeypatch.setattr(api, "grade", fail)
+
+    result = _run("grade", str(CSV_FIXTURE), "--publish", *flags)
+
+    assert result.exit_code == 2
+    assert reason in result.stderr
+    assert hub.requests == []
+
+
+def test_grade_publish_refusal_exits_two_over_a_tripped_gate(hub):
+    hub.answers.append((422, {}, {"status": "KALANOS_UNSUPPORTED", "error": "no"}))
+
+    result = _run(
+        "grade", str(FIXTURES_DIR), "--publish", "--api-key", KEY, "--name", "acme/set"
+    )
+
+    assert result.exit_code == 2
+    assert "KALANOS_UNSUPPORTED" in result.stderr
+
+
+def test_grade_publish_of_a_local_dataset_needs_a_name(hub, tmp_path):
+    report = tmp_path / "report.json"
+
+    result = _run(
+        "grade",
+        str(CSV_FIXTURE),
+        "--report",
+        str(report),
+        "--publish",
+        "--api-key",
+        KEY,
+    )
+
+    assert result.exit_code == 2
+    assert f"kalanos publish {report} --name" in result.stderr
+    assert hub.requests == []
+
+
+def test_grade_refuses_a_name_without_publish(hub):
+    result = _run("grade", str(CSV_FIXTURE), "--name", "acme/set")
+
+    assert result.exit_code == 2
+    assert "--publish" in result.stderr
+    assert hub.requests == []
+
+
+@pytest.mark.parametrize(
+    ("flags", "env"),
+    [(["--api-key", KEY], None), ([], {"KALANOS_API_KEY": KEY})],
+    ids=["flag", "env"],
+)
+def test_grade_without_publish_ignores_the_key(hub, flags, env):
+    result = _run("grade", str(CSV_FIXTURE), *flags, env=env)
+
+    assert result.exit_code == 0, result.stderr
+    assert "Assessment" in result.stdout
+    assert hub.requests == []
 
 
 @pytest.mark.parametrize(
