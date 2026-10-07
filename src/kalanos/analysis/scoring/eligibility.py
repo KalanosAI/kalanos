@@ -16,7 +16,12 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 
 # Internal
-from kalanos.analysis.models.binding import RequirementsSection
+from kalanos.analysis.coverage import unsampled_cameras
+from kalanos.analysis.models.binding import (
+    SAMPLED_VIDEO_QUALITY_CAPABILITY,
+    VIDEO_QUALITY_CAPABILITY,
+    RequirementsSection,
+)
 from kalanos.analysis.models.domain import UNMAPPED_TAXONOMY_PREFIX
 from kalanos.analysis.models.eligibility import (
     Consequence,
@@ -168,15 +173,20 @@ def _requirement_reasons(
         for capability in sorted(keys):
             row = rows.get(capability)
             if row is None or row.eligible == 0 or row.computed != row.eligible:
+                detail = f"required capability {capability!r} was not fully evaluated"
+                if capability in (
+                    VIDEO_QUALITY_CAPABILITY,
+                    SAMPLED_VIDEO_QUALITY_CAPABILITY,
+                ):
+                    causes = unsampled_cameras(episode.streams)
+                    if causes:
+                        detail += ": " + "; ".join(causes)
                 reasons.append(
                     EligibilityReason(
                         id=f"capability:{capability}",
                         kind=ReasonKind.REQUIREMENT,
                         status=EligibilityStatus.UNKNOWN,
-                        detail=(
-                            f"required capability {capability!r} "
-                            "was not fully evaluated"
-                        ),
+                        detail=detail,
                     )
                 )
         metrics = {r.key: r for r in episode.coverage.metrics}

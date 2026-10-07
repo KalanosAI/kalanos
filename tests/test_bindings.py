@@ -50,6 +50,7 @@ from kalanos.analysis.models.domain import (
     Stream,
     TimestampDtype,
 )
+from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.metrics import (
@@ -786,6 +787,33 @@ def test_a_completed_sample_satisfies_sampled_video_quality_and_grades_vision():
         assert "capability:sampled_video_quality" not in _vision_reasons(episode)
         camera = next(s for s in episode.streams if s.kind == "video")
         assert camera.metrics["sharpness_score"].status != MetricStatus.REPORT_ONLY
+
+
+def test_a_missing_camera_file_names_its_cause(tmp_path):
+    """An unreadable camera leaves the episode unknown, its reason naming why."""
+
+    dataset = tmp_path / "dataset"
+    shutil.copytree(FIXTURE, dataset)
+    for mp4 in dataset.glob("videos/**/*.mp4"):
+        mp4.unlink()
+    bundle = Bundle(
+        requirements=RequirementsSection(
+            required_capabilities=["sampled_video_quality"]
+        )
+    )
+
+    report = grade(dataset, bundle=bundle)
+
+    for episode in report.episodes:
+        assert episode.eligibility is not None
+        assert episode.eligibility.status == EligibilityStatus.UNKNOWN
+        [reason] = [
+            r
+            for r in episode.eligibility.reasons
+            if r.id == "capability:sampled_video_quality"
+        ]
+        assert "observation.images.up: " in reason.detail
+        assert "No such file" in reason.detail
 
 
 def test_sampled_video_quality_without_the_decoder_is_unknown(monkeypatch):
