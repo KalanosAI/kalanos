@@ -406,6 +406,9 @@ class CameraSummary(BaseModel):
         How the camera is exposed in every compared episode: descriptive.
     blur_outliers, exposure_outliers : list[str]
         The episodes flagged as blurrier, or exposed unlike, the camera.
+    repeated_footage : list of list of str
+        Each group of episodes whose camera's sampled frames hash identically,
+        in episode order.
     """
 
     camera: str
@@ -420,6 +423,7 @@ class CameraSummary(BaseModel):
     trait: Literal["dark", "white"] | None = None
     blur_outliers: list[str] = Field(default_factory=list)
     exposure_outliers: list[str] = Field(default_factory=list)
+    repeated_footage: list[list[str]] = Field(default_factory=list)
 
 
 class NotObservable(BaseModel):

@@ -48,10 +48,10 @@ LEROBOT_VIDEO = (
 
 # The ways a vision metric reads a video payload.
 READS = [
-    lambda payload: payload.count_frames(),
+    lambda payload: len(payload.packet_times().pts),
     lambda payload: list(payload.gray_windows([(0, 2)], 64)),
 ]
-READ_IDS = ["count_frames", "gray_windows"]
+READ_IDS = ["packet_times", "gray_windows"]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -216,7 +216,7 @@ def test_sampling_and_counting_read_each_fixture_segment(start_s, end_s, frame_c
     assert [(frame.shape, str(frame.dtype)) for frame in frames] == [
         ((128, 128), "uint8")
     ] * 2
-    assert payload.count_frames() == frame_count
+    assert len(payload.packet_times().pts) == frame_count
 
 
 @pytest.mark.parametrize(
@@ -332,7 +332,26 @@ def test_counting_a_segment_past_the_end_of_the_file_finds_fewer_frames():
         path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30
     )
 
-    assert payload.count_frames() == 6
+    assert len(payload.packet_times().pts) == 6
+
+
+def test_a_whole_file_payload_counts_past_its_segment():
+    """Verify a whole-file payload counts every packet the file holds, past `end_s`."""
+
+    av = pytest.importorskip("av")
+    with av.open(str(LEROBOT_VIDEO)) as container:
+        total = sum(
+            1
+            for packet in container.demux(container.streams.video[0])
+            if packet.pts is not None and packet.size
+        )
+    bounded = VideoPayload(path=LEROBOT_VIDEO, frame_count=4, start_s=0.0, end_s=4 / 30)
+    whole = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=4, start_s=0.0, end_s=4 / 30, whole_file=True
+    )
+
+    assert len(bounded.packet_times().pts) == 4
+    assert len(whole.packet_times().pts) == total > 4
 
 
 def test_sampling_and_counting_read_a_remote_path(remote_video):
@@ -340,7 +359,7 @@ def test_sampling_and_counting_read_a_remote_path(remote_video):
 
     payload = VideoPayload(path=remote_video, frame_count=8, start_s=0.0, end_s=8 / 30)
 
-    assert payload.count_frames() == 8
+    assert len(payload.packet_times().pts) == 8
     assert [len(window) for window in _windows(payload, [(0, 8)], 16)] == [8]
 
 
@@ -382,7 +401,7 @@ def test_b_frame_segments_count_and_sample_their_own_frames(tmp_path, start):
 
     (first,), (last,) = _windows(payload, [(0, 1), (19, 20)], 16)
 
-    assert payload.count_frames() == 20
+    assert len(payload.packet_times().pts) == 20
     assert float(first.mean()) == pytest.approx(4 * start, abs=2)
     assert float(last.mean()) == pytest.approx(4 * (start + 19), abs=2)
     (window,) = _windows(payload, [(0, 20)], 16)
@@ -408,7 +427,7 @@ def test_episodes_sharing_a_remote_file_open_it_once(monkeypatch, remote_video):
         payload = VideoPayload(
             path=remote_video, frame_count=frame_count, start_s=start_s, end_s=end_s
         )
-        assert payload.count_frames() == frame_count
+        assert len(payload.packet_times().pts) == frame_count
         assert [len(w) for w in _windows(payload, [(0, frame_count)], 16)] == [
             frame_count
         ]
@@ -423,6 +442,6 @@ def test_a_remote_read_that_fails_drops_its_handle(remote_video):
     payload = VideoPayload(path=remote_video, frame_count=8, start_s=0.0, end_s=8 / 30)
 
     with pytest.raises(DecodeFailed):
-        payload.count_frames()
+        payload.packet_times()
 
     assert str(remote_video) not in video._REMOTE_HANDLES

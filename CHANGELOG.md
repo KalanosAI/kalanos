@@ -16,6 +16,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - `--color/--no-color` on `kalanos grade`; a non-empty `NO_COLOR` acts as `--no-color`.
 - `label=` on `@metric`, naming the condition a finding describes for the terminal card.
+- `vision.repeated_footage_vs_camera` flags episodes whose camera's sampled frames hash identically to another episode's, and `Report.cameras[].repeated_footage` lists them.
 
 ## [0.7.0] - 2026-10-03
 

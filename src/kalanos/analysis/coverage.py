@@ -185,7 +185,24 @@ def _unsampled_reason(stream):
                 return reason
     if stream.frames is not None and stream.frames.missing_rows:
         return f"{len(stream.frames.missing_rows)} requested frame(s) were not decoded"
-    return "vision metrics did not sample the stream"
+    return "vision metrics did not sample the stream, cause unknown"
+
+
+def unsampled_cameras(streams: list[GradedStream]) -> list[str]:
+    """Name each camera stream the vision metrics did not sample, and why.
+
+    Returns
+    -------
+    list of str
+        One entry per unsampled camera:
+        its source field, else its taxonomy type, then the reason.
+    """
+
+    return [
+        f"{s.source_field or s.taxonomy_type}: {_unsampled_reason(s)}"
+        for s in streams
+        if is_camera_footage(s.kind or "", s.taxonomy_type) and _sampled(s) is None
+    ]
 
 
 def vision_metric_coverage(streams: list[GradedStream]) -> tuple[bool, bool]:

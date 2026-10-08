@@ -75,6 +75,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "exposure_shift_pct": None,
     "exposure_level": None,
     "frame_count_vs_timebase": None,
+    "pts_defect_pct": None,
     "frozen_frame_pct": Defect.FROZEN_FRAMES,
 }
 
