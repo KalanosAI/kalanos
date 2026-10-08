@@ -340,9 +340,10 @@ wheels = [
 
 [[package]]
 name = "kalanos"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "jinja2" },
     { name = "platformdirs" },
     { name = "polars" },
@@ -408,6 +409,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", marker = "extra == 'video'", specifier = ">=13" },
+    { name = "certifi", specifier = ">=2026.7.22" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.31.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
