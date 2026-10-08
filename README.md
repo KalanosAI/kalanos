@@ -159,11 +159,12 @@ How to read it, top to bottom:
 
 ### What it catches
 
-Every metric answers one of four questions, and none of them needs labels:
+Every metric answers one of five questions, and none of them needs labels:
 
 - **What does the clock say?** Backwards and repeated timestamps, the recorded cadence, interval spread and gaps, and where each timestamp came from (captured, logged, generated from frame numbers, unknown). When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred. Kalanos reports what the recorded timeline shows, and only grades *capture* timing when the recording carries evidence that its timestamps are capture times; see [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#timing).
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
+- **Is the camera footage usable?** Blurred or frozen footage, exposure swings and blank frames, a video holding more or fewer frames than its timestamps, duplicated or gapped frame timestamps, and the same footage repeated across episodes. Frames are sampled, 10 per camera by default, and need `kalanos[video]`; they grade only under a scope that requires video quality, such as `--profile vision-imitation-v1`. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#vision).
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
 **A few bad episodes can't hide in an average.** A finding with an authorized **block** consequence makes its episode blocking. Critical statistical findings without matching calibration require **review**. Blocking episodes count as zero:
@@ -197,7 +198,7 @@ A rule affecting every episode does not become harmless through prevalence. Cali
 
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
-Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `annotation`) to see one group.
+Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `vision`, `annotation`) to see one group.
 
 ### What it does not do
 
