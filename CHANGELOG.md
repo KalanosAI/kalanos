@@ -4,7 +4,7 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
-## [Unreleased]
+## [0.7.1] - 2026-10-07
 
 Report schema 7.0.0.
 `kalanos grade` prints a shorter card, and camera footage gets integrity checks read from the video container.
@@ -152,6 +152,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.7.1]: https://github.com/KalanosAI/kalanos/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/KalanosAI/kalanos/compare/v0.6.5...v0.7.0
 [0.6.5]: https://github.com/KalanosAI/kalanos/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/KalanosAI/kalanos/compare/v0.6.3...v0.6.4
