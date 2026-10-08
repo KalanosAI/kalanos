@@ -85,7 +85,8 @@ def _video_stream(
     """Build one video Stream for `video_key`, its payload lazy and undecoded.
 
     One mp4 holds exactly one episode in this layout, so the payload spans
-    the whole file rather than a from/to slice of a shared one.
+    the whole file rather than a from/to slice of a shared one,
+    and its packet count reads to the file's end, past the timestamps.
 
     Parameters
     ----------
@@ -131,6 +132,7 @@ def _video_stream(
             frame_count=len(timestamps),
             start_s=0.0,
             end_s=len(timestamps) / fps,
+            whole_file=True,
         ),
         source_path=video_path,
         source_field=video_key,

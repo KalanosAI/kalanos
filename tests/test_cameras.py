@@ -8,8 +8,14 @@
 import pytest
 
 # Internal
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
-from kalanos.analysis.models.report import GradedEpisode, GradedStream
+from kalanos.analysis.models.report import (
+    CameraFrame,
+    CameraFrames,
+    GradedEpisode,
+    GradedStream,
+)
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.analysis.scoring.cameras import compare_cameras
 
@@ -43,10 +49,37 @@ def _stream(
     taxonomy_type: str = CAMERA,
     instance: str | None = None,
     source_field: str | None = "observation.images.cam_high",
+    luma: list[str] | None = None,
+    missing_rows: list[int] | None = None,
 ) -> GradedStream:
-    """A graded camera stream with the given blur and exposure results."""
+    """A graded camera stream with the given blur and exposure results,
+    and frame hashes when `luma` is given."""
 
+    frames = None
+    if luma is not None:
+        rows = list(range(len(luma)))
+        frames = CameraFrames(
+            requested_rows=rows,
+            missing_rows=missing_rows or [],
+            frames=[
+                CameraFrame(
+                    source_row=row,
+                    shape=[2, 2],
+                    blur_score=1.0,
+                    clipped_fraction=0.0,
+                    luma_sha256=digest,
+                )
+                for row, digest in zip(rows, luma, strict=True)
+            ],
+            decoded_frames=len(luma),
+            adjacent_pairs_examined=0,
+            identical_adjacent_pairs=[],
+            sample_plan="evenly_spaced_v1",
+            parameters={},
+            availability=Availability.COMPUTED,
+        )
     return GradedStream(
+        frames=frames,
         taxonomy_type=taxonomy_type,
         instance=instance,
         kind="video",
@@ -238,3 +271,55 @@ def test_cameras_are_keyed_by_source_field_before_taxonomy_type():
         "observation.images.cam_right",
     ]
     assert all(s.n_episodes == 10 for s in summaries)
+
+
+def _hashed(*sequences: list[str]) -> list[GradedEpisode]:
+    """One clean episode per hash sequence, each holding one camera stream."""
+
+    return [
+        _episode(
+            index,
+            _stream(CLEAN_VARIANCES[index], CLEAN_LEVELS[index], luma=luma),
+        )
+        for index, luma in enumerate(sequences)
+    ]
+
+
+def test_only_the_identical_pair_is_flagged():
+    """Two episodes hashing alike repeat each other's footage;
+    a third sharing a prefix does not."""
+
+    summaries, findings = compare_cameras(
+        _hashed(["a", "b", "c"], ["a", "b", "c"], ["a", "b", "d"]),
+        grades_vision=True,
+    )
+
+    assert [(f.metric_id, f.episode_id) for f in findings] == [
+        ("vision.repeated_footage_vs_camera", "episode_0"),
+        ("vision.repeated_footage_vs_camera", "episode_1"),
+    ]
+    assert summaries[0].repeated_footage == [["episode_0", "episode_1"]]
+
+
+def test_a_constant_camera_is_not_repeated_footage():
+    """A camera showing one frame throughout cannot tell its episodes apart."""
+
+    summaries, findings = compare_cameras(
+        _hashed(["a", "a", "a"], ["a", "a", "a"]), grades_vision=True
+    )
+
+    assert findings == []
+    assert summaries[0].repeated_footage == []
+
+
+def test_an_incomplete_read_is_not_compared():
+    """A read that missed rows hashes only part of the episode."""
+
+    episodes = _hashed(["a", "b", "c"], ["a", "b", "c"])
+    episodes[1].streams[0] = _stream(
+        CLEAN_VARIANCES[1], CLEAN_LEVELS[1], luma=["a", "b", "c"], missing_rows=[2]
+    )
+
+    _summaries, findings = compare_cameras(episodes, grades_vision=True)
+
+    assert findings == []

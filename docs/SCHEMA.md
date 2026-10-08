@@ -16,7 +16,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `readiness` | `Readiness` | `formula_id`, `score` or `null`, `reasons`, `passing_quality`. Replaces the 6.x shape. |
 | `sufficiency` | `Sufficiency` | `status` and per-requirement `checks`. |
 | `binding_conflicts` | `list[BindingConflict]` | Every feature where a lower-precedence mapping source disagreed with the winner. |
-| `cameras` | `list[CameraSummary]` | One summary per camera compared across its episodes: key, episodes, whether it was compared and why not, median `laplacian_var` and `exposure_level`, its trait, and the episodes flagged by each rule. See `docs/METRICS.md`. |
+| `cameras` | `list[CameraSummary]` | One summary per camera compared across its episodes: key, episodes, whether blur and exposure were compared and why not, median `laplacian_var` and `exposure_level`, its trait, the episodes flagged by each rule, and the groups of episodes with repeated footage. See `docs/METRICS.md`. |
 
 ## New per-episode and per-finding fields
 

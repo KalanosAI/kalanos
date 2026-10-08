@@ -1,14 +1,14 @@
 """The vision family.
 
-Five metrics grade camera footage:
+Six metrics grade camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
   (10 by default);
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
-- frame_count_vs_timebase counts the container's packets, decoding nothing,
-  under a full scan too.
+- frame_count_vs_timebase and pts_defect_pct share one packet probe,
+  decoding nothing, under a full scan too.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
@@ -48,6 +48,7 @@ from kalanos.analysis.adapters.video import (
     DecodeLimitReached,
     DecoderUnavailable,
     SampledFrames,
+    SegmentPackets,
     VideoPayload,
 )
 from kalanos.analysis.diagnostics.previews import png_thumbnail
@@ -136,6 +137,10 @@ _MOVING_PCT = 90
 # A run counts when the actions move over more than half of it (rda).
 _MOVING_MAJORITY = 0.5
 
+# A presentation step longer than this many declared frame periods has lost a frame:
+# half a frame of slack, as `VideoPayload` allows when it places a segment.
+_GAP_PERIODS = 1.5
+
 # The metrics every decodable camera stream computes; the others can be
 # not_applicable by design (no action stream, no video container).
 CORE_METRICS = ("sharpness_score", "exposure_shift_pct")
@@ -151,6 +156,12 @@ _CACHE_SIZE = 8
 # - payloads are immutable in normal use,
 #   so an in-place edit of a SyntheticFrames.frames list would read a stale sample.
 _CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Frames | MetricResult]]" = (
+    OrderedDict()
+)
+
+# The packet probe, keyed on id(payload).
+# The value holds the payload so its id is not reused while cached, as in `_CACHE`.
+_PACKETS: "OrderedDict[int, tuple[VideoPayload, SegmentPackets | DecodeFailed]]" = (
     OrderedDict()
 )
 
@@ -577,9 +588,33 @@ def _read(
 
 
 def clear_cache() -> None:
-    """Empty the frame cache."""
+    """Empty the frame and packet caches."""
 
     _CACHE.clear()
+    _PACKETS.clear()
+
+
+def _packets(payload: VideoPayload) -> SegmentPackets | DecodeFailed:
+    """Probe the payload's packets once, keeping a failure as the result.
+
+    Raises
+    ------
+    DecoderUnavailable
+        If PyAV is not installed in this process.
+    """
+
+    entry = _PACKETS.get(id(payload))
+    if entry is not None and entry[0] is payload:
+        _PACKETS.move_to_end(id(payload))
+        return entry[1]
+    try:
+        result: SegmentPackets | DecodeFailed = payload.packet_times()
+    except DecodeFailed as exc:
+        result = exc
+    _PACKETS[id(payload)] = (payload, result)
+    while len(_PACKETS) > _CACHE_SIZE:
+        _PACKETS.popitem(last=False)
+    return result
 
 
 def _laplacian_var(frame: "np.ndarray") -> float:
@@ -826,6 +861,8 @@ def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
     `present` counts the container's packets in the segment, decoding nothing,
     under a full scan too: a decode is bounded by the timestamps,
     so it could never find a frame past them.
+    On a whole-file payload the count runs to the end of the file,
+    so surplus frames past the timestamps show.
 
     Parameters
     ----------
@@ -850,9 +887,12 @@ def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
         return not_applicable("the stream carries no timestamps")
 
     try:
-        present = payload.count_frames()
-    except (DecoderUnavailable, DecodeFailed) as exc:
+        packets = _packets(payload)
+    except DecoderUnavailable as exc:
         return not_applicable(str(exc))
+    if isinstance(packets, DecodeFailed):
+        return not_applicable(str(packets))
+    present = len(packets.pts)
 
     return MetricResult(
         value=float(abs(present - implied) / implied),
@@ -862,6 +902,64 @@ def frame_count_vs_timebase(ctx: StreamContext) -> MetricResult:
             "present": int(present),
             "implied": int(implied),
             "truncated": bool(present < implied),
+        },
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="frame timestamp defects")
+def pts_defect_pct(ctx: StreamContext) -> MetricResult:
+    """Share of presentation intervals that repeat a timestamp or skip a frame.
+
+    The intervals are the steps between the segment's sorted packet timestamps.
+    A step of zero is a duplicate;
+    one longer than `_GAP_PERIODS` declared frame periods is a gap.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with the percentage of defective intervals,
+        or `not_applicable` when there is no readable video file
+        or fewer than two frames.
+    """
+
+    payload = _camera_payload(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if not isinstance(payload, VideoPayload):
+        return not_applicable("the stream's frames do not come from a video file")
+    numpy = load_numpy()
+    if numpy is None:
+        return not_applicable("spacing frames needs numpy; add kalanos[video]")
+    try:
+        packets = _packets(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(packets, DecodeFailed):
+        return not_applicable(str(packets))
+    if len(packets.pts) < 2:
+        return not_applicable("fewer than two frames to space")
+
+    # The container's average rate falls with every dropped frame,
+    # so a steady drop would widen its own threshold;
+    # the dataset's declared rate does not move.
+    span = payload.end_s - payload.start_s
+    fps = (
+        payload.frame_count / span
+        if payload.frame_count > 0 and span > 0
+        else packets.fps
+    )
+    steps = numpy.diff(numpy.asarray(packets.pts))
+    duplicates = int((steps == 0).sum())
+    gaps = int((steps * packets.time_base > _GAP_PERIODS / fps).sum())
+    return MetricResult(
+        value=100 * (duplicates + gaps) / len(steps),
+        unit="%",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "intervals": len(steps),
+            "duplicates": duplicates,
+            "gaps": gaps,
+            "period_s": 1 / fps,
         },
     )
 
