@@ -485,3 +485,13 @@ def test_hub_url_accepts_https_and_local_http(url):
 def test_hub_url_refuses_anything_else(url):
     with pytest.raises(PublishError):
         check_hub_url(url)
+
+
+def test_tls_context_trusts_certifi_without_system_cas(tmp_path, monkeypatch):
+    # Stands in for a Python whose default CA paths are missing.
+    empty = tmp_path / "empty.pem"
+    empty.touch()
+    monkeypatch.setenv("SSL_CERT_FILE", str(empty))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path))
+
+    assert publish.tls_context().cert_store_stats()["x509_ca"] > 0

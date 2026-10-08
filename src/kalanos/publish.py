@@ -14,6 +14,7 @@ every failure is a `PublishError` whose message is ready for the user.
 import importlib.metadata
 import json
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+# External
+import certifi
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -88,6 +92,20 @@ def key_prefix(key: str) -> str:
     """Return the part of a key the dashboard shows, e.g. `klns_live_a1c8f4`."""
 
     return key[:16]
+
+
+def tls_context() -> ssl.SSLContext:
+    """Return a context that trusts the system's CAs and certifi's.
+
+    Some Python builds look for CAs at a path the system doesn't have,
+    and then fail every verification.
+    certifi's bundle covers that; the system store still covers a CA it lacks,
+    such as a corporate proxy's.
+    """
+
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
 
 
 def check_key(key: str | None, hub_url: str) -> str:
@@ -217,7 +235,9 @@ def publish_report(
             "User-Agent": f"kalanos/{importlib.metadata.version('kalanos')}",
         },
     )
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(
+        _NoRedirect, urllib.request.HTTPSHandler(context=tls_context())
+    )
 
     for attempt in (1, 2):
         try:
