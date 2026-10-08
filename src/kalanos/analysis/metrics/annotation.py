@@ -31,7 +31,7 @@ from kalanos.analysis.models.metrics import (
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-@metric(level=Level.EPISODE, family=Family.ANNOTATION)
+@metric(level=Level.EPISODE, family=Family.ANNOTATION, label="missing task instruction")
 def task_instruction_missing(ctx: EpisodeContext) -> MetricResult:
     """Flag an episode that carries no task instruction.
 

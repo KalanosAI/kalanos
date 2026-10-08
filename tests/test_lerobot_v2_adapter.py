@@ -103,6 +103,7 @@ def test_a_camera_mp4_holds_exactly_its_own_episode(monkeypatch):
         assert stream.payload.start_s == 0.0
         assert stream.payload.end_s == len(stream.timestamps) / 30
         assert len(stream.payload) == len(stream.timestamps)
+        assert stream.payload.whole_file is True
 
 
 def test_an_episode_past_the_chunk_size_is_read_from_the_next_chunk():

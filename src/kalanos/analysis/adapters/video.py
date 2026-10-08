@@ -168,6 +168,27 @@ class SampledFrames(Protocol):
 
 
 @dataclass(frozen=True)
+class SegmentPackets:
+    """The packets a video segment holds, as the container demuxes them.
+
+    Attributes
+    ----------
+    pts : tuple of int
+        Every counted packet's presentation timestamp, sorted, in `time_base` ticks.
+    time_base : float
+        Seconds per tick.
+    fps : float
+        The rate the segment was placed by:
+        the container's average rate,
+        or the segment's declared one when the file has none.
+    """
+
+    pts: tuple[int, ...]
+    time_base: float
+    fps: float
+
+
+@dataclass(frozen=True)
 class VideoPayload:
     """A video stream's frames, decoded only when `fetch` is called.
 
@@ -181,12 +202,16 @@ class VideoPayload:
         Where in `path` this stream's frames begin.
     end_s : float
         Where in `path` this stream's frames end.
+    whole_file : bool
+        Whether `path` holds this episode alone,
+        so frames past `end_s` still belong to it.
     """
 
     path: UPath
     frame_count: int
     start_s: float
     end_s: float
+    whole_file: bool = False
 
     def __len__(self) -> int:
         """Return the declared frame count, reading nothing.
@@ -419,10 +444,11 @@ class VideoPayload:
             _forget_remote_handle(self.path)
             raise DecodeFailed(f"{self.path}: {exc}") from exc
 
-    def count_frames(self) -> int:
-        """Count the packets in this segment, decoding nothing.
+    def packet_times(self) -> SegmentPackets:
+        """Read the timestamp of every packet in this segment, decoding nothing.
 
-        The count is what the container holds, not capped at `frame_count`.
+        The packets are what the container holds, not capped at `frame_count`.
+        On a `whole_file` payload the segment runs to the end of the file.
 
         Raises
         ------
@@ -435,27 +461,34 @@ class VideoPayload:
 
         if av is None:
             raise DecoderUnavailable(self.path)
-        count = 0
+        collected: list[int] = []
         try:
             with self._open(av) as container:
                 stream = container.streams.video[0]
-                lo, hi, _fps = self._bounds(stream)
+                lo, hi, fps = self._bounds(stream)
+                time_base = float(stream.time_base)
                 container.seek(lo, stream=stream)
                 for packet in container.demux(stream):
                     if packet.pts is None or packet.size == 0:
+                        continue
+                    if self.whole_file:
+                        if lo <= packet.pts:
+                            collected.append(packet.pts)
                         continue
                     # Packets arrive in decode order, so with B-frames a pts past hi
                     # can precede ones below it; dts never exceeds pts and only grows.
                     if packet.dts is not None and packet.dts >= hi:
                         break
                     if lo <= packet.pts < hi:
-                        count += 1
+                        collected.append(packet.pts)
         # A remote open fails with OSError from fsspec, not with an FFmpegError.
         except (av.error.FFmpegError, OSError) as exc:
             # A handle that failed mid-read may be broken; the next payload reopens.
             _forget_remote_handle(self.path)
             raise DecodeFailed(f"{self.path}: {exc}") from exc
-        return count
+        return SegmentPackets(
+            pts=tuple(sorted(collected)), time_base=time_base, fps=fps
+        )
 
     def fetch(self) -> "list[np.ndarray]":
         """Decode and return every frame between `start_s` and `end_s`.

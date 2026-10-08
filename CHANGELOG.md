@@ -4,6 +4,31 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.7.1] - 2026-10-07
+
+Report schema 7.0.0.
+`kalanos grade` prints a shorter card, and camera footage gets integrity checks read from the video container.
+
+### Added
+
+- `--color/--no-color` on `kalanos grade`; a non-empty `NO_COLOR` acts as `--no-color`, and a spinner shows on stderr in a terminal. ([#33](https://github.com/KalanosAI/kalanos/pull/33))
+- `label=` on `@metric`, naming the condition a finding describes on the card; every built-in metric has one. ([#33](https://github.com/KalanosAI/kalanos/pull/33))
+- `vision.repeated_footage_vs_camera` flags episodes whose camera's sampled frames hash identically to another episode's, requesting review under a vision scope; `Report.cameras[].repeated_footage` lists the groups. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+- `vision.pts_defect_pct`, the share of a video's packet timestamps that are duplicated or leave a gap longer than 1.5 frame periods, report-only. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+
+### Changed
+
+- `kalanos grade` prints a shorter card with the same sections for every format: verdict, episodes needing attention, findings by source, coverage and files not analysed; `--json` stays the interface for scripts. ([#33](https://github.com/KalanosAI/kalanos/pull/33))
+- The card is plain ASCII when stdout is not a terminal. ([#33](https://github.com/KalanosAI/kalanos/pull/33))
+- Skipped or unresolved files, unmapped streams and rows with no instance key log at `info` instead of `warning`, and the card gains a `mapping` row; `warning` now means trouble with the run itself. ([#33](https://github.com/KalanosAI/kalanos/pull/33))
+- `vision.frame_count_vs_timebase` blocks through the contract route under a scope that grades vision, instead of requesting review. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+- An episode's `unknown` reason for an unevaluated video capability names each unsampled camera and why. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+- `VideoPayload.packet_times()` replaces `count_frames()`, and both packet metrics share one cached read per segment. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+
+### Fixed
+
+- LeRobot v2 videos are counted to the end of the episode's file, so frames past its last timestamp are no longer missed. ([#34](https://github.com/KalanosAI/kalanos/pull/34))
+
 ## [0.7.0] - 2026-10-03
 
 Report schema 7.0.0.
@@ -127,6 +152,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.7.1]: https://github.com/KalanosAI/kalanos/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/KalanosAI/kalanos/compare/v0.6.5...v0.7.0
 [0.6.5]: https://github.com/KalanosAI/kalanos/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/KalanosAI/kalanos/compare/v0.6.3...v0.6.4

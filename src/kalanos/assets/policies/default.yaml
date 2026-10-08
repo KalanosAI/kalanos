@@ -56,12 +56,19 @@ metrics:
   vision.exposure_level: {}
 
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
-  # real recordings.
+  # real recordings. A count mismatch breaks a declared invariant with direct
+  # evidence, so it blocks through the contract route without a calibration
+  # manifest; the band itself stays candidate.
   vision.frame_count_vs_timebase:
+    route: contract
     thresholds:
       default:
         good: 0.01
         bad: 0.05
+
+  # Reported, never graded: no band is decided.
+  vision.pts_defect_pct:
+    report_only: true
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:

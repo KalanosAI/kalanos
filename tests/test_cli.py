@@ -74,6 +74,12 @@ def _write_collision_csv(path: Path) -> None:
         csv.writer(handle).writerows(rows)
 
 
+def _is_plain(text: str) -> bool:
+    """Whether `text` is ASCII with no terminal escape codes."""
+
+    return text.isascii() and "\x1b[" not in text
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -113,7 +119,7 @@ def test_grade_a_file_prints_a_card_and_exits_zero():
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
 
 
 def test_grade_a_folder_prints_a_card_and_exits_zero():
@@ -122,10 +128,10 @@ def test_grade_a_folder_prints_a_card_and_exits_zero():
     result = runner.invoke(app, ["grade", str(FIXTURES_DIR)])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" in result.stdout
+    assert "Assessment" in result.stdout
     # README.md and the fixtures with no CSV pathology are real, explained
     # refusals — the card names each one rather than dropping it silently.
-    assert "NOT ANALYSED" in result.stdout
+    assert "Not analysed" in result.stdout
 
 
 def test_grade_refuses_a_folder_with_nothing_to_grade(tmp_path):
@@ -149,10 +155,39 @@ def test_json_flag_prints_the_model_with_no_card():
     result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--json"])
 
     assert result.exit_code in (0, 1)
-    assert "OVERALL" not in result.stdout
+    assert "Assessment" not in result.stdout
     assert len(result.stdout.splitlines()) == 1
     report = Report.model_validate_json(result.stdout)
     assert report.episodes
+
+
+def test_grade_prints_plain_ascii_when_stdout_is_not_a_terminal():
+    """CliRunner is not a TTY, so the default card is plain."""
+
+    assert _is_plain(runner.invoke(app, ["grade", str(CSV_FIXTURE)]).stdout)
+
+
+def test_grade_color_styles_the_card_even_when_piped():
+    """--color forces the styled card onto a non-terminal stdout."""
+
+    result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--color"])
+
+    assert "\x1b[" in result.stdout
+
+
+def test_grade_card_points_at_the_written_report(tmp_path):
+    """--report adds a Report row naming where the file went."""
+
+    destination = tmp_path / "r.json"
+
+    result = runner.invoke(
+        app, ["grade", str(CSV_FIXTURE), "--report", str(destination)]
+    )
+
+    assert any(
+        line.startswith("  Report") and str(destination) in line
+        for line in result.stdout.splitlines()
+    )
 
 
 @pytest.mark.parametrize(
@@ -394,7 +429,7 @@ def test_a_second_subcommand_can_be_added_without_touching_grade():
         assert ping_result.exit_code in (0, 1)
         assert ping_result.stdout.strip() == "pong"
         assert grade_result.exit_code in (0, 1)
-        assert "OVERALL" in grade_result.stdout
+        assert "Assessment" in grade_result.stdout
     finally:
         app.registered_commands = [
             command

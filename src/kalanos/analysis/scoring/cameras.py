@@ -2,9 +2,10 @@
 
 Every vision metric judges one camera stream inside one episode,
 so a camera exposed one way throughout is its own norm,
-and an episode blurrier or darker than the same camera elsewhere goes unnoticed.
+and an episode blurrier or darker than the same camera elsewhere,
+or repeating another episode's footage, goes unnoticed.
 This pass reads each camera's per-episode results after grading,
-describes the camera, and flags the episodes unlike it.
+describes the camera, and flags the episodes unlike it or repeating another's footage.
 Its findings request review or are reported; they never move a score.
 """
 
@@ -73,6 +74,7 @@ class _Sample:
     exposure_level: float | None
     dark_share: float | None
     bright_share: float | None
+    luma: tuple[str, ...] | None
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -98,8 +100,26 @@ def _computed(result: MetricResult | None) -> MetricResult | None:
     return result
 
 
+def _luma(stream: GradedStream) -> tuple[str, ...] | None:
+    """The luminance hashes of a complete read, in order,
+    or `None` when they cannot identify the footage."""
+
+    frames = stream.frames
+    if (
+        frames is None
+        or frames.availability != Availability.COMPUTED
+        or frames.missing_rows
+    ):
+        return None
+    hashes = tuple(f.luma_sha256 for f in frames.frames if f.luma_sha256 is not None)
+    # A constant camera, black throughout for one, would pair unrelated episodes.
+    if len(set(hashes)) < 2:
+        return None
+    return hashes
+
+
 def _sample(episode_id: str, stream: GradedStream) -> _Sample:
-    """Read the blur and exposure values of one camera stream."""
+    """Read the blur, exposure and luminance-hash values of one camera stream."""
 
     sharpness = _computed(stream.metrics.get("sharpness_score"))
     level = _computed(stream.metrics.get("exposure_level"))
@@ -111,6 +131,7 @@ def _sample(episode_id: str, stream: GradedStream) -> _Sample:
         exposure_level=level.value if level else None,
         dark_share=level.evidence.get("dark_share") if level else None,
         bright_share=level.evidence.get("bright_share") if level else None,
+        luma=_luma(stream),
     )
 
 
@@ -143,8 +164,12 @@ def _finding(
     unit: str,
     evidence: dict,
     grades_vision: bool,
+    evidence_strength: Literal["deterministic", "statistical", "heuristic"] = (
+        "statistical"
+    ),
 ) -> Finding:
-    """An episode-scoped finding that `sample` is unlike its camera."""
+    """An episode-scoped finding that `sample` is unlike its camera,
+    or repeating another episode's footage."""
 
     stream = sample.stream
     return Finding(
@@ -165,7 +190,7 @@ def _finding(
         source_field=stream.source_field,
         source_path=stream.source_path,
         subject_level=Level.STREAM,
-        evidence_strength="statistical",
+        evidence_strength=evidence_strength,
         evidence={"camera": key, **evidence},
         consequence=Consequence.REVIEW if grades_vision else Consequence.REPORT_ONLY,
         route=None,
@@ -182,6 +207,8 @@ def compare_cameras(
     or darker or brighter, than the same camera in the other episodes.
     A camera is compared only once at least `_MIN_EPISODES` of its episodes
     have the value.
+    An episode is also flagged when its camera's sampled frames hash identically
+    to another episode's, for which two episodes suffice.
 
     Parameters
     ----------
@@ -194,7 +221,8 @@ def compare_cameras(
     Returns
     -------
     tuple of (list of CameraSummary, list of Finding)
-        One summary per camera, and one finding per episode unlike its camera.
+        One summary per camera,
+        and one finding per episode unlike its camera or repeating another's footage.
     """
 
     # Step 1: group every camera stream by the camera it belongs to,
@@ -284,6 +312,37 @@ def compare_cameras(
             elif all((s.bright_share or 0) >= _TRAIT_SHARE for s, _v in exposed):
                 trait = "white"
 
+        # Step 4: footage repeated across episodes, with no minimum episode count.
+        # A match says the footage repeats, not that the whole episode was copied:
+        # a video linked to the wrong episode matches,
+        # and so does a camera replaying its output.
+        by_luma: dict[tuple[str, ...], list[_Sample]] = {}
+        for sample in samples:
+            if sample.luma is not None:
+                by_luma.setdefault(sample.luma, []).append(sample)
+        repeated_footage: list[list[str]] = []
+        for luma, group in by_luma.items():
+            if len(group) < 2:
+                continue
+            ids = [s.episode_id for s in group]
+            repeated_footage.append(ids)
+            for sample in group:
+                findings.append(
+                    _finding(
+                        sample,
+                        key,
+                        metric_id="vision.repeated_footage_vs_camera",
+                        value=float(len(group)),
+                        unit="episodes",
+                        evidence={
+                            "repeated_in": [i for i in ids if i != sample.episode_id],
+                            "n_frames": len(luma),
+                        },
+                        grades_vision=grades_vision,
+                        evidence_strength="deterministic",
+                    )
+                )
+
         first = samples[0].stream
         summaries.append(
             CameraSummary(
@@ -303,6 +362,7 @@ def compare_cameras(
                 trait=trait,
                 blur_outliers=blur_outliers,
                 exposure_outliers=exposure_outliers,
+                repeated_footage=repeated_footage,
             )
         )
     return summaries, findings

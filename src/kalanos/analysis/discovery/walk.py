@@ -68,7 +68,7 @@ def _log_classification(item: SourceCandidate | SkippedSource) -> None:
         logger.debug("%s: candidate", item.path)
         return
 
-    logger.warning("%s: skipped (%s)", item.path, item.reason.value)
+    logger.info("%s: skipped (%s)", item.path, item.reason.value)
 
 
 def _hidden_depth(path: UPath, root: UPath) -> int | None:

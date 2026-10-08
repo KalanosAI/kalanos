@@ -11,8 +11,11 @@ so that a second command reuses the pipeline rather than reimplementing part of 
 
 # Built-in
 import json
+import logging
+import os
 import shutil
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Annotated
 
@@ -49,7 +52,7 @@ from kalanos.benchmark import (
     render_markdown,
     run_benchmark,
 )
-from kalanos.core.log import Verbosity, configure_logging
+from kalanos.core.log import Verbosity, configure_logging, logging_to
 from kalanos.core.settings import get_settings
 from kalanos.plugins import list_adapters, list_metrics, list_reporters
 from kalanos.scaffold import scaffold_adapter, scaffold_metric
@@ -146,6 +149,17 @@ def grade(
             help="Print the Report model to stdout instead of the report card.",
         ),
     ] = False,
+    color: Annotated[
+        bool | None,
+        typer.Option(
+            "--color/--no-color",
+            help=(
+                "Style the report card for a terminal, or print plain ASCII. "
+                "Defaults to styled when stdout is a terminal; "
+                "NO_COLOR also turns it off."
+            ),
+        ),
+    ] = None,
     max_remote_gb: Annotated[
         float | None,
         typer.Option(
@@ -291,6 +305,9 @@ def grade(
         stdout is decided by `as_json` either way.
     as_json : bool
         Print the Report model to stdout instead of the report card.
+    color : bool or None
+        Style the card with color and Unicode, or print it as plain ASCII.
+        `None` styles it only when stdout is a terminal and `NO_COLOR` is unset.
     max_remote_gb : float or None
         Refuse a remote dataset whose listed size is over this many gigabytes.
         `None` falls back to `Settings.remote_max_bytes`.
@@ -354,6 +371,11 @@ def grade(
     except ValueError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
+    use_color = (
+        color
+        if color is not None
+        else not os.environ.get("NO_COLOR") and sys.stdout.isatty()
+    )
 
     # Step 1: grade. The reason is printed, not logged: it explains a non-zero exit,
     # and must reach the user even at a verbosity that silences ERROR records.
@@ -361,24 +383,38 @@ def grade(
         # Pairs, not a dict: two `--map` flags for one feature must reach the
         # resolver so a contradiction is refused instead of last-one-wins.
         mapping = [parse_map_argument(text) for text in map_ or []]
-        result = api.grade(
-            path,
-            limits=limits,
-            mapping=mapping,
-            mapping_file=map_file,
-            sidecar=not no_sidecar,
-            bundle=profile,
-            tier=tier,
-            vision_samples=vision_samples,
-            full_frame_scan=True if full_frame_scan else None,
-            hash_source=hash_source,
+        show_progress = (
+            sys.stderr.isatty()
+            and not as_json
+            and logging.getLogger(__name__).getEffectiveLevel() > logging.INFO
         )
+        progress = (
+            Console(stderr=True).status(f"Grading {path}", spinner="line")
+            if show_progress
+            else nullcontext()
+        )
+        # Entering the status replaces sys.stderr with a proxy that prints log
+        # records above the spinner, so the handler is pointed at it afterwards.
+        with progress, logging_to(sys.stderr):
+            result = api.grade(
+                path,
+                limits=limits,
+                mapping=mapping,
+                mapping_file=map_file,
+                sidecar=not no_sidecar,
+                bundle=profile,
+                tier=tier,
+                vision_samples=vision_samples,
+                full_frame_scan=True if full_frame_scan else None,
+                hash_source=hash_source,
+            )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
 
     # Step 2: write the report file, if asked, before anything reaches stdout,
     # so a failed write leaves stdout empty rather than a half card.
+    destination: Path | None = None
     if report is not None:
         destination = (
             report if report.is_absolute() else get_settings().reports_dir / report
@@ -394,9 +430,15 @@ def grade(
     if as_json:
         print(render_json(result))
     else:
-        is_terminal = sys.stdout.isatty()
-        width = shutil.get_terminal_size().columns if is_terminal else None
-        print(render_terminal(result, color=is_terminal, width=width))
+        width = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
+        print(
+            render_terminal(
+                result,
+                color=use_color,
+                width=width,
+                report_path=str(destination) if destination is not None else None,
+            )
+        )
 
     # Step 4: the decision gate, from the one place decisions live. An
     # incomplete audit fails the default gate; operational errors already

@@ -86,52 +86,85 @@ That's the whole workflow. Everything below is detail.
 
 ## What you get back
 
-Every run prints a report card to the terminal. It looks like this (numbers illustrative):
+Every run prints a short summary to the terminal (plain ASCII here; colored in a terminal):
 
 ```
-╭─────────────────────────────────────────────────────────────────────────────╮
-│ KALANOS · DATASET REPORT                                                    │
-│ /data/my_demos                    READINESS 80/100  96/120 pass, 24 blocked │
-│ 120 recordings · 38 findings · 2 not analysed · 1 no schema                 │
-╰─────────────────────────────────────────────────────────────────────────────╯
-RECORDINGS ─────────────────────────────────────────────────────────────────
-       RECORDING                      SCORE                METRICS
-                                                  PASS WARN FAIL SKIP
-       OVERALL             ████████░░░░  71.4     3104  212   41  880
-BLOCK  ep_017.parquet      ███░░░░░░░░░  24.0       18    6    9    7
-BLOCK  ep_052.parquet      ███████░░░░░  58.3       26    4    2    7
-  …
-  +112 more
-FINDINGS ───────────────────────────────────────────────────────────────────
-FAIL ep_017/proprio.joint_position/joint_3.flatline_pct
-    0.62; run_length=410
-WARN ep_052/timing.jitter_cv
-    0.31
-NOT ANALYSED ───────────────────────────────────────────────────────────────
-FILE                       REASON
-meta/session.json          no_time_index
-schema 7.0.0 · policy v1 · 4.12s
+$ kalanos grade tests/fixtures/ --no-color
+Kalanos - tests/fixtures
+
+  Assessment  Incomplete - inventory not fully read
+  Readiness   undefined - inventory incomplete: whole-dataset fractions are not published
+  Episodes    13 - eligible 13 - review 0 - blocked 0 - unknown 0
+  Scope       numeric-core-v1
+
+Findings
+  armA:proprio.ee_pose/tcp_pose_z_mm  1 episode - low signal-to-noise  report-only
+  armB:proprio.ee_pose/tcp_pose_z_mm  1 episode - repeated values  report-only
+  armC:proprio.ee_pose/tcp_pose_x_mm  1 episode - low signal-to-noise  report-only
+  + 6 more sources in report
+
+Coverage
+  numeric    13/13 episodes
+  mapping    10 stream types unmapped - type them with --map
+  inventory  incomplete - 0 episodes unassessed - 1 sources refused
+
+Not analysed
+  README.md        no adapter
+  video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
+
+schema 7.0.0 - policy v1 - 0.20s
+```
+
+The same card on a dataset with video: the coverage rows grow with the data.
+
+```
+$ kalanos grade tests/fixtures/lerobot_v3_tiny --profile vision-imitation-v1 --no-color
+Kalanos - tests/fixtures/lerobot_v3_tiny
+
+  Assessment  Review required
+  Readiness   undefined - 2 episode(s) require review
+  Episodes    2 - eligible 0 - review 2 - blocked 0 - unknown 0
+  Scope       vision-imitation-v1
+
+Needs attention
+  lerobot_v3_tiny/episode_000000  review   83.3  low sharpness, brightness changes
+  lerobot_v3_tiny/episode_000001  review   83.3  low sharpness, brightness changes
+
+Findings
+  unmapped.observation.images.up  2 episodes - low sharpness, brightness changes  review
+
+Coverage
+  numeric        2/2 episodes
+  video quality  2/2 episodes - 14 frames examined
+  mapping        2 stream types unmapped - type them with --map
+  inventory      complete
+
+schema 7.0.0 - policy v1 - 0.12s
 ```
 
 How to read it, top to bottom:
 
 | Part | What it tells you | What to do with it |
 |---|---|---|
-| **Readiness, eligibility counts** | Readiness out of 100 (blocked episodes count as zero, or `undefined` with its reasons when episodes need review or more evidence), how many episodes pass, are blocked, need review or are unknown, and a one-line reason | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
-| **Recordings** | Every recording, worst first, with its own score; `BLOCK` marks the ones with blocking findings | Start at the top: these are the episodes to fix or drop |
-| **PASS / WARN / FAIL / SKIP** | How many metric checks landed in each bucket | A high score with a large `SKIP` count means less of the data was actually graded. Check coverage before trusting it |
-| **Findings** | The worst problems, addressed down to `episode/stream/channel.metric`, with the measured value and evidence | Open that exact channel; no hunting |
-| **Not analysed / No schema** | Files Kalanos declined to grade, each with a reason | Nothing is dropped silently. Fix the file or confirm it's expected |
+| **Assessment and episodes** | The verdict, readiness out of 100 (or `undefined` with its reason), and how many episodes are eligible, in review, blocked or unknown | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
+| **Needs attention** | The episodes that did not pass, worst first, with their status, score and the conditions behind it | Start at the top: these are the episodes to fix, review or drop |
+| **Findings** | Each source with findings, how many episodes it affects, what was observed, and whether it blocks, needs review or is only reported | Open that source in the full report for the values and evidence |
+| **Coverage** | For each check that applies to this data, how many episodes it was computed on, how many stream types went unmapped, and whether the whole inventory was read | A gap here means less was checked than the counts suggest; read its reason before trusting the verdict. Type unmapped streams with `--map` so their metrics apply |
+| **Not analysed** | Files Kalanos declined to grade, each with a reason | Nothing is dropped silently. Fix the file or confirm it's expected |
+| **Report** | Where `--report` wrote the full report | Open it for every episode and finding |
+
+`--no-color` prints plain ASCII; `--color` keeps the styling when piping. Detailed values, evidence and every episode are in `--report` and `kalanos inspect`.
 
 `--report report.html` renders the same information as a page you can send to a teammate or a data vendor.
 
 ### What it catches
 
-Every metric answers one of four questions, and none of them needs labels:
+Every metric answers one of five questions, and none of them needs labels:
 
 - **What does the clock say?** Backwards and repeated timestamps, the recorded cadence, interval spread and gaps, and where each timestamp came from (captured, logged, generated from frame numbers, unknown). When timing breaks, everything breaks: the model learns "saw X, did Y" from pairs that never co-occurred. Kalanos reports what the recorded timeline shows, and only grades *capture* timing when the recording carries evidence that its timestamps are capture times; see [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#timing).
 - **Is the signal intact?** Flatlined or stuck sensors, saturated channels, gaps. A stuck encoder can look statistically normal; Kalanos checks run lengths per channel.
 - **Was the motion good?** Jerky, vibrating or saturated movement from a nervous teleoperator, a badly tuned controller, or hardware on its way out.
+- **Is the camera footage usable?** Blurred or frozen footage, exposure swings and blank frames, a video holding more or fewer frames than its timestamps, duplicated or gapped frame timestamps, and the same footage repeated across episodes. Frames are sampled, 10 per camera by default, and need `kalanos[video]`; they grade only under a scope that requires video quality, such as `--profile vision-imitation-v1`. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md#vision).
 - **Was every episode told what to do?** Episodes recorded without a task instruction, which a language-conditioned policy (a VLA) cannot learn from. Every episode's instructions appear in the report, so you can see exactly what each was told.
 
 **A few bad episodes can't hide in an average.** A finding with an authorized **block** consequence makes its episode blocking. Critical statistical findings without matching calibration require **review**. Blocking episodes count as zero:
@@ -165,7 +198,7 @@ A rule affecting every episode does not become harmless through prevalence. Cali
 
 Some checks are **measured but not yet graded**: repeated or backwards timestamps (`monotonic_violations`) and missing task instructions (`task_instruction_missing`). They appear in every report with their evidence but don't change the score, because their thresholds are still to be settled against real recordings rather than guessed. See [docs/METRICS.md](https://github.com/KalanosAI/kalanos/blob/main/docs/METRICS.md).
 
-Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `annotation`) to see one group.
+Run `kalanos metrics` to see every check installed, or `kalanos metrics --family timing` (also `integrity`, `motion`, `vision`, `annotation`) to see one group.
 
 ### What it does not do
 
