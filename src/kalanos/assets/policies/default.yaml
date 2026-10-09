@@ -63,6 +63,16 @@ metrics:
   # read alike here; Report.cameras compares each camera across episodes instead.
   vision.exposure_level: {}
 
+  # Reported, never graded: measured on the calibration datasets (docs/METRICS.md), no band decided.
+  vision.blank_frame_pct:
+    report_only: true
+  vision.contrast_score:
+    report_only: true
+  vision.dark_frame_pct:
+    report_only: true
+  vision.bright_frame_pct:
+    report_only: true
+
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
   # real recordings. A count mismatch breaks a declared invariant with direct
   # evidence, so it blocks through the contract route without a calibration

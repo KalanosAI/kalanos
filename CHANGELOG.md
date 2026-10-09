@@ -14,6 +14,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - The report records, for each metric in each episode and across the dataset, how many channels, streams or cameras it graded and how many it flagged, and each graded metric's points (report schema 7.1.0). The card's new "Flagged channels" section and `kalanos inspect` show the counts.
 - A `core` flag on a policy's metric entries marks the metrics a family needs graded before it scores in an episode. The default policy marks the core timing, integrity, motion, vision and annotation metrics (listed in `docs/METRICS.md`), and an `extends` override keeps the base's flag unless it sets one.
 - Two report-only vision metrics read from video packet timestamps, decoding nothing: `max_gap_s`, the longest gap between a camera's frames and where it sits, and `camera_sync_skew_ms`, the spread of an episode's cameras' offsets against their recorded timestamps, on one-file-per-episode videos.
+- Report-only vision metrics `blank_frame_pct`, `contrast_score`, `dark_frame_pct` and `bright_frame_pct`, read from the frames the vision metrics already sample. `dark_frame_pct` counts both crushed frames and dim ones, so a camera dimmed throughout reads 100.
 
 ### Changed
 

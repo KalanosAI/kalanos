@@ -23,7 +23,11 @@ from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics import vision
 from kalanos.analysis.metrics.registry import run_episode_metrics
 from kalanos.analysis.metrics.vision import (
+    blank_frame_pct,
+    bright_frame_pct,
     camera_frames,
+    contrast_score,
+    dark_frame_pct,
     exposure_level,
     exposure_shift_pct,
     frame_count_vs_timebase,
@@ -936,6 +940,25 @@ def test_without_an_action_stream_only_the_sampled_frames_are_decoded(monkeypatc
     assert calls == [10]
 
 
+def test_new_frame_metrics_decode_nothing_extra(monkeypatch):
+    """The four frame-statistic metrics decode no frame beyond the shared sample."""
+
+    calls = _count_decodes(monkeypatch)
+    ctx = stream_context(clean_frames(frames=1000))
+
+    for func in (
+        sharpness_score,
+        exposure_shift_pct,
+        blank_frame_pct,
+        contrast_score,
+        dark_frame_pct,
+        bright_frame_pct,
+    ):
+        func(ctx)
+
+    assert calls == [10]
+
+
 def test_a_depth_stream_sharing_a_cached_payload_is_still_skipped():
     """A camera's cached sample is never handed to a depth stream built on it."""
 
@@ -1073,6 +1096,141 @@ def test_exposure_level_reports_crushed_and_clipped_pixels(level, share):
     assert result.evidence[share] == 1
 
 
+def _uniform_stream(level: int) -> Stream:
+    """30 frames of 16x16x3 at one gray level."""
+
+    frames = [numpy.full((16, 16, 3), level, numpy.uint8) for _ in range(30)]
+    return clean_frames(frames=30).model_copy(
+        update={"payload": SyntheticFrames(frames=frames)}
+    )
+
+
+def test_blank_frame_pct_reads_100_on_blank_frames():
+    """A stream blank throughout reads 100, and exposure_shift_pct still counts it."""
+
+    ctx = stream_context(_uniform_stream(128))
+
+    assert blank_frame_pct(ctx).value == 100
+    assert exposure_shift_pct(ctx).value == 100
+
+
+def test_blank_frame_pct_counts_only_blank_frames():
+    """Blank frames spliced into a clean stream are counted and located."""
+
+    clean = clean_frames(frames=100)
+    assert isinstance(clean.payload, SyntheticFrames)
+    grey = [frame * 0 + 128 for frame in clean.payload.frames]
+
+    result = blank_frame_pct(stream_context(_with_frames(clean, grey, 20, 60)))
+
+    assert result.value == pytest.approx(40.0)
+    assert all(20 <= index < 60 for index in result.evidence["bad_indices"])
+    intervals = [(i.start, i.end_exclusive) for i in result.support.intervals]
+    assert intervals == [(i, i + 1) for i in result.evidence["bad_indices"]]
+
+
+def test_contrast_score_is_low_on_a_flat_stream():
+    """Compressing a stream's gray levels to a narrow band lowers its contrast score."""
+
+    clean = clean_frames(frames=30)
+    assert isinstance(clean.payload, SyntheticFrames)
+    flat = clean.model_copy(
+        update={
+            "payload": SyntheticFrames(
+                frames=[
+                    (frame * (10 / 255) + 120).astype(numpy.uint8)
+                    for frame in clean.payload.frames
+                ]
+            )
+        }
+    )
+
+    low = contrast_score(stream_context(flat)).value
+    high = contrast_score(stream_context(clean)).value
+    assert low is not None and high is not None
+    assert low < 15
+    assert high > 50
+
+
+def test_a_blank_dark_stream_is_flagged_by_both():
+    """A uniformly dark camera is dark and blank, so exposure_shift_pct fails it too."""
+
+    ctx = stream_context(_uniform_stream(2))
+
+    assert dark_frame_pct(ctx).value == 100
+    assert bright_frame_pct(ctx).value == 0
+    assert exposure_shift_pct(ctx).value == 100
+
+
+def test_a_stream_dim_throughout_is_flagged_but_reads_clean_on_shift():
+    """A camera dimmed to a tenth reads 100 dark, though few of its pixels are crushed.
+
+    Its P95 sits near 20 and under a sixth of its pixels at or below the dark level,
+    both far from the rules' thresholds;
+    exposure_shift_pct reads it clean, since every frame is dimmed alike.
+    """
+
+    clean = clean_frames(frames=30)
+    assert isinstance(clean.payload, SyntheticFrames)
+    dim = clean.model_copy(
+        update={
+            "payload": SyntheticFrames(
+                frames=[
+                    (frame * 0.1).astype(numpy.uint8) for frame in clean.payload.frames
+                ]
+            )
+        }
+    )
+    ctx = stream_context(dim)
+
+    assert dark_frame_pct(stream_context(clean)).value == 0
+    assert dark_frame_pct(ctx).value == 100
+    assert blank_frame_pct(ctx).value == 0
+    assert exposure_shift_pct(ctx).value == 0
+
+
+def test_a_stream_mostly_crushed_but_not_dim_is_flagged():
+    """A frame three quarters black is dark, though its P95 is bright."""
+
+    frame = numpy.zeros((16, 16, 3), numpy.uint8)
+    frame[12:] = 200
+    crushed = clean_frames(frames=30).model_copy(
+        update={"payload": SyntheticFrames(frames=[frame.copy() for _ in range(30)])}
+    )
+
+    assert dark_frame_pct(stream_context(crushed)).value == 100
+
+
+def test_bright_frame_pct_flags_a_white_stream():
+    """A stream white in every frame is wholly bright and not dark."""
+
+    ctx = stream_context(_uniform_stream(255))
+
+    assert bright_frame_pct(ctx).value == 100
+    assert dark_frame_pct(ctx).value == 0
+
+
+@pytest.mark.parametrize(
+    "func", [blank_frame_pct, contrast_score, dark_frame_pct, bright_frame_pct]
+)
+def test_new_frame_metrics_are_report_only(func):
+    """Each new frame metric is reported, and the default policy grades none of them."""
+
+    stream = clean_frames(frames=30)
+
+    assert func(stream_context(stream)).status == MetricStatus.REPORT_ONLY
+    graded, _findings = grade_stream(
+        stream,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+    )
+    result = graded.metrics[func.__name__]
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.evidence["ungraded_reason"] == "report_only by policy design"
+
+
 def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
     """Under the metadata tier every vision metric is skipped before any decode."""
 
@@ -1180,7 +1338,15 @@ def test_a_capped_read_is_unavailable_and_keeps_its_frames():
         vision=VisionSpec(sample_frames=2, max_decode_frames=4),
     )
 
-    for func in (sharpness_score, exposure_shift_pct, exposure_level):
+    for func in (
+        sharpness_score,
+        exposure_shift_pct,
+        exposure_level,
+        blank_frame_pct,
+        contrast_score,
+        dark_frame_pct,
+        bright_frame_pct,
+    ):
         assert func(ctx).availability == Availability.UNAVAILABLE
     frames = camera_frames(ctx)
     assert frames is not None

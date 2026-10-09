@@ -1,10 +1,13 @@
 """The vision family.
 
-Eight metrics grade camera footage:
+Twelve metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
   (10 by default);
+- blank_frame_pct, contrast_score, dark_frame_pct and bright_frame_pct
+  read the statistics blur and exposure keep of those same frames,
+  decoding nothing more, and the default policy reports them without a band;
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
@@ -120,6 +123,15 @@ _CLIP_RISE = 0.20
 # Contrast is otherwise no exposure signal: it follows what is in view,
 # and on lerobot/pusht a third of clean frames hold half the typical spread.
 _BLANK_SPREAD = 5
+# A frame is dark or bright when at least this share of its pixels is crushed
+# or clipped, the share `kalanos.analysis.scoring.cameras` uses for a camera's traits.
+_EXPOSED_SHARE = 0.5
+# A frame is also dark when its P95 is at or below this level:
+# a dim camera crushes few pixels to `VisionSpec.dark_level`,
+# but keeps nearly all of them low.
+# On the calibration datasets, no clean frame had a P95 below 141,
+# and every frame dimmed to a tenth read 25 or less.
+_DIM_P95 = 40
 
 # rda's thumbnail side for frame differences,
 # reached by averaging 2x2 blocks of the shared 128x128 decode.
@@ -417,7 +429,7 @@ def _ranges(positions: list[int]) -> list[tuple[int, int]]:
 def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
     """Return what the vision metrics keep of the stream's frames, or `not_applicable`.
 
-    Whichever metric asks first decodes for all three:
+    Whichever vision metric asks first decodes for every one of them:
     the windows when frozen_frame_pct will read them,
     the sampled frames alone otherwise.
     The stream is checked on every call; only the read is cached,
@@ -882,6 +894,206 @@ def exposure_level(ctx: StreamContext) -> MetricResult:
             "bright_share": float(numpy.median(frames.white_share)),
         },
     )
+
+
+def _frame_pct(
+    ctx: StreamContext, frames: _Frames, bad: list[int], **evidence: object
+) -> MetricResult:
+    """The report-only share of sampled frames that break a per-frame rule.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream measured.
+    frames : _Frames
+        The stream's shared read, with at least one sampled frame.
+    bad : list of int
+        The positions of the sampled frames that break the rule.
+    **evidence : object
+        Further evidence the metric publishes beside the counts.
+
+    Returns
+    -------
+    MetricResult
+        The share in percent, with each bad frame as a support interval.
+    """
+
+    n_frames = len(ctx.timestamps)
+    return MetricResult(
+        value=float(100 * len(bad) / len(frames.sampled)),
+        unit="%",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "n_sampled": len(frames.sampled),
+            "n_frames": n_frames,
+            "bad_indices": bad,
+            **evidence,
+        },
+        support=support_for(
+            list(range(n_frames)), [(index, index + 1) for index in bad]
+        ),
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="blank frames")
+def blank_frame_pct(ctx: StreamContext) -> MetricResult:
+    """Share of sampled frames whose P95 - P5 spread is below `_BLANK_SPREAD`.
+
+    exposure_shift_pct counts these frames too, among its other rules;
+    this metric counts them alone, so a stream blank throughout reads 100.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, the share in percent with each blank frame as a support
+        interval, or `not_applicable` when the stream cannot be sampled.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+
+    spreads = [p95 - p5 for p5, p95 in zip(frames.p5, frames.p95, strict=True)]
+    bad = [
+        int(index)
+        for index, spread in zip(frames.sampled, spreads, strict=True)
+        if spread < _BLANK_SPREAD
+    ]
+    return _frame_pct(ctx, frames, bad, min_spread=float(min(spreads)))
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="low contrast")
+def contrast_score(ctx: StreamContext) -> MetricResult:
+    """Median P95 - P5 spread of the sampled frames, 0 to 255 gray levels.
+
+    Lower is flatter. It follows what is in view as much as the camera,
+    so it is reported and not graded.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, or `not_applicable` when the stream cannot be sampled.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+    numpy = load_numpy()
+    assert numpy is not None
+
+    spreads = [p95 - p5 for p5, p95 in zip(frames.p5, frames.p95, strict=True)]
+    worst = min(range(len(spreads)), key=spreads.__getitem__)
+    return MetricResult(
+        value=float(numpy.median(spreads)),
+        unit="gray level",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "n_sampled": len(frames.sampled),
+            "n_frames": len(ctx.timestamps),
+            "min_spread": float(spreads[worst]),
+            "worst_index": int(frames.sampled[worst]),
+        },
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="dark frames")
+def dark_frame_pct(ctx: StreamContext) -> MetricResult:
+    """Share of sampled frames that are crushed or dim.
+
+    A frame is crushed when at least `_EXPOSED_SHARE` of its pixels are
+    at or below `VisionSpec.dark_level`,
+    and dim when its P95 is at or below `_DIM_P95`.
+    Unlike exposure_shift_pct, it judges each frame by itself,
+    so a camera dark or dim throughout reads 100 here,
+    and clean there unless its frames are blank.
+    A deliberately dark scene reads 100 too, as a white simulator scene does
+    on bright_frame_pct, so it is reported and not graded.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, the share in percent with each dark frame as a support
+        interval, or `not_applicable` when the stream cannot be sampled.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+
+    bad = [
+        int(index)
+        for index, share, p95 in zip(
+            frames.sampled, frames.dark_share, frames.p95, strict=True
+        )
+        if share >= _EXPOSED_SHARE or p95 <= _DIM_P95
+    ]
+    return _frame_pct(
+        ctx, frames, bad, dark_level=ctx.vision.dark_level, dim_p95=_DIM_P95
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="bright frames")
+def bright_frame_pct(ctx: StreamContext) -> MetricResult:
+    """Share of sampled frames with at least `_EXPOSED_SHARE` of pixels clipped.
+
+    A pixel is clipped at or above `VisionSpec.bright_level`.
+    It judges each frame by itself, so a white simulator scene reads 100
+    just as a camera blown out throughout does,
+    which is why it is reported and not graded.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, the share in percent with each bright frame as a support
+        interval, or `not_applicable` when the stream cannot be sampled.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+
+    bad = [
+        int(index)
+        for index, share in zip(frames.sampled, frames.white_share, strict=True)
+        if share >= _EXPOSED_SHARE
+    ]
+    return _frame_pct(ctx, frames, bad, bright_level=ctx.vision.bright_level)
 
 
 @metric(level=Level.STREAM, family=Family.VISION, label="frame-count mismatch")

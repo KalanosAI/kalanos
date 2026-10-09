@@ -145,7 +145,7 @@ Distinct from `cross_stream` sync, which asks whether two clocks agree. These as
 
 ## vision
 
-Frame-level quality for camera streams. Every metric here reads a sample of frames by default and reports how many it looked at, because decoding everything to grade a dataset is not a plausible thing to do. `sharpness_score`, `exposure_shift_pct` and `exposure_level` measure 10 evenly spaced frames per camera stream by default, and `frozen_frame_pct` reads 10 evenly spaced windows of about 1 s of consecutive frames. The bundle's top-level `vision` section sets both counts (`sample_frames`) and whether all three read every frame (`full_frame_scan`); `KALANOS_VISION_SAMPLES` and `KALANOS_FULL_FRAME_SCAN` override it, and `--vision-samples` and `--full-frame-scan` override both. `--tier full` always reads every frame. No frame is decoded twice: when `frozen_frame_pct` runs, the sampled frames are taken from inside its windows, and otherwise only the sampled frames are decoded. Each frame is decoded as a 128x128 gray image for exposure and freezes, and each sampled frame also at native resolution for blur; every frame is measured and dropped, so a full scan holds no frames in memory. `frame_count_vs_timebase` counts the container's packets, decoding nothing, under a full scan too, since a decode bounded by the timestamps could never find a frame past them.
+Frame-level quality for camera streams. Every metric here reads a sample of frames by default and reports how many it looked at, because decoding everything to grade a dataset is not a plausible thing to do. `sharpness_score`, `exposure_shift_pct` and `exposure_level` measure 10 evenly spaced frames per camera stream by default, `blank_frame_pct`, `contrast_score`, `dark_frame_pct` and `bright_frame_pct` read the statistics kept of those same frames without decoding any more, and `frozen_frame_pct` reads 10 evenly spaced windows of about 1 s of consecutive frames. The bundle's top-level `vision` section sets both counts (`sample_frames`) and whether every metric that reads frames reads all of them instead (`full_frame_scan`); `KALANOS_VISION_SAMPLES` and `KALANOS_FULL_FRAME_SCAN` override it, and `--vision-samples` and `--full-frame-scan` override both. `--tier full` always reads every frame. No frame is decoded twice: when `frozen_frame_pct` runs, the sampled frames are taken from inside its windows, and otherwise only the sampled frames are decoded. Each frame is decoded as a 128x128 gray image for exposure and freezes, and each sampled frame also at native resolution for blur; every frame is measured and dropped, so a full scan holds no frames in memory. `frame_count_vs_timebase` counts the container's packets, decoding nothing, under a full scan too, since a decode bounded by the timestamps could never find a frame past them.
 
 These metrics grade only under a scope that requires `sampled_video_quality` or `video_quality`. Under the default `numeric-core-v1` scope they are measured and shown in every report but graded `report_only`. They feed the coverage ledger: a camera stream whose `sharpness_score` and `exposure_shift_pct` computed counts as sampled, and one where both measured every declared frame counts as fully read. `sampled_video_quality` needs every camera sampled; `video_quality`, which `vision-imitation-v1` requires, needs every camera fully read. Depth streams are not cameras here. A critical vision result requests review until a calibration manifest covers the metric, except `frame_count_vs_timebase`, which blocks through the contract route, still only under a scope that grades vision.
 
@@ -163,6 +163,10 @@ Depth streams (`extero.depth`, `extero.depth_confidence`, `extero.disparity`) ar
 | `sharpness_score` | STREAM | decode | fraction | Median, over the sampled frames, of the share of the 3x3 Laplacian variance of the frame's native-resolution luminance that a further 3x3 box blur removes. Higher is sharper; a frame with no edges reads 0. | *calibrated: good > 0.74, bad < 0.55* |
 | `exposure_shift_pct` | STREAM | decode | % | Share of sampled frames exposed unlike their camera's typical frame within the episode, or blank. The typical frame is the median, over the sampled frames, of the mean gray level and of the share of pixels at 250 or more. A frame is bad when it is darker or brighter (its mean moves by more than 35% of the typical mean, and at least 20 gray levels), clipped (its share of pixels at 250 or more exceeds the typical share by more than 20 points), or blank (P95 - P5 below 5, on any camera). | *calibrated: good < 10%, bad > 40%* |
 | `exposure_level` | STREAM | decode | gray level | Median, over the sampled frames, of each frame's mean gray (0-255); evidence carries the median share of pixels at or below 5 and at or above 250. | reported, no band |
+| `blank_frame_pct` | STREAM | decode | % | Share of sampled frames that are blank (P95 - P5 below 5). `exposure_shift_pct` counts these frames too; this metric counts them alone, so a camera blank throughout reads 100. | reported, no band |
+| `contrast_score` | STREAM | decode | gray level | Median, over the sampled frames, of each frame's P95 - P5 spread (0-255). Lower is flatter. It follows what is in view as much as the camera. | reported, no band |
+| `dark_frame_pct` | STREAM | decode | % | Share of sampled frames that are crushed (at least half their pixels at or below 5, `dark_level`) or dim (P95 at or below 40), each frame judged by itself. A camera dark or dim throughout reads 100 here, and clean on `exposure_shift_pct` unless its frames are blank. | reported, no band |
+| `bright_frame_pct` | STREAM | decode | % | Share of sampled frames with at least half their pixels at or above 250 (`bright_level`), each frame judged by itself. A white simulator scene reads 100, as a camera blown out throughout does. | reported, no band |
 | `frame_count_vs_timebase` | STREAM | a video file | fraction | `\|packets in the episode's segment - timestamps\| / timestamps`, with the segment's bounds taken half a frame early as tolerance. On a one-file-per-episode layout (LeRobot v2) the count runs to the file's end, so frames past the timestamps show. Blocks through the contract route. | *candidate: good < 1%, bad > 5%* |
 | `pts_defect_pct` | STREAM | a video file | % | Share of the steps between the segment's sorted packet presentation timestamps that are a duplicate (two equal timestamps) or a gap (a step longer than 1.5 declared frame periods, the period being the segment's span over its declared frame count, since the container's average rate falls with every dropped frame). The rule assumes the constant frame rate the format declares; LeRobot's own encoder places frame k at k/fps, so a recording it wrote reads 0. | reported, no band |
 | `max_gap_s` | STREAM | a video file | s | Longest step between the segment's sorted packet presentation timestamps; evidence gives its start and end in segment seconds, the index of the packet before it, and its length in declared frame periods. Edges of the segment are not counted, so a stall whose later frames fall past the segment's end does not show here; `frame_count_vs_timebase` reads those frames as missing. | reported, no band |
@@ -213,6 +217,41 @@ Left as candidates:
 - `blur_vs_camera` and `exposure_vs_camera`: neither raised a finding on any of the 541 clean streams; nothing was injected to place their fences.
 - `repeated_footage_vs_camera`: not yet run on a calibration dataset.
 
+`blank_frame_pct`, `contrast_score`, `dark_frame_pct` and `bright_frame_pct` were measured on the same three datasets at the same revisions, retrieved from Hugging Face on 2026-10-09 and graded with kalanos 0.7.2 plus these metrics, with the default 10 sampled frames: all 541 clean camera streams, and 10 evenly spaced episodes of each dataset (60 camera streams) decoded at native resolution with the whole stream replaced by each variant:
+
+- `black`: every frame zeroed.
+- `dim_0p1`: every frame scaled by 0.1.
+- `flat`: every frame mapped to `frame * 0.08 + 118`, a spread of about 20 gray levels on a frame that spans 0 to 255. pusht's frames span far less, so there it leaves a spread below 5 and reads blank.
+- `white`: every frame at 255.
+
+Clean camera streams, min / median / max:
+
+| dataset | streams | `blank_frame_pct` | `contrast_score` | `dark_frame_pct` | `bright_frame_pct` |
+|---|---|---|---|---|---|
+| pusht | 206 | 0 / 0 / 0 | 16 / 40.5 / 53 | 0 / 0 / 0 | 100 / 100 / 100 |
+| cmu_stretch | 135 | 0 / 0 / 0 | 120 / 148 / 184 | 0 / 0 / 0 | 0 / 0 / 0 |
+| aloha_static_towel | 200 | 0 / 0 / 0 | 106.5 / 168 / 197.5 | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Median injected stream, per dataset in the order pusht, cmu_stretch, aloha_static_towel:
+
+| variant | `blank_frame_pct` | `contrast_score` | `dark_frame_pct` | `bright_frame_pct` |
+|---|---|---|---|---|
+| `black` | 100, 100, 100 | 0, 0, 0 | 100, 100, 100 | 0, 0, 0 |
+| `dim_0p1` | 40, 0, 0 | 5, 15, 16.75 | 100, 100, 100 | 0, 0, 0 |
+| `flat` | 100, 0, 0 | 4, 12.5, 13.25 | 0, 0, 0 | 0, 0, 0 |
+| `white` | 100, 100, 100 | 0, 0, 0 | 0, 0, 0 | 100, 100, 100 |
+
+The band rule above, applied across all three datasets, proposes:
+
+- `blank_frame_pct`: good 0%, bad 100% (`black`). No clean stream held a blank sampled frame.
+- `contrast_score`: good 16, bad 13 (`flat`), higher is better. The worst clean stream is a pusht one, and 53 of the 60 `flat` streams fall below 16.
+- `dark_frame_pct`: good 0%, bad 100% (`dim_0p1`). Every clean stream reads 0, and every `dim_0p1` and `black` stream reads 100.
+- `bright_frame_pct`: no separation. Every clean pusht stream reads 100, as `white` does, because its simulator renders on a white background.
+
+`dark_frame_pct` counts a frame as dim when its P95 is at or below 40. Its column above comes from a second run on the same datasets and revisions, retrieved on 2026-10-14 with the same sample, which kept each sampled frame's statistics. Over the 5,410 sampled frames of the 541 clean streams, the lowest P95 was 141 (aloha_static_towel; 155 on cmu_stretch, 255 on every pusht frame). Over the 600 `dim_0p1` frames, the highest was 25 (pusht). Crushed pixels alone did not separate them: a `dim_0p1` frame keeps few pixels at or below 5, and the median `dim_0p1` stream had no frame with half its pixels there. Dimmer copies sit between: scaled by 0.2, a stream reads 100 on cmu_stretch, a median of 70 on aloha_static_towel and 0 on pusht; scaled by 0.3, 0 on all three.
+
+All four stay reported, with no band, until a band is decided.
+
 A calibrated band sets the grade only. It claims nothing about whether a task succeeded, and blocking on a vision result still needs an accepted calibration manifest, except through the contract route of `frame_count_vs_timebase` under a scope that grades vision.
 
 The measurements behind each metric's definition, on single datasets:
@@ -227,7 +266,7 @@ The measurements behind each metric's definition, on single datasets:
   Under the calibrated band, sharp footage grades good and a 3x3 blur or worse critical. The range beside a sharp value is its minimum to maximum over the 10 frames.
 - **Dim footage.** Re-encoded with libx264 and read in full on the same `cam_high` episode, a copy darkened to 0.2x read 5.4% frozen under a fixed difference floor and reads 0% with the contrast scaling, while a 10% freeze injected into it reads 9.6% (9.8% on the undarkened clip).
 - **Exposure follows each camera.** rda judges exposure by fixed gray levels: dark below a mean of 50, bright above 230, clipped at 20% of pixels at 250 or more, flat below a P95 - P5 of 20. Those rules marked every sampled frame of lerobot/pusht bad, because its simulator renders on a white background, and rda saw the same false blown-out results. No fixed level can separate the two: pusht frames average 249 to 250 with 74% to 84% of pixels at 255, where lerobot/cmu_stretch frames brightened 4x average 229 to 241 with 74% to 78%. So each frame is compared with its own camera instead, and pusht and cmu_stretch both read 0% on every episode. Overexposing, dimming to 0.4x or blacking out 4 of 10 sampled frames reads 40% on both. Contrast is not compared: it follows what is in view, and a third of clean pusht frames hold half the typical spread.
-- **Known limit.** Within one episode, a camera exposed the same way in most sampled frames is its own typical frame, so `exposure_shift_pct` reads it clean unless its frames are blank. Across episodes, a camera exposed one way in every episode gets a descriptive trait, and a single episode unlike its camera is flagged once the camera has 5 episodes. Below that, the per-episode limit still holds.
+- **Known limit.** Within one episode, a camera exposed the same way in most sampled frames is its own typical frame, so `exposure_shift_pct` reads it clean unless its frames are blank. Across episodes, a camera exposed one way in every episode gets a descriptive trait, and a single episode unlike its camera is flagged once the camera has 5 episodes. Below that, the per-episode limit still holds. A camera dark or dim throughout shows in `dark_frame_pct`, which judges each frame by itself.
 
 ### Across episodes
 
@@ -329,6 +368,10 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `frozen_frame_pct` | default | 0.01% | 10% | calibrated (see *Calibration*) |
 | `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
 | `exposure_level` | default | — | — | reported, no band |
+| `blank_frame_pct` | default | — | — | reported, no band |
+| `contrast_score` | default | — | — | reported, no band |
+| `dark_frame_pct` | default | — | — | reported, no band |
+| `bright_frame_pct` | default | — | — | reported, no band |
 
 Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 
@@ -427,6 +470,7 @@ The report records, per metric, how many subjects it graded and how many it flag
 | vision | `pts_defect_pct` | 2 | false |
 | vision | `exposure_level` | none, report-only | false |
 | vision | `max_gap_s`, `camera_sync_skew_ms` | none, report-only | false |
+| vision | `blank_frame_pct`, `contrast_score`, `dark_frame_pct`, `bright_frame_pct` | none, report-only | false |
 | annotation | `task_instruction_missing` | 5 | true |
 
 Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.
