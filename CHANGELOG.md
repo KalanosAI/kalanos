@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Added
+
+- `kalanos grade`, the HTML report and `kalanos inspect` show the dataset's 0-100 score for each metric family that scored, under a display name (`timing` as Temporal, `integrity` as Integrity, `motion` as Motion, `vision` as Vision, `annotation` as Annotations); any other family shows under its id.
+
 ## [0.7.2] - 2026-10-08
 
 Report schema 7.0.0.

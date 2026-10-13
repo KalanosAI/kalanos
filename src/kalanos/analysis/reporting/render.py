@@ -19,6 +19,7 @@ from kalanos.analysis.diagnostics.runner import diagnostic_lines
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import Finding, ScoreResult
+from kalanos.analysis.reporting.families import family_scores, format_family_score
 from kalanos.analysis.reporting.registry import reporter
 from kalanos.analysis.reporting.summary import finding_groups
 
@@ -111,6 +112,7 @@ def _metric_text(metric: MetricResult) -> str:
 _TEMPLATE_ENVIRONMENT.filters["score_attr"] = _score_attr
 _TEMPLATE_ENVIRONMENT.filters["score_text"] = _score_text
 _TEMPLATE_ENVIRONMENT.filters["metric_text"] = _metric_text
+_TEMPLATE_ENVIRONMENT.filters["family_score"] = format_family_score
 
 
 def _episode_finding_counts(findings: list[Finding]) -> dict[str, int]:
@@ -219,8 +221,9 @@ def render_html(report: Report) -> str:
     -------
     str
         The rendered page.
-        Every score-bearing element carries `data-level`,
-        `data-name` and `data-score`; every metric carries `data-status` —
+        Every score-bearing element, the family score rows included,
+        carries `data-level`, `data-name` and `data-score`;
+        every metric carries `data-status` —
         so a test can walk the markup and check it against the model directly,
         rather than parsing rendered prose back into numbers.
     """
@@ -234,5 +237,6 @@ def render_html(report: Report) -> str:
         stream_findings=_stream_finding_counts(report.findings),
         findings_preview=_FINDINGS_PREVIEW,
         finding_groups=finding_groups(report),
+        family_scores=family_scores(report.score.families),
         tracking_preview=tracking_preview,
     )
