@@ -97,6 +97,9 @@ Kalanos - tests/fixtures
   Episodes    13 - eligible 13 - review 0 - blocked 0 - unknown 0
   Scope       numeric-core-v1
 
+Family scores
+  Integrity   99
+
 Findings
   armA:proprio.ee_pose/tcp_pose_z_mm  1 episode - low signal-to-noise  report-only
   armB:proprio.ee_pose/tcp_pose_z_mm  1 episode - repeated values  report-only
@@ -112,7 +115,7 @@ Not analysed
   README.md        no adapter
   video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
 
-schema 7.0.0 - policy v1 - 0.20s
+schema 7.0.0 - policy v1 - 0.41s
 ```
 
 The same card on a dataset with video: the coverage rows grow with the data.
@@ -125,6 +128,10 @@ Kalanos - tests/fixtures/lerobot_v3_tiny
   Readiness   undefined - 2 episode(s) require review
   Episodes    2 - eligible 0 - review 2 - blocked 0 - unknown 0
   Scope       vision-imitation-v1
+
+Family scores
+  Integrity  100
+  Vision      33
 
 Needs attention
   lerobot_v3_tiny/episode_000000  review   83.3  low sharpness, brightness changes
@@ -139,7 +146,7 @@ Coverage
   mapping        2 stream types unmapped - type them with --map
   inventory      complete
 
-schema 7.0.0 - policy v1 - 0.12s
+schema 7.0.0 - policy v1 - 0.23s
 ```
 
 How to read it, top to bottom:
@@ -147,6 +154,7 @@ How to read it, top to bottom:
 | Part | What it tells you | What to do with it |
 |---|---|---|
 | **Assessment and episodes** | The verdict, readiness out of 100 (or `undefined` with its reason), and how many episodes are eligible, in review, blocked or unknown | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
+| **Family scores** | The dataset's score out of 100 for each metric family that graded, such as Integrity or Vision | A low family points at the kind of problem to look for. Open the report for the episodes and metrics behind it |
 | **Needs attention** | The episodes that did not pass, worst first, with their status, score and the conditions behind it | Start at the top: these are the episodes to fix, review or drop |
 | **Findings** | Each source with findings, how many episodes it affects, what was observed, and whether it blocks, needs review or is only reported | Open that source in the full report for the values and evidence |
 | **Coverage** | For each check that applies to this data, how many episodes it was computed on, how many stream types went unmapped, and whether the whole inventory was read | A gap here means less was checked than the counts suggest; read its reason before trusting the verdict. Type unmapped streams with `--map` so their metrics apply |

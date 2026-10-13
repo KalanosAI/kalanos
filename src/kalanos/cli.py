@@ -42,6 +42,7 @@ from kalanos.analysis.models.metrics import Family
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
+from kalanos.analysis.reporting.families import family_scores, format_family_score
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.bundle import load_bundle, load_bundle_policy
@@ -703,6 +704,15 @@ def inspect(
             f"readiness {r.score:.2f}"
             if r.score is not None
             else "readiness undefined: " + "; ".join(r.reasons)
+        )
+    if loaded.score.families:
+        console.print(
+            "families "
+            + " · ".join(
+                f"{label} {format_family_score(score)}"
+                for _, label, score in family_scores(loaded.score.families)
+            ),
+            markup=False,
         )
     if loaded.sufficiency is not None:
         console.print(f"sufficiency {loaded.sufficiency.status.value}")

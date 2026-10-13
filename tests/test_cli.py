@@ -25,6 +25,10 @@ from typer.testing import CliRunner
 # Internal
 from kalanos.analysis.metrics import vision
 from kalanos.analysis.models.report import Report
+from kalanos.analysis.reporting.card import render_terminal
+from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.write import write_report
+from kalanos.api import grade
 from kalanos.cli import app
 
 # Local
@@ -286,6 +290,8 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
     collector.feed(html_path.read_text())
 
     expected = [("dataset", str(report.root), score_attr(report.score))]
+    for family, _, score in family_scores(report.score.families):
+        expected.append(("family", family, repr(score)))
     for episode in report.episodes:
         expected.append(("episode", episode.id, score_attr(episode.score)))
         for stream in episode.streams:
@@ -296,6 +302,32 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
                 )
 
     assert collector.rows == expected
+
+
+def test_card_html_and_inspect_show_the_same_family_scores(tmp_path):
+    """Verify the card, the HTML report and `inspect` show one run's families alike."""
+
+    report = grade(LEROBOT_FIXTURE, bundle=Path("vision-imitation-v1"))
+    json_path = tmp_path / "report.json"
+    html_path = tmp_path / "report.html"
+    write_report(report, json_path)
+    write_report(report, html_path)
+
+    inspected = runner.invoke(app, ["inspect", str(json_path)])
+
+    assert inspected.exit_code == 0
+    scores = family_scores(report.score.families)
+    assert scores
+    card = render_terminal(report, width=300).splitlines()
+    html = html_path.read_text()
+    collector = ScoreAttributeCollector()
+    collector.feed(html)
+    for family, label, score in scores:
+        shown = format_family_score(score)
+        assert any(line.split() == [label, shown] for line in card)
+        assert ("family", family, repr(score)) in collector.rows
+        assert f'<td>{label}</td><td class="mono">{shown}</td>' in html
+        assert f"{label} {shown}" in inspected.stdout
 
 
 def test_report_with_an_unsupported_suffix_exits_nonzero_and_writes_nothing(

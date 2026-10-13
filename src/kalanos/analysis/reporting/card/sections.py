@@ -31,6 +31,7 @@ from kalanos.analysis.models.eligibility import (
 from kalanos.analysis.models.report import GradedEpisode, Report
 from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.reporting.card.theme import Theme
+from kalanos.analysis.reporting.families import family_scores, format_family_score
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -415,6 +416,33 @@ def headline(report: Report, ctx: CardContext) -> list[Text]:
         )
         pairs.append(("Sufficiency", f"{status} {sep} {detail}" if detail else status))
     return _rows(pairs, ctx)
+
+
+def families(report: Report, ctx: CardContext) -> list[Text]:
+    """The dataset's 0-100 score for each family that scored.
+
+    Parameters
+    ----------
+    report : Report
+        The report to render.
+    ctx : CardContext
+        The theme and width to lay out against.
+
+    Returns
+    -------
+    list[Text]
+        One row per scored family, named families first,
+        or no lines when no family scored.
+    """
+
+    # Right-aligned to three digits, so a 33 lines up under a 100.
+    return _rows(
+        [
+            (label, format_family_score(score).rjust(3))
+            for _, label, score in family_scores(report.score.families)
+        ],
+        ctx,
+    )
 
 
 def needs_attention(report: Report, ctx: CardContext) -> list[Text]:

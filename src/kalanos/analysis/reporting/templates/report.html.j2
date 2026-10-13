@@ -355,6 +355,12 @@
 
 <div class="column">
 
+{% if family_scores %}<section aria-label="Family scores">
+  <h2>Family scores</h2>
+  <table class="plain">
+  {% for family, label, score in family_scores %}<tr data-level="family" data-name="{{ family }}" data-score="{{ "%r"|format(score) }}"><td>{{ label }}</td><td class="mono">{{ score | family_score }}</td></tr>{% endfor %}
+  </table>
+</section>{% endif %}
 <section aria-label="Analysis coverage">
   <h2>Analysis coverage</h2>
   {% for line in coverage_lines %}<p>{{ line }}</p>{% endfor %}

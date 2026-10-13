@@ -28,6 +28,7 @@ from kalanos.analysis.models.eligibility import (
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.card.sections import _under_root
+from kalanos.analysis.reporting.families import format_family_score
 from kalanos.api import grade
 
 # Local
@@ -358,6 +359,32 @@ def test_sufficiency_shows_only_when_it_is_known(csv_report):
 
     assert "Sufficiency" not in hidden
     assert _row(shown, "Sufficiency") == "insufficient - 1 pass episode, 10 required"
+
+
+def test_family_scores_show_each_scored_family_under_its_display_name(vision_report):
+    text = render_terminal(vision_report, width=300)
+    families = vision_report.score.families
+
+    assert len(_section(text, "Family scores")) == 2
+    assert _row(text, "Integrity") == format_family_score(families["integrity"])
+    assert _row(text, "Vision") == format_family_score(families["vision"])
+    assert text.index("Family scores") < text.index("Needs attention")
+
+
+def test_family_scores_are_absent_when_no_family_scored(csv_report):
+    score = csv_report.score.model_copy(update={"families": {}})
+
+    text = render_terminal(csv_report.model_copy(update={"score": score}))
+
+    assert "Family scores" not in text
+
+
+def test_a_family_without_a_display_name_shows_its_id(csv_report):
+    score = csv_report.score.model_copy(update={"families": {"consistency": 80.0}})
+
+    text = render_terminal(csv_report.model_copy(update={"score": score}))
+
+    assert _section(text, "Family scores") == ["  consistency   80"]
 
 
 def test_plain_output_is_ascii_and_color_is_styled(corpus_report):

@@ -53,6 +53,7 @@ from kalanos.analysis.reporting.assemble import (
     grade_episode,
     grade_stream,
 )
+from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
 from kalanos.analysis.reporting.write import write_report
@@ -982,6 +983,8 @@ def test_every_data_score_in_the_html_matches_the_models_score_at_that_level():
     collector.feed(render_html(report))
 
     expected = [("dataset", str(report.root), score_attr(report.score))]
+    for family, _, score in family_scores(report.score.families):
+        expected.append(("family", family, repr(score)))
     for episode in report.episodes:
         expected.append(("episode", episode.id, score_attr(episode.score)))
         for stream in episode.streams:
@@ -992,6 +995,24 @@ def test_every_data_score_in_the_html_matches_the_models_score_at_that_level():
                 )
 
     assert collector.rows == expected
+
+
+def test_family_scores_order_named_families_first_and_fall_back_to_the_id():
+    """Verify the named families lead in their own order, and any other shows its id."""
+
+    scores = family_scores({"consistency": 80.0, "vision": 50.0, "timing": 90.0})
+
+    assert scores == [
+        ("timing", "Temporal", 90.0),
+        ("vision", "Vision", 50.0),
+        ("consistency", "consistency", 80.0),
+    ]
+
+
+def test_every_family_label_names_a_known_family():
+    """Verify a display name never hangs off a family id the engine cannot score."""
+
+    assert set(FAMILY_LABELS) <= {family.value for family in Family}
 
 
 def test_a_not_applicable_metric_renders_an_em_dash_and_critical_shows_its_value():
