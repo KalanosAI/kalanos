@@ -72,6 +72,12 @@ from kalanos.analysis.models.report import (
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
 from kalanos.analysis.scoring.cameras import compare_cameras
+from kalanos.analysis.scoring.duplicates import (
+    PayloadFingerprint,
+    StreamKey,
+    find_duplicate_episodes,
+    payload_fingerprint,
+)
 from kalanos.analysis.scoring.eligibility import (
     counts_of,
     dataset_train_ready,
@@ -149,6 +155,7 @@ def grade_stream(
     full_frame_scan: bool = False,
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
+    fingerprints: dict[StreamKey, PayloadFingerprint] | None = None,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -174,6 +181,10 @@ def grade_stream(
         Whether frame metrics read every frame rather than a sample.
     vision : VisionSpec or None
         Decode caps, previews and exposure levels; the defaults when `None`.
+    fingerprints : dict or None
+        When given, receives the stream's payload fingerprint under its `StreamKey`,
+        for the duplicate-episode pass; the key's last element counts
+        the episode's earlier streams at the same place.
 
     Returns
     -------
@@ -264,6 +275,18 @@ def grade_stream(
                     n_channels_declared=len(stream.channels),
                     n_channels_graded=len(stream.channels),
                 )
+                if fingerprints is not None:
+                    fingerprint = payload_fingerprint(
+                        frame, [channel.name for channel in stream.channels]
+                    )
+                    if fingerprint is not None:
+                        place = (
+                            stream.taxonomy_type,
+                            stream.instance,
+                            stream.source_field,
+                        )
+                        seen = sum(1 for key in fingerprints if key[:3] == place)
+                        fingerprints[(*place, seen)] = fingerprint
                 for channel in stream.channels:
                     ctx = ChannelContext(
                         channel=channel, values=frame[channel.name], stream=stream_ctx
@@ -332,6 +355,7 @@ def grade_episode(
     full_frame_scan: bool = False,
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
+    fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] | None = None,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -353,6 +377,9 @@ def grade_episode(
         Whether frame metrics read every frame rather than a sample.
     vision : VisionSpec or None
         Decode caps, previews and exposure levels; the defaults when `None`.
+    fingerprints : dict or None
+        When given, receives the episode's stream fingerprints under its id,
+        for the duplicate-episode pass.
 
     Returns
     -------
@@ -367,6 +394,9 @@ def grade_episode(
     # Step 1: grade every stream, and the channels within each.
     graded_streams: list[GradedStream] = []
     findings: list[Finding] = []
+    stream_prints: dict[StreamKey, PayloadFingerprint] | None = None
+    if fingerprints is not None:
+        stream_prints = fingerprints.setdefault(episode.id, {})
     for stream in episode.streams:
         graded_stream, stream_findings = grade_stream(
             stream,
@@ -379,6 +409,7 @@ def grade_episode(
             full_frame_scan=full_frame_scan,
             vision=vision,
             tier=tier,
+            fingerprints=stream_prints,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -536,6 +567,7 @@ def assemble_report(
     policy = scope_policy(policy, requirements)
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
+    fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] = {}
     for item in analysed:
         graded_episode, episode_findings = grade_episode(
             item.episode,
@@ -547,6 +579,7 @@ def assemble_report(
             full_frame_scan=full_frame_scan,
             vision=vision,
             tier=tier,
+            fingerprints=fingerprints,
         )
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
@@ -598,6 +631,10 @@ def assemble_report(
         graded_episodes, grades_vision=grades_vision(requirements)
     )
     findings.extend(camera_findings)
+    duplicates, duplicate_findings = find_duplicate_episodes(
+        graded_episodes, fingerprints, cameras
+    )
+    findings.extend(duplicate_findings)
     graded_episodes = [
         e.model_copy(update={"coverage": episode_coverage(e, requirements)})
         for e in graded_episodes
@@ -712,4 +749,5 @@ def assemble_report(
         sufficiency=sufficiency,
         binding_conflicts=list(binding_conflicts),
         cameras=cameras,
+        duplicates=duplicates,
     )

@@ -17,6 +17,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - Report-only vision metrics `blank_frame_pct`, `contrast_score`, `dark_frame_pct` and `bright_frame_pct`, read from the frames the vision metrics already sample. `dark_frame_pct` counts both crushed frames and dim ones, so a camera dimmed throughout reads 100.
 - `camera_stream_present` checks that each declared camera's video file opens and yields a frame inside the episode's segment.
 - `video_format_consistency` reports which of width, height, frame rate and pixel format in a camera's video file differ from what the dataset declares.
+- `integrity.duplicate_episode` flags episodes whose numeric payloads (state, action and any other graded series) are identical to another episode's, and requests review under every scope; `integrity.near_duplicate_episode` reports, without consequence, episodes whose resampled trajectories are nearly identical, such as a copy re-saved as float32. `Report.duplicates` lists the pairs, each copy against the first of the episodes it copies, and whether each pair also repeats its camera footage exactly.
 
 ### Changed
 

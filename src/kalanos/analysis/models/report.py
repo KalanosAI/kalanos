@@ -426,6 +426,31 @@ class CameraSummary(BaseModel):
     repeated_footage: list[list[str]] = Field(default_factory=list)
 
 
+class DuplicateEpisodes(BaseModel):
+    """Two episodes whose numeric payloads are identical or nearly so.
+
+    Attributes
+    ----------
+    episodes : list[str]
+        The pair, in episode order.
+    tier : {"exact", "near"}
+        `exact` when every payload hashes identically,
+        `near` when the resampled trajectories lie within the near-duplicate limit.
+    nrmse : float
+        The normalized RMSE between the two trajectories, 0.0 for an exact pair.
+    footage_identical : bool
+        Whether the pair also repeats its camera footage exactly.
+    cameras : list[str]
+        The cameras whose footage the pair repeats exactly.
+    """
+
+    episodes: list[str]
+    tier: Literal["exact", "near"]
+    nrmse: float
+    footage_identical: bool = False
+    cameras: list[str] = Field(default_factory=list)
+
+
 class NotObservable(BaseModel):
     """A metric that could not grade this dataset, and why.
 
@@ -573,6 +598,10 @@ class Report(BaseModel):
     cameras : list[CameraSummary]
         Each camera compared across the episodes it appears in:
         descriptive, and the source of the cross-episode vision findings.
+    duplicates : list[DuplicateEpisodes]
+        Each pair of episodes whose numeric payloads are identical or nearly so.
+        Identical episodes pair only with the first of them,
+        which also stands for them in a near pair.
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
@@ -606,6 +635,7 @@ class Report(BaseModel):
     sufficiency: Sufficiency | None = None
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
+    duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":
