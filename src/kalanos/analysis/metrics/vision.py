@@ -1,6 +1,6 @@
 """The vision family.
 
-Twelve metrics measure camera footage:
+Fourteen metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
@@ -12,7 +12,9 @@ Twelve metrics measure camera footage:
   and needs an action stream in the same episode;
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
   decoding nothing, under a full scan too;
-- camera_sync_skew_ms compares the cameras of one episode through the same probe.
+- camera_sync_skew_ms compares the cameras of one episode through the same probe;
+- camera_stream_present and video_format_consistency share one read of the
+  container header, and presence also decodes the segment's first frame.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
@@ -48,9 +50,11 @@ import polars as pl
 
 # Internal
 from kalanos.analysis.adapters.video import (
+    ContainerHeader,
     DecodeFailed,
     DecodeLimitReached,
     DecoderUnavailable,
+    ReadInterrupted,
     SampledFrames,
     SegmentPackets,
     VideoPayload,
@@ -156,6 +160,11 @@ _MOVING_MAJORITY = 0.5
 # half a frame of slack, as `VideoPayload` allows when it places a segment.
 _GAP_PERIODS = 1.5
 
+# Two frame rates differ when further apart than this share of the declared one.
+# Candidate: it absorbs 30000/1001 against a declared 29.97,
+# and catches any change larger than 0.1%.
+_FPS_REL_TOL = 1e-3
+
 # The metrics every decodable camera stream computes; the others can be
 # not_applicable by design (no action stream, no video container).
 CORE_METRICS = ("sharpness_score", "exposure_shift_pct")
@@ -177,6 +186,12 @@ _CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Frames | MetricResult]]" = (
 # The packet probe, keyed on id(payload).
 # The value holds the payload so its id is not reused while cached, as in `_CACHE`.
 _PACKETS: "OrderedDict[int, tuple[VideoPayload, SegmentPackets | DecodeFailed]]" = (
+    OrderedDict()
+)
+
+# The container header, keyed on id(payload).
+# The value holds the payload so its id is not reused while cached, as in `_CACHE`.
+_HEADERS: "OrderedDict[int, tuple[VideoPayload, ContainerHeader | DecodeFailed]]" = (
     OrderedDict()
 )
 
@@ -603,10 +618,11 @@ def _read(
 
 
 def clear_cache() -> None:
-    """Empty the frame and packet caches."""
+    """Empty the frame, packet and header caches."""
 
     _CACHE.clear()
     _PACKETS.clear()
+    _HEADERS.clear()
 
 
 def _packets(payload: VideoPayload) -> SegmentPackets | DecodeFailed:
@@ -657,6 +673,68 @@ def _declared_fps(payload: VideoPayload, packets: SegmentPackets) -> float:
         if payload.frame_count > 0 and span > 0
         else packets.fps
     )
+
+
+def _header(payload: VideoPayload) -> ContainerHeader | DecodeFailed:
+    """Read the payload's container header once, keeping a failure as the result.
+
+    A `ReadInterrupted` is returned but not kept, so the next metric reads again.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The video stream whose header to read.
+
+    Returns
+    -------
+    ContainerHeader or DecodeFailed
+        The header, or the failure that stopped the read.
+
+    Raises
+    ------
+    DecoderUnavailable
+        If PyAV is not installed in this process.
+    """
+
+    entry = _HEADERS.get(id(payload))
+    if entry is not None and entry[0] is payload:
+        _HEADERS.move_to_end(id(payload))
+        return entry[1]
+    try:
+        result: ContainerHeader | DecodeFailed = payload.header()
+    except ReadInterrupted as exc:
+        return exc
+    except DecodeFailed as exc:
+        result = exc
+    _HEADERS[id(payload)] = (payload, result)
+    while len(_HEADERS) > _CACHE_SIZE:
+        _HEADERS.popitem(last=False)
+    return result
+
+
+def _video_file(ctx: StreamContext) -> VideoPayload | MetricResult:
+    """Return the video payload behind the stream, or `not_applicable` if none.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    VideoPayload or MetricResult
+        The payload, or `not_applicable` when the stream is not camera footage,
+        its frames do not come from a video file, or it carries no timestamps.
+    """
+
+    payload = _camera_payload(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if not isinstance(payload, VideoPayload):
+        return not_applicable("the stream's frames do not come from a video file")
+    if payload.frame_count == 0:
+        return not_applicable("the stream carries no timestamps")
+    return payload
 
 
 def _laplacian_var(frame: "np.ndarray") -> float:
@@ -1381,6 +1459,173 @@ def camera_sync_skew_ms(ctx: EpisodeContext) -> MetricResult:
                 "where each video file's frames sit against the recorded "
                 "timestamps; capture synchronisation is not measured"
             ),
+        },
+    )
+
+
+@metric(
+    level=Level.STREAM, family=Family.VISION, label="camera file missing or unreadable"
+)
+def camera_stream_present(ctx: StreamContext) -> MetricResult:
+    """Whether a declared camera's file opens and yields this episode's first frame.
+
+    Reads the container header, then decodes up to the first frame the segment holds,
+    discarding the seek preroll before it.
+    That frame need not sit exactly at the segment's start,
+    so a frame the encoder dropped there does not read as a missing camera.
+    A decode failure after that frame is not this metric's to judge:
+    the sampled metrics report it, and the episode stays unknown.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with 1.0 when the frame decoded and 0.0 when it did not,
+        for the policy to regrade,
+        or `not_applicable` when the stream is not backed by a video file.
+    """
+
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if load_numpy() is None:
+        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+
+    reason: str | None = None
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    # A failure outside the file, such as on the network, is no evidence it is absent.
+    if isinstance(header, ReadInterrupted):
+        return _stopped_result((Availability.UNAVAILABLE, str(header)))
+    if isinstance(header, DecodeFailed):
+        reason = str(header)
+    else:
+        try:
+            # The whole segment as one window, closed after its first frame:
+            # the generator decodes nothing past the frame it yields.
+            with closing(
+                payload.gray_windows(
+                    [(0, payload.frame_count)],
+                    _SAMPLE_SIZE,
+                    max_decode_frames=ctx.vision.max_decode_frames,
+                    max_pixels=ctx.vision.max_pixels,
+                )
+            ) as frames:
+                decoded = next(frames, None) is not None
+        except (DecodeLimitReached, ReadInterrupted) as exc:
+            return _stopped_result((Availability.UNAVAILABLE, str(exc)))
+        except DecodeFailed as exc:
+            decoded, reason = False, str(exc)
+        if not decoded and reason is None:
+            reason = "no frame could be decoded"
+
+    return MetricResult(
+        value=0.0 if reason is not None else 1.0,
+        unit="flag",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "camera": ctx.stream.source_field,
+            "path": str(payload.path),
+            "reason": reason,
+        },
+    )
+
+
+def _fps_differs(found: float, declared: float) -> bool:
+    """Whether a container's frame rate differs from the declared one.
+
+    They differ when further apart than `_FPS_REL_TOL` of the declared rate.
+
+    Parameters
+    ----------
+    found : float
+        The rate the container states.
+    declared : float
+        The rate the dataset declares.
+
+    Returns
+    -------
+    bool
+        Whether the two rates differ.
+    """
+
+    return abs(found - declared) > _FPS_REL_TOL * declared
+
+
+@metric(
+    level=Level.STREAM,
+    family=Family.VISION,
+    label="video format differs from declaration",
+)
+def video_format_consistency(ctx: StreamContext) -> MetricResult:
+    """How many declared format fields the container header contradicts.
+
+    Compares width, height, frame rate and pixel format, decoding nothing.
+    A field the dataset does not declare is listed under `undeclared` and skipped,
+    and one the container does not state is listed under `unstated` and skipped:
+    a missing value contradicts nothing.
+    A file that cannot be opened is `camera_stream_present`'s to report.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with the count of differing fields,
+        or `not_applicable` when the stream is not backed by a readable video file
+        or the dataset declares no format for it.
+    """
+
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    declared = payload.declared
+    if declared is None:
+        return not_applicable("the dataset declares no video format")
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(header, DecodeFailed):
+        return not_applicable(str(header))
+
+    differs: list[dict[str, int | float | str | None]] = []
+    undeclared: list[str] = []
+    unstated: list[str] = []
+    for field in ("width", "height", "fps", "pix_fmt"):
+        expected = getattr(declared, field)
+        found = getattr(header, field)
+        if expected is None:
+            undeclared.append(field)
+            continue
+        if found is None:
+            unstated.append(field)
+            continue
+        if field == "fps":
+            mismatch = _fps_differs(found, expected)
+        else:
+            mismatch = found != expected
+        if mismatch:
+            differs.append({"field": field, "declared": expected, "found": found})
+
+    return MetricResult(
+        value=float(len(differs)),
+        unit="fields",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "differs": differs,
+            "undeclared": undeclared,
+            "unstated": unstated,
+            "camera": ctx.stream.source_field,
         },
     )
 

@@ -12,12 +12,19 @@ from fractions import Fraction
 # External
 import polars as pl
 import pytest
+from fsspec.implementations.memory import MemoryFile, MemoryFileSystem
 from upath import UPath
 
 # Internal
 import kalanos.api
 from kalanos.analysis.adapters import video
-from kalanos.analysis.adapters.video import DecodeFailed, SegmentPackets, VideoPayload
+from kalanos.analysis.adapters.video import (
+    ContainerHeader,
+    DeclaredFormat,
+    DecodeFailed,
+    SegmentPackets,
+    VideoPayload,
+)
 from kalanos.analysis.coverage import coverage_lines, vision_metric_coverage
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics import vision
@@ -26,6 +33,7 @@ from kalanos.analysis.metrics.vision import (
     blank_frame_pct,
     bright_frame_pct,
     camera_frames,
+    camera_stream_present,
     contrast_score,
     dark_frame_pct,
     exposure_level,
@@ -35,6 +43,7 @@ from kalanos.analysis.metrics.vision import (
     max_gap_s,
     pts_defect_pct,
     sharpness_score,
+    video_format_consistency,
 )
 from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.coverage import Availability
@@ -61,6 +70,7 @@ from kalanos.analysis.reporting.assemble import (
     grade_stream,
     scope_policy,
 )
+from kalanos.analysis.scoring.score import score_episode
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
@@ -319,6 +329,289 @@ def test_a_short_video_blocks_only_under_a_video_scope():
     )
     reported = _grade(truncated, default_scope).get(metric_id)
     assert reported is None or reported.consequence != Consequence.BLOCK
+
+
+CAMERA_FIELD = "observation.images.up"
+
+
+def _camera(
+    path: UPath, declared: DeclaredFormat | None = None, start_s: float = 8 / 30
+) -> Stream:
+    """A six-frame camera stream over `path` from `start_s`, as a LeRobot video key."""
+
+    payload = VideoPayload(
+        path=path,
+        frame_count=6,
+        start_s=start_s,
+        end_s=start_s + 6 / 30,
+        declared=declared,
+    )
+    return _video_stream(payload, 6).model_copy(update={"source_field": CAMERA_FIELD})
+
+
+def _frameless_mp4(path: UPath) -> UPath:
+    """Write an mp4 whose one h264 stream holds no frame."""
+
+    av = pytest.importorskip("av")
+    # Without empty_moov the muxer drops a track that never received a packet.
+    with av.open(str(path), "w", options={"movflags": "empty_moov"}) as out:
+        stream = out.add_stream("h264", rate=30)
+        stream.width, stream.height, stream.pix_fmt = 32, 32, "yuv420p"
+        out.start_encoding()
+    return path
+
+
+def _unreadable(tmp_path) -> UPath:
+    """Random bytes no demuxer recognises."""
+
+    corrupt = UPath(tmp_path / "corrupt.mp4")
+    corrupt.write_bytes(random.Random(42).randbytes(4096))
+    return corrupt
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda tmp_path: _camera(UPath(tmp_path / "absent.mp4")),
+        lambda tmp_path: _camera(_unreadable(tmp_path)),
+        lambda tmp_path: _camera(_frameless_mp4(UPath(tmp_path / "frameless.mp4"))),
+        # A shared file that ends before this episode's segment begins.
+        lambda tmp_path: _camera(LEROBOT_VIDEO, start_s=500.0),
+        lambda tmp_path: _camera(UPath("memory://videos/absent.mp4")),
+    ],
+    ids=["missing", "unreadable", "frameless", "segment_past_the_end", "remote"],
+)
+def test_an_absent_camera_blocks_only_under_a_video_scope(tmp_path, build):
+    """A camera with no first frame to read blocks through its contract, naming it."""
+
+    stream = build(tmp_path)
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    default_scope = scope_policy(load_default_policy(), RequirementsSection())
+    metric_id = "vision.camera_stream_present"
+
+    finding = _grade(stream, video_scope)[metric_id]
+    assert (finding.consequence, finding.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    assert finding.source_field == CAMERA_FIELD
+    assert all(
+        finding.consequence != Consequence.BLOCK
+        for finding in _grade(stream, default_scope).values()
+    )
+
+
+@pytest.mark.parametrize("failing", ["open", "read"])
+def test_a_network_error_leaves_presence_unknown_and_uncached(monkeypatch, failing):
+    """A remote read that fails outside the file neither blocks nor sticks."""
+
+    remote = UPath("memory://videos/flaky.mp4")
+    remote.write_bytes(LEROBOT_VIDEO.read_bytes())
+    stream = _camera(remote)
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+
+    def unreachable(*_args, **_kwargs):
+        """Fail as a hub answering 503 does."""
+
+        raise ConnectionError("503 Service Unavailable")
+
+    target = MemoryFileSystem if failing == "open" else MemoryFile
+    method = "_open" if failing == "open" else "read"
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(target, method, unreachable)
+            result = camera_stream_present(stream_context(stream))
+            findings = _grade(stream, video_scope)
+
+        assert result.value is None
+        assert result.availability == Availability.UNAVAILABLE
+        assert "vision.camera_stream_present" not in findings
+        assert camera_stream_present(stream_context(stream)).value == 1.0
+    finally:
+        video.close_remote_handles()
+        remote.unlink()
+
+
+def test_a_dropped_first_frame_is_still_present(tmp_path):
+    """A segment whose first frame the encoder dropped reads its next one."""
+
+    path = UPath(tmp_path / "dropped.mp4")
+    _write_paced_video(path, [tick for tick in range(20) if tick != 8])
+
+    result = camera_stream_present(stream_context(_camera(path)))
+
+    assert result.value == 1.0
+    assert result.evidence["reason"] is None
+
+
+def test_presence_keeps_one_frame_and_format_decodes_none(monkeypatch):
+    """Presence stops at the segment's first frame; format reads the header alone."""
+
+    calls: list[int] = []
+    gray_windows = VideoPayload.gray_windows
+
+    def counting(self, windows, size, native=frozenset(), **caps):
+        calls.append(0)
+        for item in gray_windows(self, windows, size, native, **caps):
+            calls[-1] += 1
+            yield item
+
+    monkeypatch.setattr(VideoPayload, "gray_windows", counting)
+    stream = _camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0))
+
+    assert camera_stream_present(stream_context(stream)).value == 1.0
+    assert calls == [1]
+    calls.clear()
+    assert video_format_consistency(stream_context(stream)).value == 0.0
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "doctored",
+    [
+        {"width": 64},
+        {"height": 64},
+        {"fps": 25.0},
+        {"pix_fmt": "yuv444p"},
+    ],
+    ids=lambda doctored: next(iter(doctored)),
+)
+def test_video_format_consistency_names_each_differing_field(doctored):
+    """One declared field that disagrees with the header is the one reported."""
+
+    declared = {"width": 32, "height": 32, "fps": 30.0, "pix_fmt": "yuv420p"}
+    declared.update(doctored)
+    result = video_format_consistency(
+        stream_context(_camera(LEROBOT_VIDEO, DeclaredFormat(**declared)))
+    )
+
+    field = next(iter(doctored))
+    assert result.value == 1.0
+    assert [entry["field"] for entry in result.evidence["differs"]] == [field]
+    assert result.evidence["differs"][0]["declared"] == doctored[field]
+    assert result.evidence["undeclared"] == []
+
+
+def test_video_format_consistency_lists_undeclared_fields():
+    """Undeclared fields are listed, not compared; with none declared, nothing is."""
+
+    result = video_format_consistency(
+        stream_context(_camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0)))
+    )
+    assert result.value == 0.0
+    assert result.evidence["undeclared"] == ["width", "height", "pix_fmt"]
+
+    _assert_not_applicable(
+        video_format_consistency(stream_context(_camera(LEROBOT_VIDEO)))
+    )
+
+
+def test_format_reads_the_header_without_numpy(monkeypatch):
+    """Comparing the header needs only the decoder; presence still names numpy."""
+
+    monkeypatch.setattr(vision, "load_numpy", lambda: None)
+    stream = _camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0))
+
+    assert video_format_consistency(stream_context(stream)).value == 0.0
+    assert "numpy" in _assert_not_applicable(
+        camera_stream_present(stream_context(stream))
+    )
+
+
+def test_a_field_the_container_does_not_state_is_not_a_difference(monkeypatch):
+    """A header with no average rate or pixel format contradicts no declaration."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: ContainerHeader(width=32, height=32, fps=None, pix_fmt=None),
+    )
+    declared = DeclaredFormat(width=32, height=32, fps=30.0, pix_fmt="yuv420p")
+
+    result = video_format_consistency(stream_context(_camera(LEROBOT_VIDEO, declared)))
+
+    assert result.value == 0.0
+    assert result.evidence["differs"] == []
+    assert result.evidence["unstated"] == ["fps", "pix_fmt"]
+
+
+@pytest.mark.parametrize(
+    ("found", "declared", "differs"),
+    [
+        (30000 / 1001, 29.97, False),
+        (30.0, 30.0, False),
+        (29.0, 30.0, True),
+        (25.0, 30.0, True),
+    ],
+)
+def test_fps_tolerance_absorbs_ntsc_rounding_only(found, declared, differs):
+    """A rounded NTSC rate matches its declaration; a real rate change does not."""
+
+    assert vision._fps_differs(found, declared) is differs
+
+
+def test_presence_and_format_skip_in_memory_frames():
+    """Frames held in memory have no file to be missing or to declare a format."""
+
+    stream = clean_frames()
+    for check in (camera_stream_present, video_format_consistency):
+        _assert_not_applicable(check(stream_context(stream)))
+
+
+def test_presence_leaves_the_vision_score_unchanged_on_clean_video():
+    """A readable camera grades presence under a video scope, vision score unmoved."""
+
+    requirements = RequirementsSection(required_capabilities=["sampled_video_quality"])
+    with_presence = scope_policy(load_default_policy(), requirements)
+    without = load_default_policy()
+    del without.metrics["vision.camera_stream_present"]
+    without = scope_policy(without, requirements)
+    stream = _camera(LEROBOT_VIDEO)
+
+    def graded(policy):
+        """Grade the clean camera under `policy`."""
+
+        stream_grade, _findings = grade_stream(
+            stream, policy=policy, is_regular=True, episode_id="e0", category=None
+        )
+        return stream_grade
+
+    present, absent = graded(with_presence), graded(without)
+    assert present.metrics["camera_stream_present"].status == MetricStatus.GOOD
+    assert present.score.families["vision"] == pytest.approx(
+        absent.score.families["vision"]
+    )
+    assert score_episode([present], {}, policy=with_presence).families[
+        "vision"
+    ] == pytest.approx(score_episode([absent], {}, policy=without).families["vision"])
+
+
+def test_an_absent_camera_alone_gives_vision_no_score(tmp_path):
+    """Presence failing with nothing else graded leaves vision unscored, not zero."""
+
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    stream_grade, _findings = grade_stream(
+        _camera(UPath(tmp_path / "absent.mp4")),
+        policy=video_scope,
+        is_regular=True,
+        episode_id="e0",
+        category=None,
+    )
+
+    assert stream_grade.metrics["camera_stream_present"].points == 0.0
+    assert "vision" not in stream_grade.score.families
+    episode = score_episode([stream_grade], {}, policy=video_scope)
+    assert "vision" not in episode.families
+    assert episode.metrics["vision.camera_stream_present"].points == 0.0
 
 
 @pytest.mark.parametrize(
@@ -889,7 +1182,12 @@ def test_a_graded_video_stream_serializes_to_json(_fixture_stream):
         category=None,
     )
 
-    for name in ("sharpness_score", "exposure_shift_pct", "frame_count_vs_timebase"):
+    for name in (
+        "sharpness_score",
+        "exposure_shift_pct",
+        "frame_count_vs_timebase",
+        "camera_stream_present",
+    ):
         assert graded.metrics[name].value is not None
     json.loads(graded.model_dump_json())
 
@@ -1246,6 +1544,11 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         "packet_times",
         lambda self: pytest.fail("metadata tier counted frames"),
     )
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: pytest.fail("metadata tier read the header"),
+    )
 
     graded, _findings = grade_stream(
         _fixture_stream,
@@ -1262,6 +1565,8 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         "frame_count_vs_timebase",
         "pts_defect_pct",
         "max_gap_s",
+        "camera_stream_present",
+        "video_format_consistency",
     ):
         assert "metadata tier" in _assert_not_applicable(graded.metrics[name])
     with use_tier(ExecutionTier.METADATA):

@@ -82,6 +82,8 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "pts_defect_pct": None,
     "max_gap_s": None,
     "camera_sync_skew_ms": None,
+    "camera_stream_present": None,
+    "video_format_consistency": None,
     "frozen_frame_pct": Defect.FROZEN_FRAMES,
 }
 

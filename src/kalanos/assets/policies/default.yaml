@@ -99,6 +99,24 @@ metrics:
   vision.camera_sync_skew_ms:
     report_only: true
 
+  # A declared camera whose file is missing, unreadable or frameless breaks a
+  # declared invariant with direct evidence, so it blocks through the contract
+  # route without a calibration manifest, under a scope that grades vision.
+  # The flag is only ever 0 or 1, so any bad bound between them grades it the same.
+  # Weight 0: a pass/fail gate, not a quality measure, so it never moves the vision score.
+  vision.camera_stream_present:
+    weight: 0
+    route: contract
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 0.5
+
+  # Reported, never graded: no band is decided.
+  vision.video_format_consistency:
+    report_only: true
+
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:
     weight: 6
