@@ -165,6 +165,8 @@ Depth streams (`extero.depth`, `extero.depth_confidence`, `extero.disparity`) ar
 | `exposure_level` | STREAM | decode | gray level | Median, over the sampled frames, of each frame's mean gray (0-255); evidence carries the median share of pixels at or below 5 and at or above 250. | reported, no band |
 | `frame_count_vs_timebase` | STREAM | a video file | fraction | `\|packets in the episode's segment - timestamps\| / timestamps`, with the segment's bounds taken half a frame early as tolerance. On a one-file-per-episode layout (LeRobot v2) the count runs to the file's end, so frames past the timestamps show. Blocks through the contract route. | *candidate: good < 1%, bad > 5%* |
 | `pts_defect_pct` | STREAM | a video file | % | Share of the steps between the segment's sorted packet presentation timestamps that are a duplicate (two equal timestamps) or a gap (a step longer than 1.5 declared frame periods, the period being the segment's span over its declared frame count, since the container's average rate falls with every dropped frame). The rule assumes the constant frame rate the format declares; LeRobot's own encoder places frame k at k/fps, so a recording it wrote reads 0. | reported, no band |
+| `max_gap_s` | STREAM | a video file | s | Longest step between the segment's sorted packet presentation timestamps; evidence gives its start and end in segment seconds, the index of the packet before it, and its length in declared frame periods. Edges of the segment are not counted, so a stall whose later frames fall past the segment's end does not show here; `frame_count_vs_timebase` reads those frames as missing. | reported, no band |
+| `camera_sync_skew_ms` | EPISODE | two or more cameras, each a one-file-per-episode video | ms | Per camera, the median over frames paired by index of (packet time - recorded timestamp); the value is the largest offset minus the smallest. It measures where each file's frames sit against the recorded timestamps; capture synchronisation is not measured, since LeRobot's recorder stamps every camera at k/fps, so a clean LeRobot episode reads 0. Three kinds of camera are listed under `skipped` evidence: a segment of a file holding several episodes (LeRobot v3), whose packets are chosen by its recorded start and so sit on its timestamps whatever happened; a camera whose paired frames hold a duplicate or a gap, which would shift every later pair by a frame period; and a camera whose paired frames hold a null or non-finite recorded timestamp. A LeRobot v3 dataset therefore reads not applicable. | reported, no band |
 
 `frozen_frame_pct` counts only runs of at least 0.5 s, so isolated duplicates such as toto's every-4th-frame repeats never count. Its windows can miss a freeze that falls between them; `--full-frame-scan` finds it at the cost of time and, on a remote dataset, of downloading every video segment. The comparison, minimum run and moving-robot rules come from rda. Its *good* bound follows rda and Calibra: both flag any freeze, so any counted freeze leaves *good*; its *bad* bound is calibrated below. rda also excludes on three or more freezes or a single one of 3 s or more; neither is graded here, since `longest_run_s` and `n_runs` are evidence, not metrics.
 
@@ -328,7 +330,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
 | `exposure_level` | default | — | — | reported, no band |
 
-Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
+Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 
 An episode counts each metric once, at its worst channel, stream or camera. Its family scores are weighted means of those metrics, and its score is a weighted mean of its family scores, renormalised over the families that scored, minus a capped penalty per distinct failing metric. The dataset averages its episodes.
 
@@ -424,6 +426,7 @@ The report records, per metric, how many subjects it graded and how many it flag
 | vision | `exposure_shift_pct` | 3 | true |
 | vision | `pts_defect_pct` | 2 | false |
 | vision | `exposure_level` | none, report-only | false |
+| vision | `max_gap_s`, `camera_sync_skew_ms` | none, report-only | false |
 | annotation | `task_instruction_missing` | 5 | true |
 
 Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.

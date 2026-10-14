@@ -19,13 +19,16 @@ import kalanos.api
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.video import DecodeFailed, SegmentPackets, VideoPayload
 from kalanos.analysis.coverage import coverage_lines, vision_metric_coverage
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics import vision
+from kalanos.analysis.metrics.registry import run_episode_metrics
 from kalanos.analysis.metrics.vision import (
     camera_frames,
     exposure_level,
     exposure_shift_pct,
     frame_count_vs_timebase,
     frozen_frame_pct,
+    max_gap_s,
     pts_defect_pct,
     sharpness_score,
 )
@@ -34,6 +37,7 @@ from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import (
     Clock,
+    Episode,
     FramePayload,
     Kind,
     MappingSource,
@@ -42,9 +46,18 @@ from kalanos.analysis.models.domain import (
     TimestampDtype,
 )
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
-from kalanos.analysis.models.metrics import MetricStatus, StreamContext
+from kalanos.analysis.models.metrics import (
+    EpisodeContext,
+    MetricStatus,
+    StreamContext,
+)
 from kalanos.analysis.models.provenance import ExecutionTier
-from kalanos.analysis.reporting.assemble import grade_stream, scope_policy
+from kalanos.analysis.reporting.assemble import (
+    grade_episode,
+    grade_stream,
+    scope_policy,
+)
+from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
     check_metric,
@@ -76,6 +89,7 @@ VISION_METRICS = [
     exposure_shift_pct,
     frame_count_vs_timebase,
     pts_defect_pct,
+    max_gap_s,
 ]
 
 ACTION_TYPE = "action.joint_position_command"
@@ -173,6 +187,44 @@ def _write_paced_video(path: UPath, pts: list[int]) -> None:
     for packet in stream.encode():
         container.mux(packet)
     container.close()
+
+
+def _paced_camera(
+    path: UPath,
+    pts: list[int],
+    source_field: str,
+    frames: int | None = None,
+    start: int = 0,
+    whole_file: bool = True,
+) -> Stream:
+    """Encode `pts` to `path` as a camera of `frames` timestamps `index / 30`.
+
+    `frames` defaults to one per pts; the segment starts at tick `start`.
+    """
+
+    _write_paced_video(path, pts)
+    frames = len(pts) if frames is None else frames
+    payload = VideoPayload(
+        path=path,
+        frame_count=frames,
+        start_s=start / 30,
+        end_s=(start + frames) / 30,
+        whole_file=whole_file,
+    )
+    return _video_stream(payload, frames).model_copy(
+        update={
+            "taxonomy_type": f"unmapped.observation.images.{source_field}",
+            "source_field": source_field,
+        }
+    )
+
+
+def _skew(*cameras: Stream):
+    """Run `camera_sync_skew_ms` over one episode holding `cameras`."""
+
+    return run_episode_metrics(
+        EpisodeContext(episode=Episode(id="episode_0", streams=list(cameras)))
+    )["camera_sync_skew_ms"]
 
 
 def _grade(stream: Stream, policy):
@@ -309,6 +361,291 @@ def test_pts_defect_pct_counts_duplicates(monkeypatch, _fixture_stream):
 
     assert (result.evidence["duplicates"], result.evidence["gaps"]) == (1, 0)
     assert result.value == pytest.approx(100 / 3)
+
+
+def test_max_gap_reports_the_longest_gap_and_where(tmp_path):
+    """Three frames missing after row 9 read as one gap of four periods, located."""
+
+    clean_path, gapped_path = UPath(tmp_path / "clean.mp4"), UPath(tmp_path / "gap.mp4")
+    _write_paced_video(clean_path, list(range(30)))
+    _write_paced_video(gapped_path, [t for t in range(30) if t not in (10, 11, 12)])
+    clean, gapped = (
+        _video_stream(
+            VideoPayload(path=path, frame_count=30, start_s=0.0, end_s=1.0), 30
+        )
+        for path in (clean_path, gapped_path)
+    )
+
+    check_metric(
+        max_gap_s,
+        clean=stream_context(clean, is_regular=True),
+        defective=stream_context(gapped, is_regular=True),
+        policy=load_default_policy(),
+    )
+    result = max_gap_s(stream_context(gapped, is_regular=True))
+    assert result.value == pytest.approx(4 / 30)
+    assert result.evidence["after_row"] == 9
+    assert result.evidence["gap_start_s"] == pytest.approx(9 / 30)
+    assert result.evidence["gap_end_s"] == pytest.approx(13 / 30)
+    assert result.evidence["gap_periods"] == pytest.approx(4)
+    assert max_gap_s(stream_context(clean, is_regular=True)).value == pytest.approx(
+        1 / 30
+    )
+
+
+def test_camera_sync_skew_reports_a_known_offset(tmp_path):
+    """A camera whose frames sit 100 ms late against its timestamps reads 100 ms."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+
+    result = _skew(up, side)
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == pytest.approx(100)
+    offsets = {
+        camera["stream"]: camera["offset_ms"] for camera in result.evidence["cameras"]
+    }
+    assert offsets == {"up": pytest.approx(0), "side": pytest.approx(100)}
+
+
+def test_camera_sync_skew_reads_zero_on_aligned_cameras(tmp_path):
+    """Two cameras whose frames sit on their timestamps read no skew."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(30)), "side")
+
+    assert _skew(up, side).value == pytest.approx(0)
+
+
+def test_camera_sync_skew_needs_two_cameras(tmp_path):
+    """One camera has nothing to be skewed against."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+
+    _assert_not_applicable(_skew(up, _moving_actions(30)))
+
+
+def test_camera_sync_skew_skips_an_unreadable_camera(tmp_path):
+    """A camera whose file cannot be read is set aside, and the others still compare."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+    corrupt = UPath(tmp_path / "corrupt.mp4")
+    corrupt.write_bytes(random.Random(42).randbytes(4096))
+    broken = up.model_copy(
+        update={
+            "payload": VideoPayload(
+                path=corrupt, frame_count=30, start_s=0.0, end_s=1.0, whole_file=True
+            ),
+            "source_field": "broken",
+        }
+    )
+
+    result = _skew(up, broken, side)
+
+    assert result.value == pytest.approx(100)
+    assert [skip["stream"] for skip in result.evidence["skipped"]] == ["broken"]
+
+
+def test_camera_sync_skew_is_the_spread_between_cameras(tmp_path):
+    """Cameras late by 100, 300 and 200 ms read 200 ms between the extremes."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(3, 33)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(9, 39)), "side")
+    low = _paced_camera(UPath(tmp_path / "low.mp4"), list(range(6, 36)), "low")
+
+    assert _skew(up, side, low).value == pytest.approx(200)
+
+
+def test_camera_sync_skew_measures_from_the_segment_start(tmp_path):
+    """A segment starting 8 frames into its file, on time there, reads no offset."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(
+        UPath(tmp_path / "side.mp4"), list(range(38)), "side", frames=30, start=8
+    )
+
+    assert _skew(up, side).value == pytest.approx(0)
+
+
+def test_camera_sync_skew_pairs_from_the_first_frame(tmp_path):
+    """Frames past the last timestamp, as a whole file holds, shift no offset."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(33)), "side", 30)
+
+    assert _skew(up, side).value == pytest.approx(0)
+
+
+def test_camera_sync_skew_reads_only_camera_footage_in_source_order(tmp_path):
+    """A depth map and a reordered camera take no part, however late."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+    depth = _paced_camera(UPath(tmp_path / "d.mp4"), list(range(9, 39)), "d")
+    depth = depth.model_copy(
+        update={
+            "taxonomy_type": "extero.depth",
+            "mapping_source": MappingSource.DICTIONARY,
+        }
+    )
+    reordered = _paced_camera(UPath(tmp_path / "r.mp4"), list(range(9, 39)), "r")
+    reordered = reordered.model_copy(
+        update={"source_order": SourceOrder(preserved=False)}
+    )
+
+    result = _skew(up, side, depth, reordered)
+
+    assert result.value == pytest.approx(100)
+    assert {camera["stream"] for camera in result.evidence["cameras"]} == {
+        "up",
+        "side",
+    }
+
+
+def test_camera_sync_skew_skips_a_camera_sharing_its_file(tmp_path):
+    """A segment of a file holding several episodes is placed by its recorded start.
+
+    Its frames then sit on its timestamps whatever happened,
+    so the camera is set aside rather than read as on time.
+    """
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+    shared = _paced_camera(
+        UPath(tmp_path / "shared.mp4"),
+        list(range(93)),
+        "shared",
+        frames=30,
+        start=33,
+        whole_file=False,
+    )
+
+    result = _skew(up, side, shared)
+
+    assert result.value == pytest.approx(100)
+    assert [skip["stream"] for skip in result.evidence["skipped"]] == ["shared"]
+    assert "several episodes" in result.evidence["skipped"][0]["reason"]
+    assert "several episodes" in _assert_not_applicable(_skew(up, shared))
+
+
+@pytest.mark.parametrize(
+    "pts",
+    [
+        [t for t in range(31) if t != 5],
+        [0, 1, 2, 2, *range(3, 29)],
+    ],
+    ids=["dropped", "repeated"],
+)
+def test_camera_sync_skew_skips_a_camera_with_a_missing_or_repeated_frame(
+    tmp_path, pts
+):
+    """A lost or repeated frame shifts pairing by index, so that camera is set aside."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mkv"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mkv"), list(range(3, 33)), "side")
+    broken = _paced_camera(UPath(tmp_path / "broken.mkv"), pts, "broken", 30)
+
+    result = _skew(up, side, broken)
+
+    assert result.value == pytest.approx(100)
+    assert [skip["stream"] for skip in result.evidence["skipped"]] == ["broken"]
+
+
+@pytest.mark.parametrize("stamp", [None, float("nan")], ids=["null", "nan"])
+def test_camera_sync_skew_skips_a_camera_with_an_unreadable_timestamp(tmp_path, stamp):
+    """A null or NaN recorded timestamp gives no offset, so that camera is set aside."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+    broken = _paced_camera(UPath(tmp_path / "broken.mp4"), list(range(30)), "broken")
+    stamps = [index / 30 for index in range(30)]
+    stamps[7] = stamp
+    broken = broken.model_copy(
+        update={"timestamps": pl.Series("time_s", stamps, dtype=pl.Float64)}
+    )
+
+    result = _skew(broken, up, side)
+
+    assert result.value == pytest.approx(100)
+    assert [skip["stream"] for skip in result.evidence["skipped"]] == ["broken"]
+
+
+def test_camera_sync_skew_without_the_decoder_names_the_extra(monkeypatch, tmp_path):
+    """With PyAV missing, the skew says which extra to install."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(30)), "side")
+    monkeypatch.setattr(video, "av", None)
+
+    assert "kalanos[video]" in _assert_not_applicable(_skew(up, side))
+
+
+def test_max_gap_locates_its_gap_in_segment_seconds(_fixture_stream):
+    """A segment starting mid-file reports its gap from the segment's own start."""
+
+    result = max_gap_s(stream_context(_fixture_stream, is_regular=True))
+
+    assert 0 <= result.evidence["gap_start_s"] < 6 / 30
+
+
+def test_max_gap_never_starts_before_its_segment(tmp_path):
+    """A first frame a little before the recorded start places its gap at 0, not below.
+
+    Bounds sit half a frame early, so a segment's first packet can precede `start_s`,
+    and on a clean stream the longest step is the first one.
+    """
+
+    path = UPath(tmp_path / "shared.mp4")
+    _write_paced_video(path, list(range(93)))
+    payload = VideoPayload(
+        path=path, frame_count=30, start_s=33 / 30 + 0.001, end_s=63 / 30 + 0.001
+    )
+
+    result = max_gap_s(stream_context(_video_stream(payload, 30), is_regular=True))
+
+    assert result.evidence["after_row"] == 0
+    assert result.evidence["gap_start_s"] == 0
+
+
+def test_gap_and_skew_decode_no_frame(monkeypatch, tmp_path):
+    """Both metrics read packet timestamps alone, never a frame."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+    for method in ("fetch", "gray_windows", "rgb_frame", "rgb_frames", "_windows"):
+        monkeypatch.setattr(
+            VideoPayload,
+            method,
+            lambda self, *args, **kwargs: pytest.fail("a frame was decoded"),
+        )
+
+    assert max_gap_s(stream_context(up, is_regular=True)).value == pytest.approx(1 / 30)
+    assert _skew(up, side).value == pytest.approx(100)
+
+
+def test_gap_and_skew_are_report_only(tmp_path):
+    """Graded under the default policy, neither metric raises a finding."""
+
+    up = _paced_camera(UPath(tmp_path / "up.mp4"), list(range(30)), "up")
+    side = _paced_camera(UPath(tmp_path / "side.mp4"), list(range(3, 33)), "side")
+
+    graded, findings = grade_episode(
+        Episode(id="episode_0", streams=[up, side]),
+        adapter="test",
+        adapter_confidence=1.0,
+        policy=load_default_policy(),
+        dictionary=load_default_dictionary(),
+    )
+
+    assert graded.metrics["camera_sync_skew_ms"].status == MetricStatus.REPORT_ONLY
+    for stream in graded.streams:
+        assert stream.metrics["max_gap_s"].status == MetricStatus.REPORT_ONLY
+    assert not {finding.metric_id for finding in findings} & {
+        "vision.max_gap_s",
+        "vision.camera_sync_skew_ms",
+    }
 
 
 def test_frame_count_vs_timebase_catches_a_truncated_video(_fixture_stream):
@@ -766,8 +1103,12 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         "exposure_shift_pct",
         "frame_count_vs_timebase",
         "pts_defect_pct",
+        "max_gap_s",
     ):
         assert "metadata tier" in _assert_not_applicable(graded.metrics[name])
+    with use_tier(ExecutionTier.METADATA):
+        skew = _skew(_fixture_stream, _fixture_stream)
+    assert "metadata tier" in _assert_not_applicable(skew)
 
 
 def test_vision_metric_coverage_leaves_depth_out():

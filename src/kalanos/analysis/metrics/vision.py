@@ -1,14 +1,15 @@
 """The vision family.
 
-Six metrics grade camera footage:
+Eight metrics grade camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
   (10 by default);
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
-- frame_count_vs_timebase and pts_defect_pct share one packet probe,
-  decoding nothing, under a full scan too.
+- frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
+  decoding nothing, under a full scan too;
+- camera_sync_skew_ms compares the cameras of one episode through the same probe.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
@@ -52,13 +53,15 @@ from kalanos.analysis.adapters.video import (
     VideoPayload,
 )
 from kalanos.analysis.diagnostics.previews import png_thumbnail
+from kalanos.analysis.execution import reads_numeric_payloads
 from kalanos.analysis.localization import support_for
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.dictionary import Modality
-from kalanos.analysis.models.domain import Kind, Payload
+from kalanos.analysis.models.domain import ClockInfo, Kind, Payload
 from kalanos.analysis.models.metrics import (
+    EpisodeContext,
     Family,
     Level,
     MetricResult,
@@ -617,6 +620,33 @@ def _packets(payload: VideoPayload) -> SegmentPackets | DecodeFailed:
     return result
 
 
+def _declared_fps(payload: VideoPayload, packets: SegmentPackets) -> float:
+    """Return the segment's declared frame rate, or the container's without one.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The segment, with its declared frame count and bounds.
+    packets : SegmentPackets
+        The segment's probed packets, whose rate is the fallback.
+
+    Returns
+    -------
+    float
+        Frames per second.
+    """
+
+    # The container's average rate falls with every dropped frame,
+    # so a steady drop would widen its own threshold;
+    # the dataset's declared rate does not move.
+    span = payload.end_s - payload.start_s
+    return (
+        payload.frame_count / span
+        if payload.frame_count > 0 and span > 0
+        else packets.fps
+    )
+
+
 def _laplacian_var(frame: "np.ndarray") -> float:
     """Variance of the 3x3 Laplacian over the whole frame."""
 
@@ -939,15 +969,7 @@ def pts_defect_pct(ctx: StreamContext) -> MetricResult:
     if len(packets.pts) < 2:
         return not_applicable("fewer than two frames to space")
 
-    # The container's average rate falls with every dropped frame,
-    # so a steady drop would widen its own threshold;
-    # the dataset's declared rate does not move.
-    span = payload.end_s - payload.start_s
-    fps = (
-        payload.frame_count / span
-        if payload.frame_count > 0 and span > 0
-        else packets.fps
-    )
+    fps = _declared_fps(payload, packets)
     steps = numpy.diff(numpy.asarray(packets.pts))
     duplicates = int((steps == 0).sum())
     gaps = int((steps * packets.time_base > _GAP_PERIODS / fps).sum())
@@ -960,6 +982,193 @@ def pts_defect_pct(ctx: StreamContext) -> MetricResult:
             "duplicates": duplicates,
             "gaps": gaps,
             "period_s": 1 / fps,
+        },
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="longest frame gap")
+def max_gap_s(ctx: StreamContext) -> MetricResult:
+    """Longest step between the segment's sorted packet timestamps, in seconds.
+
+    Only steps between packets count:
+    the segment's edges come from metadata, so a hole there may be rounding.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with the longest step and where it sits,
+        or `not_applicable` when there is no readable video file
+        or fewer than two frames.
+    """
+
+    payload = _camera_payload(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if not isinstance(payload, VideoPayload):
+        return not_applicable("the stream's frames do not come from a video file")
+    numpy = load_numpy()
+    if numpy is None:
+        return not_applicable("spacing frames needs numpy; add kalanos[video]")
+    try:
+        packets = _packets(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(packets, DecodeFailed):
+        return not_applicable(str(packets))
+    if len(packets.pts) < 2:
+        return not_applicable("fewer than two frames to space")
+
+    period = 1 / _declared_fps(payload, packets)
+    pts = numpy.asarray(packets.pts)
+    steps = numpy.diff(pts)
+    index = int(numpy.argmax(steps))
+    gap = float(steps[index] * packets.time_base)
+    # The bounds sit half a frame early, so the first packet can precede start_s;
+    # a gap is never placed before its segment begins.
+    gap_start = max(0.0, float(pts[index] * packets.time_base - payload.start_s))
+    return MetricResult(
+        value=gap,
+        unit="s",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "after_row": index,
+            "gap_start_s": gap_start,
+            "gap_end_s": float(pts[index + 1] * packets.time_base - payload.start_s),
+            "period_s": period,
+            "gap_periods": gap / period,
+            "intervals": len(steps),
+        },
+    )
+
+
+@metric(level=Level.EPISODE, family=Family.VISION, label="camera timestamp offset")
+def camera_sync_skew_ms(ctx: EpisodeContext) -> MetricResult:
+    """Spread of the episode's cameras' offsets against their recorded timestamps.
+
+    A camera's offset is the median, over frames paired by index,
+    of its packet presentation time less its recorded timestamp.
+    Three kinds of camera are set aside under `skipped`:
+    - a segment of a file holding several episodes:
+      its packets are chosen by its recorded start,
+      so they sit on its timestamps to within half a frame whatever happened;
+    - a camera whose paired frames hold a duplicate or a gap:
+      every pair after it is off by a frame period,
+      and `pts_defect_pct` and `max_gap_s` report the frames themselves;
+    - a camera whose paired frames hold a null or non-finite recorded timestamp:
+      that frame has no offset to read.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The recording whose cameras are compared.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when:
+        - the metadata tier reads no frames
+        - numpy is not installed
+        - PyAV is not installed
+        - fewer than two cameras have an offset that can be read
+        `report_only` otherwise, with the largest offset less the smallest.
+    """
+
+    if not reads_numeric_payloads():
+        return not_applicable("metadata tier does not read frames")
+    numpy = load_numpy()
+    if numpy is None:
+        return not_applicable("spacing frames needs numpy; add kalanos[video]")
+
+    # Step 1: pick the cameras whose frames come from a video file in source order
+    candidates = [
+        (stream, stream.payload)
+        for stream in ctx.streams
+        if is_camera_footage(stream.kind.value, stream.taxonomy_type)
+        and isinstance(stream.payload, VideoPayload)
+        and stream.source_order.preserved
+        and stream.source_order.original_index is None
+    ]
+
+    # Step 2: offset each camera's packets against its own recorded timestamps
+    cameras: list[dict[str, object]] = []
+    skipped: list[dict[str, str]] = []
+    offsets: list[float] = []
+    for stream, payload in candidates:
+        name = stream.source_field or stream.taxonomy_type
+        if not payload.whole_file:
+            skipped.append(
+                {
+                    "stream": name,
+                    "reason": "its file holds several episodes, "
+                    "so the segment is placed by its recorded start",
+                }
+            )
+            continue
+        try:
+            packets = _packets(payload)
+        except DecoderUnavailable as exc:
+            return not_applicable(str(exc))
+        if isinstance(packets, DecodeFailed):
+            skipped.append({"stream": name, "reason": str(packets)})
+            continue
+        n = min(len(packets.pts), len(stream.timestamps))
+        if n < 1:
+            skipped.append({"stream": name, "reason": "no frame to pair"})
+            continue
+        pts = numpy.asarray(packets.pts[:n], dtype="float64")
+        steps = numpy.diff(pts) * packets.time_base
+        if (
+            (steps == 0) | (steps > _GAP_PERIODS / _declared_fps(payload, packets))
+        ).any():
+            skipped.append(
+                {
+                    "stream": name,
+                    "reason": "a repeated or missing frame shifts pairing by index",
+                }
+            )
+            continue
+        presented = pts * packets.time_base - payload.start_s
+        # A null reads back as NaN, and one NaN turns the median and the spread NaN.
+        recorded = stream.timestamps.head(n).cast(pl.Float64).to_numpy()
+        if not numpy.isfinite(recorded).all():
+            skipped.append(
+                {
+                    "stream": name,
+                    "reason": "a recorded timestamp is null or not finite",
+                }
+            )
+            continue
+        offset = float(numpy.median(presented - recorded))
+        offsets.append(offset)
+        info = stream.clock_info or ClockInfo.from_legacy(stream.clock)
+        cameras.append(
+            {
+                "stream": name,
+                "offset_ms": offset * 1000,
+                "frames_paired": n,
+                "clock_origin": info.origin.value,
+            }
+        )
+    if len(offsets) < 2:
+        reasons = sorted({skip["reason"] for skip in skipped})
+        return not_applicable(
+            "fewer than two cameras have an offset that can be read"
+            + "".join(f"; {reason}" for reason in reasons)
+        )
+
+    # Step 3: compare the cameras
+    return MetricResult(
+        value=(max(offsets) - min(offsets)) * 1000,
+        unit="ms",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "cameras": cameras,
+            "skipped": skipped,
+            "timestamp_basis": "packet presentation time",
+            "interpretation": (
+                "where each video file's frames sit against the recorded "
+                "timestamps; capture synchronisation is not measured"
+            ),
         },
     )
 

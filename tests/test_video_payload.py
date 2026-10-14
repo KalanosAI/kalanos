@@ -6,6 +6,7 @@
 
 # Built-in
 import random
+from fractions import Fraction
 
 # External
 import polars as pl
@@ -90,9 +91,57 @@ def _write_b_frame_video(path: UPath, frames: int) -> None:
     container.close()
 
 
+def _write_stalled_video(path: UPath) -> None:
+    """Encode three 2 s episodes at 30 fps, the third stalling 10 s after its frame 29.
+
+    The stall drops the file's average rate to 11.25.
+    """
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=30, options={"bf": "0"})
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    stream.codec_context.time_base = Fraction(1, 30)
+    for k in range(180):
+        frame = av.VideoFrame.from_ndarray(
+            numpy.full((64, 64, 3), 128, dtype=numpy.uint8), format="rgb24"
+        )
+        frame.pts = k if k < 150 else k + 300
+        frame.time_base = Fraction(1, 30)
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
 # ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
 # ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.mark.parametrize("episode", [0, 1])
+def test_a_stall_in_one_episode_leaves_the_others_segments_in_place(tmp_path, episode):
+    """Verify each segment is placed by its declared rate, whatever the file's average.
+
+    A long stall in a later episode lowers the container's average rate,
+    which would widen the half-frame tolerance past a whole frame.
+    """
+
+    path = UPath(tmp_path / "stalled.mp4")
+    _write_stalled_video(path)
+    start = 60 * episode
+    payload = VideoPayload(
+        path=path, frame_count=60, start_s=start / 30, end_s=(start + 60) / 30
+    )
+
+    times = [pts for _p, _f, _n, pts in payload.gray_windows([(0, 60)], 16)]
+
+    assert len(payload.packet_times().pts) == 60
+    assert times == pytest.approx([(start + k) / 30 for k in range(60)])
 
 
 @pytest.fixture

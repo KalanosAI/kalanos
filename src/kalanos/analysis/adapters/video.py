@@ -179,8 +179,8 @@ class SegmentPackets:
         Seconds per tick.
     fps : float
         The rate the segment was placed by:
-        the container's average rate,
-        or the segment's declared one when the file has none.
+        the segment's own, its frame count over its span,
+        or the container's average rate when the segment has no frames or no span.
     """
 
     pts: tuple[int, ...]
@@ -255,12 +255,22 @@ class VideoPayload:
         Both bounds sit half a frame early:
         a float `start_s`/`end_s` does not land exactly on a frame's pts,
         and strict bounds misread 11 of 40 toto episodes by one frame.
+        The frame is the segment's own, its frame count over its span, when it has one:
+        a stall anywhere in a shared file lowers the container's average rate,
+        and once it falls to half the real rate or below,
+        half of that longer frame spans a whole real one,
+        and every segment is pulled a frame early.
         """
 
-        rate = float(stream.average_rate or 0)
-        if rate <= 0 and (self.frame_count <= 0 or self.end_s <= self.start_s):
-            raise DecodeFailed(f"{self.path}: no frame rate in the file or the segment")
-        fps = rate if rate > 0 else self.frame_count / (self.end_s - self.start_s)
+        span = self.end_s - self.start_s
+        if self.frame_count > 0 and span > 0:
+            fps = self.frame_count / span
+        else:
+            fps = float(stream.average_rate or 0)
+            if fps <= 0:
+                raise DecodeFailed(
+                    f"{self.path}: no frame rate in the file or the segment"
+                )
         time_base = float(stream.time_base)
         lo = round((self.start_s - 0.5 / fps) / time_base)
         hi = round((self.end_s - 0.5 / fps) / time_base)
