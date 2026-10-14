@@ -65,12 +65,16 @@ metrics:
 
   # Reported, never graded: measured on the calibration datasets (docs/METRICS.md), no band decided.
   vision.blank_frame_pct:
+    weight: 5
     report_only: true
   vision.contrast_score:
+    weight: 2
     report_only: true
   vision.dark_frame_pct:
+    weight: 3
     report_only: true
   vision.bright_frame_pct:
+    weight: 3
     report_only: true
 
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
@@ -93,10 +97,12 @@ metrics:
 
   # Reported, never graded: no band is decided.
   vision.max_gap_s:
+    weight: 3
     report_only: true
 
   # Reported, never graded: no band is decided.
   vision.camera_sync_skew_ms:
+    weight: 2
     report_only: true
 
   # A declared camera whose file is missing, unreadable or frameless breaks a
@@ -115,6 +121,21 @@ metrics:
 
   # Reported, never graded: no band is decided.
   vision.video_format_consistency:
+    weight: 1
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.cut_count:
+    weight: 4
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.dropped_chunk_count:
+    weight: 4
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.video_control_lag_ms:
     report_only: true
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.

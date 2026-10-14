@@ -10,6 +10,7 @@
 # so the module must load before anything calls run_channel_metrics.
 from kalanos.analysis.metrics import (  # noqa: F401
     annotation,
+    continuity,
     integrity,
     motion,
     timing,

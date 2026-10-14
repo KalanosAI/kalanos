@@ -18,6 +18,9 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - `camera_stream_present` checks that each declared camera's video file opens and yields a frame inside the episode's segment.
 - `video_format_consistency` reports which of width, height, frame rate and pixel format in a camera's video file differ from what the dataset declares.
 - `integrity.duplicate_episode` flags episodes whose numeric payloads (state, action and any other graded series) are identical to another episode's, and requests review under every scope; `integrity.near_duplicate_episode` reports, without consequence, episodes whose resampled trajectories are nearly identical, such as a copy re-saved as float32. `Report.duplicates` lists the pairs, each copy against the first of the episodes it copies, and whether each pair also repeats its camera footage exactly.
+- `cut_count` reports where camera footage was cut: a stretch removed from video and control alike, found at the largest jumps in the state and action streams, reward streams left out, and confirmed in a few decoded frames. It is report-only.
+- `dropped_chunk_count` reports a chunk of camera footage lost while its timestamps stayed uniform: a jump in the footage that the state does not share. It reads every frame, so it runs only with `--full-frame-scan`, and it is report-only.
+- `video_control_lag_ms` reports how far camera footage runs ahead of the state stream, or of the action stream when there is no state or the state does not move with the footage, by correlating the motion of both. It reads every frame, so it runs only with `--full-frame-scan`, and it is report-only.
 
 ### Changed
 

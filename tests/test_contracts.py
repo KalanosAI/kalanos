@@ -85,6 +85,9 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "camera_stream_present": None,
     "video_format_consistency": None,
     "frozen_frame_pct": Defect.FROZEN_FRAMES,
+    "cut_count": None,
+    "dropped_chunk_count": None,
+    "video_control_lag_ms": None,
 }
 
 _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."

@@ -228,6 +228,9 @@ class _Frames:
         Per range that decoded at least two frames, its start
         and the contrast-scaled mean absolute difference between each pair
         of neighbouring thumbnails, NaN where either frame is blank.
+    luma_steps : list of tuple of (int, numpy.ndarray)
+        The same ranges' starts, and the unscaled mean absolute difference
+        between each pair of neighbouring thumbnails, blank or not.
     pts : list of float or None
         Each sampled frame's presentation time, `None` where the payload has none.
     shape : list of tuple of (int, int)
@@ -254,6 +257,7 @@ class _Frames:
     white_share: list[float]
     dark_share: list[float]
     diffs: "list[tuple[int, np.ndarray]]"
+    luma_steps: "list[tuple[int, np.ndarray]]"
     pts: list[float | None]
     shape: list[tuple[int, int]]
     luma_sha256: list[str]
@@ -514,7 +518,6 @@ def _read(
     numpy = load_numpy()
     assert numpy is not None
 
-    factor = _SAMPLE_SIZE // _FREEZE_SIZE
     wanted = set(sampled)
     kept: dict[str, list[float]] = {
         name: []
@@ -535,6 +538,7 @@ def _read(
     stopped: tuple[Availability, str] | None = None
     counts = [0] * len(windows)
     diffs: list[list[float]] = [[] for _ in windows]
+    steps: list[list[float]] = [[] for _ in windows]
     previous: np.ndarray | None = None
     previous_position = -1
     previous_spread = 0.0
@@ -573,15 +577,14 @@ def _read(
                     kept["white_share"].append(float((frame >= bright_level).mean()))
                     kept["dark_share"].append(float((frame <= dark_level).mean()))
 
-                thumbnail = frame.reshape(
-                    _FREEZE_SIZE, factor, _FREEZE_SIZE, factor
-                ).mean(axis=(1, 3), dtype=numpy.float32)
+                thumbnail = _thumbnail(frame)
                 if position == previous_position and previous is not None:
+                    difference = float(numpy.abs(thumbnail - previous).mean())
+                    steps[position].append(difference)
                     contrast = min(spread, previous_spread)
                     if contrast < _BLANK_SPREAD:
                         diffs[position].append(float("nan"))
                     else:
-                        difference = float(numpy.abs(thumbnail - previous).mean())
                         diffs[position].append(difference * _FREEZE_CONTRAST / contrast)
                 previous, previous_position = thumbnail, position
                 previous_spread = spread
@@ -607,6 +610,11 @@ def _read(
             for (start, _end), window_diffs in zip(windows, diffs, strict=True)
             if window_diffs
         ],
+        luma_steps=[
+            (start, numpy.asarray(window_steps, dtype=numpy.float32))
+            for (start, _end), window_steps in zip(windows, steps, strict=True)
+            if window_steps
+        ],
         pts=pts,
         shape=shapes,
         luma_sha256=hashes,
@@ -614,6 +622,29 @@ def _read(
         evidence_positions=list(evidence),
         stopped=stopped,
         **kept,
+    )
+
+
+def _thumbnail(frame: "np.ndarray") -> "np.ndarray":
+    """Average a `(_SAMPLE_SIZE, _SAMPLE_SIZE)` gray frame down to a freeze thumbnail.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
+
+    Returns
+    -------
+    numpy.ndarray
+        The `(_FREEZE_SIZE, _FREEZE_SIZE)` float32 mean of each block of pixels.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    factor = _SAMPLE_SIZE // _FREEZE_SIZE
+    return frame.reshape(_FREEZE_SIZE, factor, _FREEZE_SIZE, factor).mean(
+        axis=(1, 3), dtype=numpy.float32
     )
 
 

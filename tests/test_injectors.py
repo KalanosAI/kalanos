@@ -26,7 +26,9 @@ from kalanos.testing import (
     clean_recording,
     clean_taxels,
     clip_frames,
+    cut_frames,
     drift_channel,
+    drop_chunk,
     drop_samples,
     freeze_frames,
     jitter_clock,
@@ -34,6 +36,7 @@ from kalanos.testing import (
     null_run,
     repeat_timestamps,
     saturate_channel,
+    shift_video,
     skew_unloading,
     spike_channel,
     step_channel,
@@ -294,6 +297,144 @@ def test_apply_defect_builds_frozen_frames_on_a_channelless_image_stream():
         ctx.stream.payload, SyntheticFrames
     )
     assert len(injected.stream.payload.frames) == len(ctx.stream.payload.frames)
+
+
+def test_cutting_frames_shortens_the_camera_and_its_controls_alike():
+    """A cut drops the same rows everywhere and restamps each at its own period."""
+
+    numpy = pytest.importorskip("numpy")
+
+    video = clean_frames(frames=40)
+    control = clean_recording(hz=30.0, samples=40)
+
+    cut_video, [cut_control] = cut_frames(video, [control], start=10, length=5)
+
+    assert isinstance(cut_video.payload, SyntheticFrames) and isinstance(
+        video.payload, SyntheticFrames
+    )
+    assert len(cut_video.payload.frames) == len(cut_video.timestamps) == 35
+    assert numpy.array_equal(cut_video.payload.frames[10], video.payload.frames[15])
+    assert cut_video.timestamps.to_list() == pytest.approx(
+        video.timestamps.to_list()[:35]
+    )
+
+    assert isinstance(cut_control.payload, FramePayload)
+    assert isinstance(control.payload, FramePayload)
+    assert cut_control.payload.frame.height == len(cut_control.timestamps) == 35
+    assert cut_control.payload.frame.row(10) == control.payload.frame.row(15)
+    assert cut_control.timestamps.to_list() == pytest.approx(
+        control.timestamps.to_list()[:35]
+    )
+
+    with pytest.raises(ValueError, match="falls outside"):
+        cut_frames(video, [control], start=38, length=5)
+
+
+def test_apply_defect_refuses_a_cut():
+    """A cut spans the camera and its controls, which a stream context does not hold."""
+
+    pytest.importorskip("numpy")
+
+    with pytest.raises(ValueError, match="defective="):
+        apply_defect(stream_context(clean_frames(frames=30)), Defect.CUT)
+
+
+def test_dropping_a_chunk_keeps_the_timestamps_and_shortens_or_pads_the_frames():
+    """Later frames move up; the tail is gone, or with `pad` the last frame repeats."""
+
+    numpy = pytest.importorskip("numpy")
+
+    clean = clean_frames(frames=30)
+    short = drop_chunk(clean, start=10, length=5)
+    padded = drop_chunk(clean, start=10, length=5, pad=True)
+
+    assert isinstance(clean.payload, SyntheticFrames)
+    assert isinstance(short.payload, SyntheticFrames)
+    assert isinstance(padded.payload, SyntheticFrames)
+    assert short.timestamps.to_list() == clean.timestamps.to_list()
+    assert padded.timestamps.to_list() == clean.timestamps.to_list()
+
+    assert len(short.payload.frames) == 25
+    assert numpy.array_equal(short.payload.frames[10], clean.payload.frames[15])
+
+    assert len(padded.payload.frames) == 30
+    assert numpy.array_equal(padded.payload.frames[10], clean.payload.frames[15])
+    for frame in padded.payload.frames[25:]:
+        assert numpy.array_equal(frame, clean.payload.frames[29])
+
+    with pytest.raises(ValueError, match="falls outside"):
+        drop_chunk(clean, start=28, length=5)
+
+
+def test_apply_defect_drops_a_chunk_of_a_channelless_image_stream():
+    """`DROPPED_CHUNK` changes the frames and keeps their count."""
+
+    numpy = pytest.importorskip("numpy")
+
+    ctx = stream_context(clean_frames(frames=30))
+    injected = apply_defect(ctx, Defect.DROPPED_CHUNK)
+
+    assert isinstance(injected, type(ctx))
+    assert isinstance(injected.stream.payload, SyntheticFrames) and isinstance(
+        ctx.stream.payload, SyntheticFrames
+    )
+    assert len(injected.stream.payload.frames) == len(ctx.stream.payload.frames)
+    assert not all(
+        numpy.array_equal(a, b)
+        for a, b in zip(
+            injected.stream.payload.frames, ctx.stream.payload.frames, strict=True
+        )
+    )
+
+
+def test_shifting_video_shows_later_frames_and_repeats_the_last():
+    """Frame 0 shows frame `frames`, and the tail repeats the last frame."""
+
+    numpy = pytest.importorskip("numpy")
+
+    clean = clean_frames(frames=30)
+    shifted = shift_video(clean, frames=3)
+
+    assert isinstance(clean.payload, SyntheticFrames)
+    assert isinstance(shifted.payload, SyntheticFrames)
+    assert len(shifted.payload.frames) == 30
+    assert shifted.timestamps.to_list() == clean.timestamps.to_list()
+    assert numpy.array_equal(shifted.payload.frames[0], clean.payload.frames[3])
+    for frame in shifted.payload.frames[27:]:
+        assert numpy.array_equal(frame, clean.payload.frames[29])
+
+
+def test_drifting_video_clamps_the_last_frame():
+    """With drift the lead grows to `frames + drift`, and the index stays in range."""
+
+    numpy = pytest.importorskip("numpy")
+
+    clean = clean_frames(frames=30)
+    drifting = shift_video(clean, frames=1, drift=4)
+
+    assert isinstance(clean.payload, SyntheticFrames)
+    assert isinstance(drifting.payload, SyntheticFrames)
+    assert numpy.array_equal(drifting.payload.frames[0], clean.payload.frames[1])
+    assert numpy.array_equal(drifting.payload.frames[20], clean.payload.frames[24])
+    assert numpy.array_equal(drifting.payload.frames[29], clean.payload.frames[29])
+
+
+def test_apply_defect_offsets_the_video_of_a_channelless_image_stream():
+    """`VIDEO_OFFSET` changes the frames and keeps their count."""
+
+    numpy = pytest.importorskip("numpy")
+
+    ctx = stream_context(clean_frames(frames=30))
+    injected = apply_defect(ctx, Defect.VIDEO_OFFSET)
+
+    assert isinstance(injected, type(ctx))
+    assert isinstance(injected.stream.payload, SyntheticFrames) and isinstance(
+        ctx.stream.payload, SyntheticFrames
+    )
+    assert len(injected.stream.payload.frames) == len(ctx.stream.payload.frames)
+    assert numpy.array_equal(
+        injected.stream.payload.frames[0], ctx.stream.payload.frames[3]
+    )
 
 
 def test_a_settled_clean_recording_ends_static_and_is_otherwise_unchanged():
