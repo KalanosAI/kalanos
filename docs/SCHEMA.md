@@ -1,8 +1,14 @@
-# Report schema 7.0.0
+# Report schema 7.1.0
 
-Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer must do, and what a legacy file can and cannot provide.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 addition below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 7.1.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `family_weights` | `dict[str, float]` | The policy's family weights the run graded with, keyed by family id. Empty when the policy weights no family. Reports written as 7.0.0 load with it empty. |
 
 ## New top-level fields
 

@@ -69,7 +69,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "7.0.0"
+CURRENT_SCHEMA_VERSION = "7.1.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -536,6 +536,9 @@ class Report(BaseModel):
         The `Policy.schema_version` graded against, so a result stays
         traceable to the policy that produced it. `None` when no policy
         was involved in assembling this report.
+    family_weights : dict[str, float]
+        The policy's `family_weights` the run graded with, keyed by family id.
+        Empty when the policy weights no family.
     duration_s : float or None
         Wall-clock time the analysis run took, or `None` when not timed.
     source : SourceInfo or None
@@ -587,6 +590,7 @@ class Report(BaseModel):
     skipped: list[SkippedSource] = Field(default_factory=list)
     unresolved: list[UnresolvedSource] = Field(default_factory=list)
     policy_version: int | None = None
+    family_weights: dict[str, float] = Field(default_factory=dict)
     duration_s: float | None = None
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)

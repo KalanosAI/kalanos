@@ -365,10 +365,42 @@ def test_family_scores_show_each_scored_family_under_its_display_name(vision_rep
     text = render_terminal(vision_report, width=300)
     families = vision_report.score.families
 
+    weights = vision_report.family_weights
+
+    header, *rows = _section(text, "Family scores")
+    assert header.split() == ["Score", "Weight"]
+    assert len(rows) == 2
+    for family, label in (("integrity", "Integrity"), ("vision", "Vision")):
+        assert _row(text, label).split() == [
+            format_family_score(families[family]),
+            f"{weights[family]:g}",
+        ]
+    assert text.index("Family scores") < text.index("Needs attention")
+
+
+def test_family_scores_without_weights_show_the_score_alone(vision_report):
+    text = render_terminal(
+        vision_report.model_copy(update={"family_weights": {}}), width=300
+    )
+    families = vision_report.score.families
+
     assert len(_section(text, "Family scores")) == 2
+    assert "Weight" not in text
     assert _row(text, "Integrity") == format_family_score(families["integrity"])
     assert _row(text, "Vision") == format_family_score(families["vision"])
-    assert text.index("Family scores") < text.index("Needs attention")
+
+
+def test_a_family_the_policy_does_not_weight_shows_no_weight(vision_report):
+    weights = {**vision_report.family_weights}
+    del weights["vision"]
+
+    text = render_terminal(
+        vision_report.model_copy(update={"family_weights": weights}), width=300
+    )
+
+    assert _row(text, "Vision") == format_family_score(
+        vision_report.score.families["vision"]
+    )
 
 
 def test_family_scores_are_absent_when_no_family_scored(csv_report):
@@ -382,7 +414,9 @@ def test_family_scores_are_absent_when_no_family_scored(csv_report):
 def test_a_family_without_a_display_name_shows_its_id(csv_report):
     score = csv_report.score.model_copy(update={"families": {"consistency": 80.0}})
 
-    text = render_terminal(csv_report.model_copy(update={"score": score}))
+    text = render_terminal(
+        csv_report.model_copy(update={"score": score, "family_weights": {}})
+    )
 
     assert _section(text, "Family scores") == ["  consistency   80"]
 
