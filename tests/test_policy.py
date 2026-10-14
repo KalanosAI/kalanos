@@ -54,6 +54,54 @@ _LETTERS = {
     "D": 60.0,
 }
 
+# The approved weights, keyed as policy.yaml keys them.
+# fmt: off
+DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
+    "timing.effective_hz":                 5,
+    "timing.dt_jitter_ms":                 3,
+    "timing.drop_rate":                    4,
+    "timing.recorded_hz":                  1,
+    "timing.recorded_dt_spread_ms":        1,
+    "timing.recorded_drop_estimate":       2,
+    "timing.monotonic_violations":         4,
+    "integrity.missing_pct":               4,
+    "integrity.flatline_pct":              4,
+    "integrity.spike_pct":                 4,
+    "integrity.drift":                     1,
+    "integrity.snr_db":                    2,
+    "integrity.dead_taxel_pct":            3,
+    "integrity.hysteresis":                2,
+    "motion.mean_jerk_norm":               1,
+    "motion.max_abs_jerk":                 1,
+    "motion.velocity_spike_pct":           4,
+    "motion.log_dimensionless_jerk":       5,
+    "motion.action_chatter":               2,
+    "motion.still_drift":                  1,
+    "motion.vel_saturation_pct":           2,
+    "motion.limit_proximity_pct":          1,
+    "motion.hf_vibration_ratio":           2,
+    "motion.p99_torque":                   1,
+    "motion.max_torque":                   None,
+    "motion.mean_torque":                  None,
+    "motion.energy_proxy":                 None,
+    "vision.sharpness_score":              5,
+    "vision.exposure_shift_pct":           3,
+    "vision.exposure_level":               None,
+    "vision.frame_count_vs_timebase":      4,
+    "vision.pts_defect_pct":               2,
+    "vision.frozen_frame_pct":             6,
+    "annotation.task_instruction_missing": 5,
+}
+# fmt: on
+
+DEFAULT_FAMILY_WEIGHTS = {
+    "integrity": 3,
+    "timing": 2,
+    "motion": 2,
+    "vision": 2,
+    "annotation": 1,
+}
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
@@ -247,19 +295,87 @@ def test_effective_hz_grades_relative_deviation_from_a_declared_nominal_rate():
     assert effective_hz.limits == {}
 
 
-def test_no_to_define_value_from_docs_metrics_appears_as_a_number():
-    """Verify every value docs/METRICS.md marks *to define* stays absent, not guessed.
-
-    Weights, family weights and the fail penalty are all *to define*
-    for the whole catalogue, so none may carry a number yet.
-    """
+def test_the_default_policy_weights_match_the_documented_numbers():
+    """Verify every metric and family weight matches the approved values."""
 
     policy = load_default_policy()
 
-    assert all(entry.weight is None for entry in policy.metrics.values())
-    assert policy.family_weights == {}
+    assert {key: entry.weight for key, entry in policy.metrics.items()} == (
+        DEFAULT_METRIC_WEIGHTS
+    )
+    assert policy.family_weights == DEFAULT_FAMILY_WEIGHTS
+
+
+def test_the_fail_penalty_stays_undecided():
+    """Verify the fail penalty, *to define* in docs/METRICS.md, carries no number."""
+
+    policy = load_default_policy()
+
     assert policy.fail_penalty is None
     assert policy.fail_penalty_cap is None
+
+
+def test_an_extending_policy_keeps_the_base_weight_of_a_metric_it_overrides(
+    tmp_path,
+):
+    """Verify an override without `weight` keeps the base weight and its own bands."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {
+                    "integrity.spike_pct": {
+                        "thresholds": {"default": {"good": 0.2, "bad": 3.0}},
+                    }
+                },
+            }
+        )
+    )
+
+    spike_pct = _entry(load_policy(override), "spike_pct")
+
+    assert spike_pct.weight == 4
+    assert spike_pct.thresholds == {"default": Band(good=0.2, bad=3.0)}
+
+
+def test_an_extending_policy_can_set_a_weight_back_to_undecided(tmp_path):
+    """Verify an explicit `weight: null` stays `None` instead of inheriting."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"integrity.spike_pct": {"weight": None}},
+            }
+        )
+    )
+
+    assert _entry(load_policy(override), "spike_pct").weight is None
+
+
+def test_the_language_conditioned_policy_keeps_the_instruction_weight():
+    """Verify language_conditioned keeps task_instruction_missing's weight."""
+
+    policy = load_policy(Path("language_conditioned"))
+
+    assert _entry(policy, "task_instruction_missing").weight == 5
+
+
+def test_an_extending_policy_merges_family_weights_key_by_key(tmp_path):
+    """Verify extending `family_weights` changes only the families it names."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump({"extends": "default", "family_weights": {"timing": 5}})
+    )
+
+    assert load_policy(override).family_weights == {
+        **DEFAULT_FAMILY_WEIGHTS,
+        "timing": 5,
+    }
 
 
 def test_a_metric_key_without_exactly_one_dot_fails_to_construct():

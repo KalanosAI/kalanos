@@ -726,7 +726,7 @@ def test_mixing_a_decided_weight_with_an_undecided_one_refuses_to_guess():
 
 
 def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess():
-    """Verify the same refusal applies one level up, across families."""
+    """Verify the same refusal applies one level up, naming the unweighted family."""
 
     policy = Policy(
         schema_version=1,
@@ -743,9 +743,7 @@ def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess()
     )
     results = {"metric_x": _report_only(2.0), "metric_y": _report_only(2.0)}
 
-    with pytest.raises(
-        ValueError, match="mixes a decided weight with an undecided one"
-    ):
+    with pytest.raises(ValueError, match=r"\['family_b'\] carry no weight"):
         score_metrics(
             results,
             level=Level.CHANNEL,

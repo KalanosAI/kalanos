@@ -324,7 +324,7 @@ def test_card_html_and_inspect_show_the_same_family_scores(tmp_path):
     collector.feed(html)
     for family, label, score in scores:
         shown = format_family_score(score)
-        assert any(line.split() == [label, shown] for line in card)
+        assert any(line.split()[:2] == [label, shown] for line in card)
         assert ("family", family, repr(score)) in collector.rows
         assert f'<td>{label}</td><td class="mono">{shown}</td>' in html
         assert f"{label} {shown}" in inspected.stdout

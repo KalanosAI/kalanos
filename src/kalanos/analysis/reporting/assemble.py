@@ -686,6 +686,7 @@ def assemble_report(
         skipped=list(skipped),
         unresolved=list(unresolved),
         policy_version=policy.schema_version,
+        family_weights=dict(policy.family_weights),
         duration_s=duration_s,
         source=source,
         datasets=list(datasets),

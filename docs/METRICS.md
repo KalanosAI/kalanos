@@ -52,7 +52,7 @@ Note the `coverage` **family** above asks about dataset variety. It is unrelated
 
 ## timing
 
-From the clock alone. Weighted heaviest, because broken timing invalidates everything computed downstream: a model learns that when the robot saw X it did Y from pairs that never co-occurred.
+From the clock alone. Broken timing invalidates everything computed downstream: a model learns that when the robot saw X it did Y from pairs that never co-occurred.
 
 | Metric | Level | Requires | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
@@ -375,7 +375,44 @@ A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published b
 
 **Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 
-Weights are *to define*. Only their ordering is settled, with timing weighing most. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points.
+Weights are relative integers set in `policy.yaml`: ~1 is supporting evidence, ~3 a standard core check, ~5 a defect that directly corrupts training. Within one node (a channel, a stream or an episode's own metrics), a family score is the weighted mean of its metrics that graded, and the node's score the weighted mean of its families that graded, so the weights renormalise over whatever graded. Levels above a node average their children equally, family scores included. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points. A report-only metric's weight takes effect once the metric grades.
+
+| Family | Metric | Weight |
+|---|---|---|
+| timing | `effective_hz` | 5 |
+| timing | `drop_rate` | 4 |
+| timing | `monotonic_violations` | 4 |
+| timing | `dt_jitter_ms` | 3 |
+| timing | `recorded_drop_estimate` | 2 |
+| timing | `recorded_hz` | 1 |
+| timing | `recorded_dt_spread_ms` | 1 |
+| integrity | `missing_pct` | 4 |
+| integrity | `flatline_pct` | 4 |
+| integrity | `spike_pct` | 4 |
+| integrity | `dead_taxel_pct` | 3 |
+| integrity | `snr_db` | 2 |
+| integrity | `hysteresis` | 2 |
+| integrity | `drift` | 1 |
+| motion | `log_dimensionless_jerk` | 5 |
+| motion | `velocity_spike_pct` | 4 |
+| motion | `action_chatter` | 2 |
+| motion | `vel_saturation_pct` | 2 |
+| motion | `hf_vibration_ratio` | 2 |
+| motion | `mean_jerk_norm` | 1 |
+| motion | `max_abs_jerk` | 1 |
+| motion | `still_drift` | 1 |
+| motion | `limit_proximity_pct` | 1 |
+| motion | `p99_torque` | 1 |
+| motion | `max_torque`, `mean_torque`, `energy_proxy` | none, report-only |
+| vision | `frozen_frame_pct` | 6 |
+| vision | `sharpness_score` | 5 |
+| vision | `frame_count_vs_timebase` | 4 |
+| vision | `exposure_shift_pct` | 3 |
+| vision | `pts_defect_pct` | 2 |
+| vision | `exposure_level` | none, report-only |
+| annotation | `task_instruction_missing` | 5 |
+
+Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.
 
 ## Benchmarking metrics
 
@@ -393,7 +430,7 @@ See [Calibration](#calibration) above for how benchmark results on the three LeR
 ## Adding a metric
 
 1. Write the function with its `@metric` decorator — `level=` and `family=`, both required — in the family's module under `src/kalanos/analysis/metrics/`. A `family=` outside the nine above fails at import. `label=` names the condition a finding from this metric describes, in plain words, for the terminal summary; without it the metric's name is used.
-2. Add its `good`, `bad` and weight to `src/kalanos/assets/policies/default.yaml`, keyed `family.metric_name`; that key's prefix is what makes it a member of the family. A bound that is not yet settled stays *to define* here and absent there. A *candidate* bound may ship, but only with a comment marking it unconfirmed — never as though it were decided.
+2. Add its `good`, `bad` and weight to `src/kalanos/assets/policies/default.yaml`, keyed `family.metric_name`; that key's prefix is what makes it a member of the family. A metric that grades needs a weight: in a weighted family, grading fails and names any graded metric without one. A bound that is not yet settled stays *to define* here and absent there. A *candidate* bound may ship, but only with a comment marking it unconfirmed — never as though it were decided.
 3. Add a contract test naming the defect it fires on, using an injector.
 4. Add a row above.
 

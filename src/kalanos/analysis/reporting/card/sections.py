@@ -433,16 +433,32 @@ def families(report: Report, ctx: CardContext) -> list[Text]:
     list[Text]
         One row per scored family, named families first,
         or no lines when no family scored.
+        When the report carries family weights, a `Score  Weight` header row
+        comes first and each row shows the family's weight beside its score,
+        left blank for a family the policy does not weight.
     """
 
+    scored = family_scores(report.score.families)
+    weights = report.family_weights
+    if not scored:
+        return []
     # Right-aligned to three digits, so a 33 lines up under a 100.
-    return _rows(
-        [
-            (label, format_family_score(score).rjust(3))
-            for _, label, score in family_scores(report.score.families)
-        ],
-        ctx,
-    )
+    if not weights:
+        return _rows(
+            [
+                (label, format_family_score(score).rjust(3))
+                for _, label, score in scored
+            ],
+            ctx,
+        )
+    # Each value right-aligned under the last letter of its column heading.
+    header = Text("Score  Weight", style=ctx.theme.style("muted"))
+    pairs: list[tuple[Cell, Cell]] = [("", header)]
+    for family, label, score in scored:
+        weight = weights.get(family)
+        weight_cell = "" if weight is None else f"{weight:g}"
+        pairs.append((label, f"{format_family_score(score):>5}  {weight_cell:>6}"))
+    return _rows(pairs, ctx)
 
 
 def needs_attention(report: Report, ctx: CardContext) -> list[Text]:

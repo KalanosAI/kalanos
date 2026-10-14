@@ -60,8 +60,10 @@ def _resolve_extends(payload: Any, *, source: str) -> Any:
     """Merge a policy that `extends` a packaged one over its base.
 
     `metrics` merge entry by entry, each entry replacing the base's whole
-    entry; every other top-level key replaces the base's, so `gate: null`
-    switches the gate off.
+    entry except its `weight`, which the entry keeps from the base unless it
+    sets one (`weight: null` included). `family_weights` merge family by family.
+    Every other top-level key replaces the base's, so `gate: null` switches
+    the gate off.
     """
 
     if not isinstance(payload, dict) or "extends" not in payload:
@@ -73,8 +75,27 @@ def _resolve_extends(payload: Any, *, source: str) -> Any:
             f"{', '.join(PACKAGED_POLICIES)}"
         )
     base = _resolve_extends(yaml.safe_load(_packaged_yaml(base_name)), source=base_name)
-    merged = {**base, **{k: v for k, v in payload.items() if k != "metrics"}}
-    merged["metrics"] = {**base.get("metrics", {}), **payload.get("metrics", {})}
+    merged = {**base, **payload}
+    base_metrics = base.get("metrics", {})
+    metrics = {**base_metrics}
+    for key, entry in payload.get("metrics", {}).items():
+        base_entry = base_metrics.get(key)
+        if (
+            isinstance(entry, dict)
+            and isinstance(base_entry, dict)
+            and "weight" in base_entry
+            and "weight" not in entry
+        ):
+            entry = {**entry, "weight": base_entry["weight"]}
+        metrics[key] = entry
+    merged["metrics"] = metrics
+    family_weights = payload.get("family_weights", {})
+    # Anything but a mapping is left for schema validation to reject.
+    if isinstance(family_weights, dict):
+        merged["family_weights"] = {
+            **base.get("family_weights", {}),
+            **family_weights,
+        }
     return merged
 
 
