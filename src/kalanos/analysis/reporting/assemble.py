@@ -81,6 +81,7 @@ from kalanos.analysis.scoring.eligibility import (
 )
 from kalanos.analysis.scoring.gate import apply_gate
 from kalanos.analysis.scoring.score import (
+    dataset_family_tails,
     dataset_metric_rollups,
     rollup,
     score_episode,
@@ -638,9 +639,13 @@ def assemble_report(
         )
 
     # Step 2: the dataset rollup and the gate, which now only derives.
-    dataset_score = rollup(
-        Level.DATASET, [ge.score for ge in graded_episodes], policy=policy
-    ).model_copy(update={"metrics": dataset_metric_rollups(graded_episodes)})
+    episode_scores = [ge.score for ge in graded_episodes]
+    dataset_score = rollup(Level.DATASET, episode_scores, policy=policy).model_copy(
+        update={
+            "metrics": dataset_metric_rollups(graded_episodes),
+            "family_tails": dataset_family_tails(episode_scores, policy=policy),
+        }
+    )
     dataset_score, gate = apply_gate(
         graded_episodes,
         findings,

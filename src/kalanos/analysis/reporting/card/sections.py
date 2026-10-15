@@ -31,7 +31,12 @@ from kalanos.analysis.models.eligibility import (
 from kalanos.analysis.models.report import GradedEpisode, Report
 from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.reporting.card.theme import Theme
-from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
 from kalanos.analysis.reporting.flagged import flagged_rows
 
 
@@ -434,17 +439,20 @@ def families(report: Report, ctx: CardContext) -> list[Text]:
     list[Text]
         One row per scored family, named families first,
         or no lines when no family scored.
-        When the report carries family weights, a `Score  Weight` header row
-        comes first and each row shows the family's weight beside its score,
-        left blank for a family the policy does not weight.
+        When the report carries family weights, a Weight column follows the
+        score, left blank for a family the policy does not weight.
+        When the dataset score carries family tails, `Below <cutoff>` and `Lowest`
+        columns follow, left blank for a family with no tail. Either way a
+        header row naming the columns comes first.
     """
 
     scored = family_scores(report.score.families)
     weights = report.family_weights
+    tails = report.score.family_tails
     if not scored:
         return []
     # Right-aligned to three digits, so a 33 lines up under a 100.
-    if not weights:
+    if not weights and not tails:
         return _rows(
             [
                 (label, format_family_score(score).rjust(3))
@@ -452,13 +460,52 @@ def families(report: Report, ctx: CardContext) -> list[Text]:
             ],
             ctx,
         )
-    # Each value right-aligned under the last letter of its column heading.
-    header = Text("Score  Weight", style=ctx.theme.style("muted"))
-    pairs: list[tuple[Cell, Cell]] = [("", header)]
-    for family, label, score in scored:
-        weight = weights.get(family)
-        weight_cell = "" if weight is None else f"{weight:g}"
-        pairs.append((label, f"{format_family_score(score):>5}  {weight_cell:>6}"))
+    columns: list[tuple[str, list[str]]] = [
+        ("Score", [format_family_score(score) for _, _, score in scored])
+    ]
+    if weights:
+        columns.append(
+            (
+                "Weight",
+                [
+                    "" if (w := weights.get(family)) is None else f"{w:g}"
+                    for family, _, _ in scored
+                ],
+            )
+        )
+    if tails:
+        # Every tail on one report shares the policy's cutoff.
+        cutoff = next(iter(tails.values())).below
+        family_tails = [tails.get(family) for family, _, _ in scored]
+        columns.append(
+            (
+                f"Below {cutoff:g}",
+                ["" if t is None else format_low_episodes(t) for t in family_tails],
+            )
+        )
+        columns.append(
+            ("Lowest", ["" if t is None else format_lowest(t) for t in family_tails])
+        )
+    # Each value right-aligned under the last letter of its column heading,
+    # in a column as wide as the wider of its heading and its widest value.
+    widths = [max(len(heading), *map(len, values)) for heading, values in columns]
+    header = "  ".join(
+        heading.rjust(width)
+        for (heading, _), width in zip(columns, widths, strict=True)
+    )
+    pairs: list[tuple[Cell, Cell]] = [
+        ("", Text(header, style=ctx.theme.style("muted")))
+    ]
+    for row, (_, label, _) in enumerate(scored):
+        pairs.append(
+            (
+                label,
+                "  ".join(
+                    values[row].rjust(width)
+                    for (_, values), width in zip(columns, widths, strict=True)
+                ),
+            )
+        )
     return _rows(pairs, ctx)
 
 

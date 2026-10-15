@@ -385,7 +385,7 @@ The episode score is built from its metrics directly:
 - The episode score is the weighted mean of its family scores, by the family weights, renormalised over the families that scored.
 - `fail_penalty`, when a policy sets one, subtracts once per metric whose worst subject scored 0, however many subjects failed it.
 
-Channel and stream scores are for display. They fold only their own node's metrics the same way, and a stream averages its channels and its own metrics equally. The dataset score and the dataset's family scores are the mean over the episodes that scored them.
+Channel and stream scores are for display. They fold only their own node's metrics the same way, and a stream averages its channels and its own metrics equally. The dataset score and the dataset's family scores are the mean over the episodes that scored them. For each family, the dataset also reports how many of those episodes scored below the policy's `low_episode_score` (70 by default) and the lowest of them (`score.family_tails`). Neither changes a score.
 
 The report records, per metric, how many subjects it graded and how many it flagged (`score.metrics`). The dataset count is of distinct channels, streams or cameras, with the number of episodes the metric flagged; the card's *Flagged channels* section and `kalanos inspect` show it.
 

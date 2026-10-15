@@ -30,7 +30,11 @@ from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import MetricRollup
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.card.sections import _under_root
-from kalanos.analysis.reporting.families import format_family_score
+from kalanos.analysis.reporting.families import (
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
 from kalanos.api import grade
 
 # Local
@@ -85,6 +89,13 @@ def _row(text: str, label: str) -> str:
         if parts and parts[0] == label:
             return parts[1] if len(parts) > 1 else ""
     raise AssertionError(f"no {label!r} row")
+
+
+def _without_tails(report: Report) -> Report:
+    """A copy of `report` whose dataset score has no family tails, like a 7.2.0 one."""
+
+    score = report.score.model_copy(update={"family_tails": {}})
+    return report.model_copy(update={"score": score})
 
 
 def _with_findings(report: Report, *where: tuple[str, str, Consequence]) -> Report:
@@ -364,7 +375,7 @@ def test_sufficiency_shows_only_when_it_is_known(csv_report):
 
 
 def test_family_scores_show_each_scored_family_under_its_display_name(vision_report):
-    text = render_terminal(vision_report, width=300)
+    text = render_terminal(_without_tails(vision_report), width=300)
     families = vision_report.score.families
 
     weights = vision_report.family_weights
@@ -382,7 +393,8 @@ def test_family_scores_show_each_scored_family_under_its_display_name(vision_rep
 
 def test_family_scores_without_weights_show_the_score_alone(vision_report):
     text = render_terminal(
-        vision_report.model_copy(update={"family_weights": {}}), width=300
+        _without_tails(vision_report).model_copy(update={"family_weights": {}}),
+        width=300,
     )
     families = vision_report.score.families
 
@@ -397,7 +409,8 @@ def test_a_family_the_policy_does_not_weight_shows_no_weight(vision_report):
     del weights["vision"]
 
     text = render_terminal(
-        vision_report.model_copy(update={"family_weights": weights}), width=300
+        _without_tails(vision_report).model_copy(update={"family_weights": weights}),
+        width=300,
     )
 
     assert _row(text, "Vision") == format_family_score(
@@ -414,13 +427,36 @@ def test_family_scores_are_absent_when_no_family_scored(csv_report):
 
 
 def test_a_family_without_a_display_name_shows_its_id(csv_report):
-    score = csv_report.score.model_copy(update={"families": {"consistency": 80.0}})
+    score = csv_report.score.model_copy(
+        update={"families": {"consistency": 80.0}, "family_tails": {}}
+    )
 
     text = render_terminal(
         csv_report.model_copy(update={"score": score, "family_weights": {}})
     )
 
     assert _section(text, "Family scores") == ["  consistency   80"]
+
+
+def test_family_scores_show_episodes_below_the_cutoff_and_the_lowest(corpus_report):
+    text = render_terminal(corpus_report, width=300)
+    tail = corpus_report.score.family_tails["integrity"]
+
+    header, *_ = _section(text, "Family scores")
+    assert header.split() == ["Score", "Weight", "Below", "70", "Lowest"]
+    assert _row(text, "Integrity").split()[-4:] == [
+        *format_low_episodes(tail).split(),
+        format_lowest(tail),
+    ]
+
+
+def test_family_tails_without_weights_show_without_a_weight_column(corpus_report):
+    text = render_terminal(
+        corpus_report.model_copy(update={"family_weights": {}}), width=300
+    )
+
+    header, *_ = _section(text, "Family scores")
+    assert header.split() == ["Score", "Below", "70", "Lowest"]
 
 
 def _with_metrics(report: Report, metrics: dict[str, MetricRollup]) -> Report:

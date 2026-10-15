@@ -301,6 +301,9 @@ class Policy(BaseModel):
     fail_penalty_cap : float or None
         The most `fail_penalty` may subtract from one episode's score,
         or from one channel's or stream's display score, or `None` for no cap.
+    low_episode_score : float
+        An episode whose score in a family is below this counts toward that
+        family's low-episode count on the dataset score. Changes no score.
     letters : dict[str, float]
         The minimum score each of `A`, `B`, `C`, `D` needs;
         below `D`'s minimum is `F`, which carries no minimum of its own.
@@ -328,6 +331,7 @@ class Policy(BaseModel):
     missing_family: Literal["skip"] = "skip"
     fail_penalty: float | None = Field(default=None, ge=0)
     fail_penalty_cap: float | None = Field(default=None, ge=0)
+    low_episode_score: float = Field(default=70.0, ge=0, le=100)
     letters: dict[str, float]
     gate: GatePolicy | None = None
 

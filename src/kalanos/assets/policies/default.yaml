@@ -332,6 +332,9 @@ gate:
   # the task's own behaviour rather than a coincidence.
   task_trait_min_episodes: 20
 
+# The cutoff for each family's count of low episodes on the dataset score.
+low_episode_score: 70
+
 letters:
   A: 90
   B: 80

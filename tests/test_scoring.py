@@ -24,6 +24,7 @@ from kalanos.analysis.models.scoring import (
     Severity,
 )
 from kalanos.analysis.scoring.score import (
+    dataset_family_tails,
     dataset_metric_rollups,
     grade_for,
     resolve_status,
@@ -1188,6 +1189,63 @@ def test_rollup_of_a_missing_family_averages_only_over_children_that_measured_it
         "timing": pytest.approx(100.0),
         "vision": pytest.approx(40.0),
     }
+
+
+def test_dataset_family_tails_count_episodes_below_the_cutoff_and_the_lowest():
+    """Verify a family's tail counts the episodes below 70 and keeps the lowest."""
+
+    policy = load_default_policy()
+    episodes = [
+        _score(policy, Level.EPISODE, value, families={"integrity": value})
+        for value in (100.0, 100.0, 95.0, 66.7, 50.0)
+    ]
+
+    tail = dataset_family_tails(episodes, policy=policy)["integrity"]
+
+    assert tail.below == 70
+    assert tail.n_below == 2
+    assert tail.n_scored == 5
+    assert tail.lowest == 50.0
+
+
+def test_an_episode_without_the_family_is_left_out_of_its_tail():
+    """Verify an episode with nothing to score in a family adds nothing to its tail."""
+
+    policy = load_default_policy()
+    episodes = [
+        _score(policy, Level.EPISODE, 90.0, families={"vision": 90.0}),
+        _score(policy, Level.EPISODE, 80.0, families={"vision": 60.0}),
+        _score(policy, Level.EPISODE, 20.0, families={"integrity": 20.0}),
+        _score(policy, Level.EPISODE, None),
+    ]
+
+    tails = dataset_family_tails(episodes, policy=policy)
+
+    assert tails["vision"].n_scored == 2
+    assert tails["vision"].n_below == 1
+    assert tails["vision"].lowest == 60.0
+    assert tails["integrity"].n_scored == 1
+
+
+def test_a_score_exactly_at_the_cutoff_is_not_below_it():
+    """Verify the count is strictly below the cutoff, so a 70.0 is not counted."""
+
+    policy = load_default_policy()
+    episodes = [_score(policy, Level.EPISODE, 70.0, families={"integrity": 70.0})]
+
+    assert dataset_family_tails(episodes, policy=policy)["integrity"].n_below == 0
+
+
+def test_family_tails_follow_the_policys_cutoff():
+    """Verify the count reads `low_episode_score` from the policy it is given."""
+
+    policy = load_default_policy().model_copy(update={"low_episode_score": 96.0})
+    episodes = [_score(policy, Level.EPISODE, 95.0, families={"integrity": 95.0})]
+
+    tail = dataset_family_tails(episodes, policy=policy)["integrity"]
+
+    assert tail.below == 96.0
+    assert tail.n_below == 1
 
 
 def test_rollup_composes_family_scores_unchanged_from_stream_through_dataset():

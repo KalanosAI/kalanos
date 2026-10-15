@@ -1,8 +1,20 @@
-# Report schema 7.2.0
+# Report schema 7.3.0
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 and 7.2.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0, 7.2.0 and 7.3.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 7.3.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `ScoreResult.family_tails` | `dict[str, FamilyTail]` | Per family, how many episodes scored it below the policy's cutoff and the lowest of them. Filled on the dataset `score`; empty on every other score. |
+| `FamilyTail.below` | `float` | The policy's `low_episode_score` the count compared against, 70 by default. |
+| `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
+| `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
+| `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
+
+A 7.2.0 report loads with `family_tails` empty.
 
 ## Added in 7.2.0
 

@@ -26,7 +26,12 @@ from typer.testing import CliRunner
 from kalanos.analysis.metrics import vision
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
-from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
 from kalanos.analysis.reporting.write import write_report
 from kalanos.api import grade
 from kalanos.cli import app
@@ -304,10 +309,19 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
     assert collector.rows == expected
 
 
-def test_card_html_and_inspect_show_the_same_family_scores(tmp_path):
-    """Verify the card, the HTML report and `inspect` show one run's families alike."""
+@pytest.mark.parametrize(
+    ("source", "bundle"),
+    [(LEROBOT_FIXTURE, Path("vision-imitation-v1")), (FIXTURES_DIR, None)],
+    ids=["lerobot", "corpus"],
+)
+def test_card_html_and_inspect_show_the_same_family_scores(tmp_path, source, bundle):
+    """Verify the card, the HTML report and `inspect` show one run's families alike.
 
-    report = grade(LEROBOT_FIXTURE, bundle=Path("vision-imitation-v1"))
+    The corpus has one episode scoring integrity below 70, so its tail is not
+    trivially zero on every surface.
+    """
+
+    report = grade(source, bundle=bundle)
     json_path = tmp_path / "report.json"
     html_path = tmp_path / "report.html"
     write_report(report, json_path)
@@ -328,6 +342,15 @@ def test_card_html_and_inspect_show_the_same_family_scores(tmp_path):
         assert ("family", family, repr(score)) in collector.rows
         assert f'<td>{label}</td><td class="mono">{shown}</td>' in html
         assert f"{label} {shown}" in inspected.stdout
+        tail = report.score.family_tails[family]
+        below, lowest = format_low_episodes(tail), format_lowest(tail)
+        card_line = next(line for line in card if line.split()[:1] == [label])
+        assert below in card_line and lowest in card_line
+        assert (
+            f'data-name="{family}" data-score="{score!r}" '
+            f'data-below="{tail.n_below}" data-lowest="{tail.lowest!r}"'
+        ) in html
+        assert f"{below} below 70, lowest {lowest}" in inspected.stdout
 
 
 def test_inspect_prints_the_card_flagged_rows_and_an_episode_worst(tmp_path):

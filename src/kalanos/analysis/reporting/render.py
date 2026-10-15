@@ -19,7 +19,12 @@ from kalanos.analysis.diagnostics.runner import diagnostic_lines
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import Finding, ScoreResult
-from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
 from kalanos.analysis.reporting.registry import reporter
 from kalanos.analysis.reporting.summary import finding_groups
 
@@ -113,6 +118,8 @@ _TEMPLATE_ENVIRONMENT.filters["score_attr"] = _score_attr
 _TEMPLATE_ENVIRONMENT.filters["score_text"] = _score_text
 _TEMPLATE_ENVIRONMENT.filters["metric_text"] = _metric_text
 _TEMPLATE_ENVIRONMENT.filters["family_score"] = format_family_score
+_TEMPLATE_ENVIRONMENT.filters["low_episodes"] = format_low_episodes
+_TEMPLATE_ENVIRONMENT.filters["lowest"] = format_lowest
 
 
 def _episode_finding_counts(findings: list[Finding]) -> dict[str, int]:

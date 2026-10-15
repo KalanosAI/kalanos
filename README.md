@@ -98,8 +98,8 @@ Kalanos - tests/fixtures
   Scope       numeric-core-v1
 
 Family scores
-             Score  Weight
-  Integrity     96       3
+             Score  Weight  Below 70  Lowest
+  Integrity     96       3   1 of 13    61.4
 
 Flagged channels
   low signal-to-noise  8 of 20 channels  3 episodes  Integrity
@@ -120,7 +120,7 @@ Not analysed
   README.md        no adapter
   video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
 
-schema 7.2.0 - policy v1 - 0.35s
+schema 7.3.0 - policy v1 - 0.42s
 ```
 
 The same card on a dataset with video: the coverage rows grow with the data.
@@ -135,9 +135,9 @@ Kalanos - tests/fixtures/lerobot_v3_tiny
   Scope       vision-imitation-v1
 
 Family scores
-             Score  Weight
-  Integrity    100       3
-  Vision        33       2
+             Score  Weight  Below 70  Lowest
+  Integrity    100       3    0 of 2   100.0
+  Vision        33       2    2 of 2    33.3
 
 Flagged channels
   brightness changes  1 of 1 stream  2 episodes  Vision
@@ -156,7 +156,7 @@ Coverage
   mapping        2 stream types unmapped - type them with --map
   inventory      complete
 
-schema 7.2.0 - policy v1 - 0.23s
+schema 7.3.0 - policy v1 - 0.24s
 ```
 
 How to read it, top to bottom:
@@ -164,7 +164,7 @@ How to read it, top to bottom:
 | Part | What it tells you | What to do with it |
 |---|---|---|
 | **Assessment and episodes** | The verdict, readiness out of 100 (or `undefined` with its reason), and how many episodes are eligible, in review, blocked or unknown | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
-| **Family scores** | The dataset's score out of 100 for each metric family that graded, such as Integrity or Vision, beside the weight the policy gives that family | A low family points at the kind of problem to look for. Open the report for the episodes and metrics behind it |
+| **Family scores** | The dataset's score out of 100 for each metric family that graded, such as Integrity or Vision, beside the weight the policy gives that family, how many of the episodes that scored it fell below 70 (the policy's `low_episode_score`), and the lowest episode score | A low family points at the kind of problem to look for. A high score with episodes below 70 means a few bad episodes the mean hides. Open the report for the episodes and metrics behind it |
 | **Flagged channels** | Each metric that flagged a channel, stream or camera: how many it flagged out of how many it graded, in how many episodes, and its family | A metric flagging a few channels in many episodes points at one bad sensor or camera. Open the report to see which |
 | **Needs attention** | The episodes that did not pass, worst first, with their status, score and the conditions behind it | Start at the top: these are the episodes to fix, review or drop |
 | **Findings** | Each source with findings, how many episodes it affects, what was observed, and whether it blocks, needs review or is only reported | Open that source in the full report for the values and evidence |

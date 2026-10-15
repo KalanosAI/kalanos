@@ -74,6 +74,27 @@ class MetricRollup(BaseModel):
     n_episodes_flagged: int | None = None
 
 
+class FamilyTail(BaseModel):
+    """How a family's worst episodes scored, beside the dataset's mean for it.
+
+    Attributes
+    ----------
+    below : float
+        The policy's `low_episode_score` the count compared against.
+    n_below : int
+        How many episodes scored the family strictly below `below`.
+    n_scored : int
+        How many episodes scored the family at all.
+    lowest : float
+        The lowest episode score in the family.
+    """
+
+    below: float
+    n_below: int
+    n_scored: int
+    lowest: float
+
+
 class ScoreResult(BaseModel):
     """The rolled-up outcome at one level of the Dataset tree.
 
@@ -108,6 +129,10 @@ class ScoreResult(BaseModel):
     metrics : dict[str, MetricRollup]
         How each graded metric did across its subjects, keyed `family.metric`.
         Filled at episode and dataset level, empty at channel and stream level.
+    family_tails : dict[str, FamilyTail]
+        Per family, how many episodes scored it below the policy's cutoff and
+        the lowest of them. Filled on the dataset score only, empty at every
+        other level.
     """
 
     level: Level
@@ -117,6 +142,7 @@ class ScoreResult(BaseModel):
     n_contributing: int
     families: dict[str, float] = Field(default_factory=dict)
     metrics: dict[str, MetricRollup] = Field(default_factory=dict)
+    family_tails: dict[str, FamilyTail] = Field(default_factory=dict)
 
 
 class Severity(str, Enum):

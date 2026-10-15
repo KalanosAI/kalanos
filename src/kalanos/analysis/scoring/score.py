@@ -11,6 +11,8 @@ and the result becomes a letter grade at every level from Channel up to Dataset.
 An episode's score folds each metric once, at the worst channel, stream or
 camera it graded in the episode. Channel and stream scores fold only their
 own metrics and are for display; the dataset averages its episodes.
+The dataset also records, per family, how many episodes scored below the
+policy's `low_episode_score` and the lowest of them.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -31,6 +33,7 @@ from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
 from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.models.scoring import (
+    FamilyTail,
     Finding,
     FindingLocation,
     Grade,
@@ -966,6 +969,41 @@ def dataset_metric_rollups(
             n_episodes_flagged=episodes_flagged.get(key, 0),
         )
         for key in sorted(graded)
+    }
+
+
+def dataset_family_tails(
+    episode_scores: Sequence[ScoreResult], *, policy: Policy
+) -> dict[str, FamilyTail]:
+    """Count, per family, the episodes that scored it below the policy's cutoff.
+
+    Parameters
+    ----------
+    episode_scores : Sequence[ScoreResult]
+        Every graded episode's score, the same ones the dataset mean averages.
+    policy : Policy
+        The loaded grading policy, carrying `low_episode_score`.
+
+    Returns
+    -------
+    dict[str, FamilyTail]
+        Keyed by family id, in id order. An episode that did not score a
+        family adds nothing to its tail.
+    """
+
+    family_values: dict[str, list[float]] = {}
+    for score in episode_scores:
+        for family, value in score.families.items():
+            family_values.setdefault(family, []).append(value)
+    cutoff = policy.low_episode_score
+    return {
+        family: FamilyTail(
+            below=cutoff,
+            n_below=sum(value < cutoff for value in family_values[family]),
+            n_scored=len(family_values[family]),
+            lowest=min(family_values[family]),
+        )
+        for family in sorted(family_values)
     }
 
 

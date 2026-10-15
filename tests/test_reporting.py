@@ -12,6 +12,7 @@ import logging
 import polars as pl
 import pytest
 import yaml
+from calibration_helpers import grade_with_test_calibration
 from upath import UPath
 
 # Internal
@@ -64,15 +65,18 @@ from kalanos.analysis.scoring.score import (
     score_episode,
     score_metrics,
 )
+from kalanos.api import grade
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 
 # Local
 from helpers import (
+    FIXTURES_DIR,
     DisclosureStateCollector,
     ScoreAttributeCollector,
     decided,
     score_attr,
+    write_arm,
 )
 
 
@@ -796,6 +800,53 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
             )
             == stream.score
         )
+
+
+def test_a_graded_report_records_family_tails_on_the_dataset_score_only():
+    """Verify the tails count every graded episode and leave every score unchanged.
+
+    The fixture folder has one episode scoring integrity below 70 among those
+    that scored it, so the count is above zero on real grading.
+    """
+
+    report = grade(FIXTURES_DIR)
+    integrity = [
+        e.score.families["integrity"]
+        for e in report.episodes
+        if "integrity" in e.score.families
+    ]
+
+    tail = report.score.family_tails["integrity"]
+
+    assert tail.n_scored == len(integrity) == len(report.episodes)
+    assert tail.n_below >= 1
+    assert tail.lowest == min(integrity)
+    assert all(e.score.family_tails == {} for e in report.episodes)
+    independent = rollup(
+        Level.DATASET,
+        [e.score for e in report.episodes],
+        policy=load_default_policy(),
+    )
+    assert report.score.families == independent.families
+
+
+def test_blocked_episodes_count_toward_the_family_tails(tmp_path):
+    """Verify a blocked episode counts toward its family's tail, as it does the mean.
+
+    The four glitched episodes are blocked and are the only ones scoring
+    integrity below 70, so leaving blocked episodes out would read 0 of 16.
+    """
+
+    path = tmp_path / "arm.hdf5"
+    write_arm(path, 20, glitched={2, 7, 11, 16})
+
+    report = grade_with_test_calibration(path)
+
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 4
+    tail = report.score.family_tails["integrity"]
+    assert tail.n_scored == 20
+    assert tail.n_below == 4
 
 
 def test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child(

@@ -42,7 +42,12 @@ from kalanos.analysis.models.metrics import Family
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
-from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
 from kalanos.analysis.reporting.flagged import flagged_rows
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
@@ -711,7 +716,13 @@ def inspect(
             "families "
             + " · ".join(
                 f"{label} {format_family_score(score)}"
-                for _, label, score in family_scores(loaded.score.families)
+                + (
+                    f" ({format_low_episodes(tail)} below {tail.below:g},"
+                    f" lowest {format_lowest(tail)})"
+                    if (tail := loaded.score.family_tails.get(family))
+                    else ""
+                )
+                for family, label, score in family_scores(loaded.score.families)
             ),
             markup=False,
         )

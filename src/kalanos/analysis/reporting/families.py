@@ -1,8 +1,17 @@
 """Display names and number formatting for the dataset's family scores.
 
-The card, the HTML report and `kalanos inspect` all show family scores
+The card, the HTML report and `kalanos inspect` all show family scores,
+and each family's count of low episodes and lowest episode score,
 through this module, so the three never disagree on a name, an order or a rounding.
 """
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Internal
+from kalanos.analysis.models.scoring import FamilyTail
+
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
@@ -70,3 +79,40 @@ def format_family_score(score: float) -> str:
     """
 
     return f"{score:.0f}"
+
+
+def format_low_episodes(tail: FamilyTail) -> str:
+    """Format how many of a family's episodes scored below the cutoff.
+
+    Parameters
+    ----------
+    tail : FamilyTail
+        The family's tail on the dataset score.
+
+    Returns
+    -------
+    str
+        The count out of the episodes that scored the family, such as `"1 of 13"`.
+    """
+
+    return f"{tail.n_below} of {tail.n_scored}"
+
+
+def format_lowest(tail: FamilyTail) -> str:
+    """Format a family's lowest episode score to one decimal.
+
+    One decimal, so a lowest of 69.6 never reads as 70 beside a count of
+    episodes below 70.
+
+    Parameters
+    ----------
+    tail : FamilyTail
+        The family's tail on the dataset score.
+
+    Returns
+    -------
+    str
+        The lowest episode score, such as `"61.4"`.
+    """
+
+    return f"{tail.lowest:.1f}"

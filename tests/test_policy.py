@@ -350,6 +350,33 @@ def test_the_fail_penalty_stays_undecided():
     assert policy.fail_penalty_cap is None
 
 
+def test_the_default_policy_counts_low_episodes_below_70():
+    """Verify the default cutoff for a family's low-episode count is 70."""
+
+    assert load_default_policy().low_episode_score == 70
+
+
+def test_an_extending_policy_can_set_the_low_episode_score(tmp_path):
+    """Verify an override's `low_episode_score` replaces the base's."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(yaml.safe_dump({"extends": "default", "low_episode_score": 80}))
+
+    assert load_policy(override).low_episode_score == 80
+
+
+def test_a_low_episode_score_above_100_fails_to_load(tmp_path):
+    """Verify the cutoff stays on the 0-100 score scale."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump({"extends": "default", "low_episode_score": 101})
+    )
+
+    with pytest.raises(ValueError, match="does not match the policy schema"):
+        load_policy(override)
+
+
 def test_an_extending_policy_keeps_the_base_weight_of_a_metric_it_overrides(
     tmp_path,
 ):
