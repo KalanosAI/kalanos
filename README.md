@@ -93,8 +93,8 @@ $ kalanos grade tests/fixtures/ --no-color
 Kalanos - tests/fixtures
 
   Assessment  Incomplete - inventory not fully read
-  Readiness   undefined - inventory incomplete: whole-dataset fractions are not published
-  Episodes    13 - eligible 13 - review 0 - blocked 0 - unknown 0
+  Readiness   undefined - inventory incomplete: whole-dataset fractions are not published; 4 episode(s) require review
+  Episodes    13 - eligible 9 - review 4 - blocked 0 - unknown 0
   Scope       numeric-core-v1
 
 Family scores
@@ -105,11 +105,17 @@ Flagged channels
   low signal-to-noise  8 of 20 channels  3 episodes  Integrity
   repeated values      1 of 50 channels  1 episode   Integrity
 
+Needs attention
+  lerobot_v2_0_tiny/episode_000000  review  100.0  duplicate episode
+  lerobot_v2_0_tiny/episode_000001  review  100.0  duplicate episode
+  lerobot_v3_tiny/episode_000000    review  100.0  duplicate episode
+  + 1 more in report
+
 Findings
+  episode                             4 episodes - duplicate episode  review
   armA:proprio.ee_pose/tcp_pose_z_mm  1 episode - low signal-to-noise  report-only
   armB:proprio.ee_pose/tcp_pose_z_mm  1 episode - repeated values  report-only
-  armC:proprio.ee_pose/tcp_pose_x_mm  1 episode - low signal-to-noise  report-only
-  + 6 more sources in report
+  + 7 more sources in report
 
 Coverage
   numeric    13/13 episodes
@@ -120,7 +126,7 @@ Not analysed
   README.md        no adapter
   video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
 
-schema 7.1.0 - policy v1 - 0.41s
+schema 7.1.0 - policy v1 - 0.56s
 ```
 
 The same card on a dataset with video: the coverage rows grow with the data.
