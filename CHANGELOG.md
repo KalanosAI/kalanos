@@ -10,11 +10,14 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - `kalanos grade`, the HTML report and `kalanos inspect` show the dataset's 0-100 score for each metric family that scored, under a display name (`timing` as Temporal, `integrity` as Integrity, `motion` as Motion, `vision` as Vision, `annotation` as Annotations); any other family shows under its id.
 - The report records the family weights it graded with in `family_weights` (report schema 7.1.0), and `kalanos grade` shows each family's weight beside its score.
+- The report records, for each metric in each episode and across the dataset, how many channels, streams or cameras it graded and how many it flagged, and each graded metric's points (report schema 7.2.0). The card's new "Flagged channels" section and `kalanos inspect` show the counts.
+- A `core` flag on a policy's metric entries marks the metrics a family needs graded before it scores in an episode. The default policy marks the core timing, integrity, motion, vision and annotation metrics (listed in `docs/METRICS.md`), and an `extends` override keeps the base's flag unless it sets one.
 
 ### Changed
 
 - The default policy weights each metric and each family (integrity 3, timing 2, motion 2, vision 2, annotation 1; metric weights are listed in `docs/METRICS.md`), so a family, episode or dataset score changes wherever metrics of different weight grade differently. A policy that grades a metric without a `weight` beside weighted ones, such as one of the four unweighted report-only metrics given a band, now fails and names it.
 - A policy that `extends` another keeps the base's weight for a metric it overrides without setting `weight`, and merges `family_weights` family by family.
+- An episode's family scores count each metric once, at its worst channel, stream or camera, and a family scores only when one of its core metrics graded. The episode score is the family-weighted mean of those family scores, so family, episode and dataset scores drop where one channel fails among many. Channel and stream scores are shown as before and no longer feed the episode score.
 
 ## [0.7.2] - 2026-10-08
 

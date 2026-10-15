@@ -99,7 +99,11 @@ Kalanos - tests/fixtures
 
 Family scores
              Score  Weight
-  Integrity     99       3
+  Integrity     96       3
+
+Flagged channels
+  low signal-to-noise  8 of 20 channels  3 episodes  Integrity
+  repeated values      1 of 50 channels  1 episode   Integrity
 
 Findings
   armA:proprio.ee_pose/tcp_pose_z_mm  1 episode - low signal-to-noise  report-only
@@ -116,7 +120,7 @@ Not analysed
   README.md        no adapter
   video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
 
-schema 7.1.0 - policy v1 - 0.21s
+schema 7.2.0 - policy v1 - 0.35s
 ```
 
 The same card on a dataset with video: the coverage rows grow with the data.
@@ -135,9 +139,13 @@ Family scores
   Integrity    100       3
   Vision        33       2
 
+Flagged channels
+  brightness changes  1 of 1 stream  2 episodes  Vision
+  low sharpness       1 of 1 stream  2 episodes  Vision
+
 Needs attention
-  lerobot_v3_tiny/episode_000000  review   83.3  low sharpness, brightness changes
-  lerobot_v3_tiny/episode_000001  review   83.3  low sharpness, brightness changes
+  lerobot_v3_tiny/episode_000000  review   73.3  low sharpness, brightness changes
+  lerobot_v3_tiny/episode_000001  review   73.3  low sharpness, brightness changes
 
 Findings
   unmapped.observation.images.up  2 episodes - low sharpness, brightness changes  review
@@ -148,7 +156,7 @@ Coverage
   mapping        2 stream types unmapped - type them with --map
   inventory      complete
 
-schema 7.1.0 - policy v1 - 0.11s
+schema 7.2.0 - policy v1 - 0.23s
 ```
 
 How to read it, top to bottom:
@@ -157,6 +165,7 @@ How to read it, top to bottom:
 |---|---|---|
 | **Assessment and episodes** | The verdict, readiness out of 100 (or `undefined` with its reason), and how many episodes are eligible, in review, blocked or unknown | How much of this dataset is confirmed usable as it is, and what needs a decision or more evidence before you can tell |
 | **Family scores** | The dataset's score out of 100 for each metric family that graded, such as Integrity or Vision, beside the weight the policy gives that family | A low family points at the kind of problem to look for. Open the report for the episodes and metrics behind it |
+| **Flagged channels** | Each metric that flagged a channel, stream or camera: how many it flagged out of how many it graded, in how many episodes, and its family | A metric flagging a few channels in many episodes points at one bad sensor or camera. Open the report to see which |
 | **Needs attention** | The episodes that did not pass, worst first, with their status, score and the conditions behind it | Start at the top: these are the episodes to fix, review or drop |
 | **Findings** | Each source with findings, how many episodes it affects, what was observed, and whether it blocks, needs review or is only reported | Open that source in the full report for the values and evidence |
 | **Coverage** | For each check that applies to this data, how many episodes it was computed on, how many stream types went unmapped, and whether the whole inventory was read | A gap here means less was checked than the counts suggest; read its reason before trusting the verdict. Type unmapped streams with `--map` so their metrics apply |

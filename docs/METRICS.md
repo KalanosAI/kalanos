@@ -330,7 +330,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 
 Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
 
-Family scores are weighted means of their metrics; the overall score is a weighted mean of family scores, renormalised over the families that ran, minus a capped penalty per distinct failing metric.
+An episode counts each metric once, at its worst channel, stream or camera. Its family scores are weighted means of those metrics, and its score is a weighted mean of its family scores, renormalised over the families that scored, minus a capped penalty per distinct failing metric. The dataset averages its episodes.
 
 ### Readiness
 
@@ -375,42 +375,56 @@ A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published b
 
 **Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 
-Weights are relative integers set in `policy.yaml`: ~1 is supporting evidence, ~3 a standard core check, ~5 a defect that directly corrupts training. Within one node (a channel, a stream or an episode's own metrics), a family score is the weighted mean of its metrics that graded, and the node's score the weighted mean of its families that graded, so the weights renormalise over whatever graded. Levels above a node average their children equally, family scores included. `report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points. A report-only metric's weight takes effect once the metric grades.
+Weights are relative integers set in `policy.yaml`: ~1 is supporting evidence, ~3 a standard core check, ~5 a defect that directly corrupts training.
 
-| Family | Metric | Weight |
-|---|---|---|
-| timing | `effective_hz` | 5 |
-| timing | `drop_rate` | 4 |
-| timing | `monotonic_violations` | 4 |
-| timing | `dt_jitter_ms` | 3 |
-| timing | `recorded_drop_estimate` | 2 |
-| timing | `recorded_hz` | 1 |
-| timing | `recorded_dt_spread_ms` | 1 |
-| integrity | `missing_pct` | 4 |
-| integrity | `flatline_pct` | 4 |
-| integrity | `spike_pct` | 4 |
-| integrity | `dead_taxel_pct` | 3 |
-| integrity | `snr_db` | 2 |
-| integrity | `hysteresis` | 2 |
-| integrity | `drift` | 1 |
-| motion | `log_dimensionless_jerk` | 5 |
-| motion | `velocity_spike_pct` | 4 |
-| motion | `action_chatter` | 2 |
-| motion | `vel_saturation_pct` | 2 |
-| motion | `hf_vibration_ratio` | 2 |
-| motion | `mean_jerk_norm` | 1 |
-| motion | `max_abs_jerk` | 1 |
-| motion | `still_drift` | 1 |
-| motion | `limit_proximity_pct` | 1 |
-| motion | `p99_torque` | 1 |
-| motion | `max_torque`, `mean_torque`, `energy_proxy` | none, report-only |
-| vision | `frozen_frame_pct` | 6 |
-| vision | `sharpness_score` | 5 |
-| vision | `frame_count_vs_timebase` | 4 |
-| vision | `exposure_shift_pct` | 3 |
-| vision | `pts_defect_pct` | 2 |
-| vision | `exposure_level` | none, report-only |
-| annotation | `task_instruction_missing` | 5 |
+The episode score is built from its metrics directly:
+
+- Each metric counts once per episode, at the points of its worst channel, stream or camera. One failing channel among twelve costs the metric's full share, as it would on a single-channel stream. Unmapped streams count like any other.
+- A family's score is the weighted mean of those worst-subject points over its metrics that graded.
+- A family scores in an episode only when at least one of its *core* metrics graded (`core: true` in `policy.yaml`, marked in the table below); its other graded metrics then renormalise around it. A family whose policy marks no metric core scores whenever any of its metrics graded.
+- The episode score is the weighted mean of its family scores, by the family weights, renormalised over the families that scored.
+- `fail_penalty`, when a policy sets one, subtracts once per metric whose worst subject scored 0, however many subjects failed it.
+
+Channel and stream scores are for display. They fold only their own node's metrics the same way, and a stream averages its channels and its own metrics equally. The dataset score and the dataset's family scores are the mean over the episodes that scored them.
+
+The report records, per metric, how many subjects it graded and how many it flagged (`score.metrics`). The dataset count is of distinct channels, streams or cameras, with the number of episodes the metric flagged; the card's *Flagged channels* section and `kalanos inspect` show it.
+
+`report_only` and `not_applicable` results are excluded from the denominator, because a metric that could not run must not silently cost points. A report-only metric's weight takes effect once the metric grades.
+
+| Family | Metric | Weight | Core |
+|---|---|---|---|
+| timing | `effective_hz` | 5 | true |
+| timing | `drop_rate` | 4 | true |
+| timing | `monotonic_violations` | 4 | false |
+| timing | `dt_jitter_ms` | 3 | false |
+| timing | `recorded_drop_estimate` | 2 | false |
+| timing | `recorded_hz` | 1 | false |
+| timing | `recorded_dt_spread_ms` | 1 | false |
+| integrity | `missing_pct` | 4 | true |
+| integrity | `flatline_pct` | 4 | true |
+| integrity | `spike_pct` | 4 | true |
+| integrity | `dead_taxel_pct` | 3 | true |
+| integrity | `snr_db` | 2 | false |
+| integrity | `hysteresis` | 2 | true |
+| integrity | `drift` | 1 | false |
+| motion | `log_dimensionless_jerk` | 5 | false |
+| motion | `velocity_spike_pct` | 4 | false |
+| motion | `action_chatter` | 2 | false |
+| motion | `vel_saturation_pct` | 2 | false |
+| motion | `hf_vibration_ratio` | 2 | true |
+| motion | `mean_jerk_norm` | 1 | false |
+| motion | `max_abs_jerk` | 1 | false |
+| motion | `still_drift` | 1 | false |
+| motion | `limit_proximity_pct` | 1 | false |
+| motion | `p99_torque` | 1 | false |
+| motion | `max_torque`, `mean_torque`, `energy_proxy` | none, report-only | false |
+| vision | `frozen_frame_pct` | 6 | true |
+| vision | `sharpness_score` | 5 | true |
+| vision | `frame_count_vs_timebase` | 4 | true |
+| vision | `exposure_shift_pct` | 3 | true |
+| vision | `pts_defect_pct` | 2 | false |
+| vision | `exposure_level` | none, report-only | false |
+| annotation | `task_instruction_missing` | 5 | true |
 
 Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.
 

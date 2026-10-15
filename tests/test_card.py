@@ -25,7 +25,9 @@ from kalanos.analysis.models.eligibility import (
     SufficiencyCheck,
     SufficiencyStatus,
 )
+from kalanos.analysis.models.metrics import Level
 from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.scoring import MetricRollup
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.card.sections import _under_root
 from kalanos.analysis.reporting.families import format_family_score
@@ -419,6 +421,83 @@ def test_a_family_without_a_display_name_shows_its_id(csv_report):
     )
 
     assert _section(text, "Family scores") == ["  consistency   80"]
+
+
+def _with_metrics(report: Report, metrics: dict[str, MetricRollup]) -> Report:
+    """A copy of `report` whose dataset score carries `metrics`."""
+
+    score = report.score.model_copy(update={"metrics": metrics})
+    return report.model_copy(update={"score": score})
+
+
+def _rollup(level: Level, n_flagged: int, n_graded: int, episodes: int):
+    """A dataset-level MetricRollup."""
+
+    return MetricRollup(
+        level=level,
+        points=None,
+        n_graded=n_graded,
+        n_flagged=n_flagged,
+        n_episodes_flagged=episodes,
+    )
+
+
+def test_flagged_channels_count_each_metric_once_after_family_scores(csv_report):
+    report = _with_metrics(
+        csv_report,
+        {
+            "integrity.missing_pct": _rollup(Level.CHANNEL, 1, 2, 1),
+            "integrity.flatline_pct": _rollup(Level.CHANNEL, 0, 2, 0),
+        },
+    )
+
+    text = render_terminal(report, width=300)
+
+    [row] = _section(text, "Flagged channels")
+    assert row.split("  ")[-3:] == ["1 of 2 channels", "1 episode", "Integrity"]
+    assert text.index("Family scores") < text.index("Flagged channels")
+
+
+def test_flagged_channels_are_absent_when_nothing_flagged(csv_report):
+    report = _with_metrics(
+        csv_report,
+        {
+            "integrity.missing_pct": _rollup(Level.CHANNEL, 0, 2, 0),
+            "annotation.task_instruction_missing": _rollup(Level.EPISODE, 1, 1, 1),
+        },
+    )
+
+    assert "Flagged channels" not in render_terminal(report, width=300)
+
+
+def test_flagged_channels_cap_at_three_rows_most_episodes_first(csv_report):
+    report = _with_metrics(
+        csv_report,
+        {
+            "integrity.missing_pct": _rollup(Level.CHANNEL, 1, 4, 1),
+            "integrity.flatline_pct": _rollup(Level.CHANNEL, 2, 4, 5),
+            "integrity.spike_pct": _rollup(Level.CHANNEL, 1, 4, 3),
+            "vision.sharpness_score": _rollup(Level.STREAM, 1, 1, 2),
+            "timing.drop_rate": _rollup(Level.STREAM, 1, 2, 4),
+        },
+    )
+
+    rows = _section(render_terminal(report, width=300), "Flagged channels")
+
+    assert len(rows) == 4
+    assert "5 episodes" in rows[0] and "2 of 4 channels" in rows[0]
+    assert "4 episodes" in rows[1] and "1 of 2 streams" in rows[1]
+    assert "3 episodes" in rows[2]
+    assert rows[3].strip() == "+ 2 more metrics in report"
+
+
+def test_the_vision_report_flags_its_one_camera_stream(vision_report):
+    text = render_terminal(vision_report, width=300)
+    rows = _section(text, "Flagged channels")
+
+    assert rows
+    assert all("1 of 1 stream  2 episodes  Vision" in row for row in rows)
+    assert text.index("Flagged channels") < text.index("Needs attention")
 
 
 def test_plain_output_is_ascii_and_color_is_styled(corpus_report):
