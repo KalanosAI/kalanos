@@ -21,10 +21,16 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
 | `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
 | `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
+| `duplicates` | `list[DuplicateEpisodes]` | Each pair of episodes whose numeric payloads are identical or nearly so. Identical episodes pair only with the first of them, which also stands for them in a near pair. |
+| `DuplicateEpisodes.episodes` | `list[str]` | The pair, in episode order. |
+| `DuplicateEpisodes.tier` | `exact` or `near` | `exact` when every payload hashes identically, `near` when the resampled trajectories lie within the near-duplicate limit. |
+| `DuplicateEpisodes.nrmse` | `float` | The normalized RMSE between the two trajectories, 0.0 for an exact pair. |
+| `DuplicateEpisodes.footage_identical` | `bool` | Whether the pair also repeats its camera footage exactly. |
+| `DuplicateEpisodes.cameras` | `list[str]` | The cameras whose footage the pair repeats exactly. |
 
 An episode's `score` and `families` now come from its metrics, each counted once at its worst subject and weighted within its family. A family scores only when one of its `core` metrics (a new `MetricPolicy.core` flag) graded in the episode. Channel and stream scores keep their own fold and are for display.
 
-A 7.0.0 report loads with `family_weights`, every `metrics` and every `family_tails` empty, and every `points` null.
+A 7.0.0 report loads with `family_weights`, `duplicates`, every `metrics` and every `family_tails` empty, and every `points` null.
 
 ## New top-level fields
 
