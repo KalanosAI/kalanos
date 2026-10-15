@@ -47,6 +47,33 @@ class Grade(str, Enum):
     F = "F"
 
 
+class MetricRollup(BaseModel):
+    """How one metric graded across the subjects it ran on, in an episode or a dataset.
+
+    Attributes
+    ----------
+    level : Level
+        Where the metric ran: channel, stream or episode.
+    points : float or None
+        In an episode, the points of its worst subject, which is what the
+        episode's family score counts. `None` at dataset level.
+    n_graded : int
+        How many subjects it graded. At dataset level, distinct subjects
+        across every episode.
+    n_flagged : int
+        Of those, how many graded `warning` or `critical`.
+    n_episodes_flagged : int or None
+        At dataset level, how many episodes it flagged a subject in;
+        `None` in an episode.
+    """
+
+    level: Level
+    points: float | None
+    n_graded: int
+    n_flagged: int
+    n_episodes_flagged: int | None = None
+
+
 class ScoreResult(BaseModel):
     """The rolled-up outcome at one level of the Dataset tree.
 
@@ -72,11 +99,15 @@ class ScoreResult(BaseModel):
         scored children for `rollup`.
         Excludes `report_only`, `not_applicable`, and `score=None` results.
     families : dict[str, float]
-        Each family's own 0-100 score, keyed by family name. Set from
-        `score_metrics`' per-family fold, before the fail penalty, which
-        applies only to `score`. `rollup` carries a family forward as the
-        mean over the children that measured it, missing from a family
-        no child below measured.
+        Each family's own 0-100 score, keyed by family name, before the fail
+        penalty, which applies only to `score`. At channel and stream level
+        it comes from `score_metrics`' per-family fold. At episode level it
+        folds each metric at its worst subject, and leaves out a family whose
+        core metrics did not grade. At dataset level it is the mean over the
+        episodes that scored the family.
+    metrics : dict[str, MetricRollup]
+        How each graded metric did across its subjects, keyed `family.metric`.
+        Filled at episode and dataset level, empty at channel and stream level.
     """
 
     level: Level
@@ -85,6 +116,7 @@ class ScoreResult(BaseModel):
     train_ready: bool | None
     n_contributing: int
     families: dict[str, float] = Field(default_factory=dict)
+    metrics: dict[str, MetricRollup] = Field(default_factory=dict)
 
 
 class Severity(str, Enum):

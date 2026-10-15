@@ -130,6 +130,26 @@ def test_glitched_episodes_cap_the_dataset_and_pruning_restores_it(tmp_path):
     assert all(f.reasons for f in gate.failing_episodes)
 
 
+def test_the_pruned_score_is_the_mean_of_unblocked_episode_scores(tmp_path):
+    """The pruned score averages the episode scores of the episodes not blocked."""
+
+    path = tmp_path / "arm.hdf5"
+    _write_arm(path, 20, glitched={2, 7, 11, 16})
+
+    report = grade_with_test_calibration(path)
+    gate = report.gate
+
+    assert gate is not None
+    failing = {f.episode_id for f in gate.failing_episodes}
+    kept = [
+        e.score.score
+        for e in report.episodes
+        if e.id not in failing and e.score.score is not None
+    ]
+    assert len(kept) == 16
+    assert gate.pruned_score == pytest.approx(sum(kept) / len(kept))
+
+
 def test_a_clean_dataset_is_not_capped_and_says_what_it_rests_on(tmp_path):
     """No failing episode, no cap — and the coverage line is still there."""
 

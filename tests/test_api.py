@@ -177,7 +177,7 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "7.1.0"
+    assert report.schema_version == "7.2.0"
 
 
 def test_the_full_tier_reads_every_camera_frame():
@@ -217,6 +217,49 @@ def test_a_7_0_0_report_without_family_weights_still_loads():
     payload["schema_version"] = "7.0.0"
 
     assert kalanos.Report.model_validate(payload).family_weights == {}
+
+
+def test_a_graded_report_rolls_up_each_metric_and_round_trips_them():
+    """Verify the dataset and episode scores carry per-metric rollups that reload."""
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.score.metrics
+    assert all(e.score.metrics for e in report.episodes)
+    reloaded = kalanos.Report.model_validate(report.model_dump(mode="json"))
+    assert reloaded.score.metrics == report.score.metrics
+    assert [e.score.metrics for e in reloaded.episodes] == [
+        e.score.metrics for e in report.episodes
+    ]
+
+
+def test_a_7_1_0_report_without_metric_rollups_still_loads():
+    """Verify the 7.2.0 fields are additive: a 7.1.0 report validates without them."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    del payload["score"]["metrics"]
+    for episode in payload["episodes"]:
+        del episode["score"]["metrics"]
+        for result in episode["metrics"].values():
+            del result["points"]
+        for stream in episode["streams"]:
+            for result in stream["metrics"].values():
+                del result["points"]
+            for channel in stream["channels"]:
+                for result in channel["metrics"].values():
+                    del result["points"]
+    payload["schema_version"] = "7.1.0"
+
+    report = kalanos.Report.model_validate(payload)
+
+    assert report.score.metrics == {}
+    assert all(e.score.metrics == {} for e in report.episodes)
+    assert all(
+        result.points is None
+        for e in report.episodes
+        for s in e.streams
+        for result in s.metrics.values()
+    )
 
 
 def test_a_policy_passed_to_grade_overrides_the_default_weights(

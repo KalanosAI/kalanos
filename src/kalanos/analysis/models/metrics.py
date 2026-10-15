@@ -94,6 +94,9 @@ class MetricResult(BaseModel):
     evidence : dict[str, Any]
         Supporting detail behind `status` and `value`,
         e.g. sample counts or the thresholds compared against.
+    points : float or None
+        The 0-100 the policy graded this result to, or `None` when it stayed
+        `not_applicable` or `report_only`. Set by scoring, never by a metric.
     """
 
     value: float | None
@@ -102,6 +105,7 @@ class MetricResult(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     availability: Availability | None = None
     support: TemporalSupport = Field(default_factory=TemporalSupport)
+    points: float | None = None
 
 
 class Requires(BaseModel):

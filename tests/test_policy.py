@@ -103,6 +103,24 @@ DEFAULT_FAMILY_WEIGHTS = {
 }
 
 
+# The metrics a family needs one of graded before it scores in an episode.
+DEFAULT_CORE_METRICS = {
+    "timing.effective_hz",
+    "timing.drop_rate",
+    "integrity.missing_pct",
+    "integrity.flatline_pct",
+    "integrity.spike_pct",
+    "integrity.dead_taxel_pct",
+    "integrity.hysteresis",
+    "motion.hf_vibration_ratio",
+    "vision.sharpness_score",
+    "vision.exposure_shift_pct",
+    "vision.frame_count_vs_timebase",
+    "vision.frozen_frame_pct",
+    "annotation.task_instruction_missing",
+}
+
+
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
@@ -306,6 +324,23 @@ def test_the_default_policy_weights_match_the_documented_numbers():
     assert policy.family_weights == DEFAULT_FAMILY_WEIGHTS
 
 
+def test_the_default_policy_marks_exactly_the_core_metrics():
+    """Verify `core: true` sits on the documented core metrics and no others."""
+
+    policy = load_default_policy()
+
+    assert {key for key, entry in policy.metrics.items() if entry.core} == (
+        DEFAULT_CORE_METRICS
+    )
+
+
+def test_core_parses_and_defaults_to_false():
+    """Verify `core` reads from a metric entry and is off when absent."""
+
+    assert MetricPolicy.model_validate({"core": True}).core is True
+    assert MetricPolicy().core is False
+
+
 def test_the_fail_penalty_stays_undecided():
     """Verify the fail penalty, *to define* in docs/METRICS.md, carries no number."""
 
@@ -362,6 +397,30 @@ def test_the_language_conditioned_policy_keeps_the_instruction_weight():
     policy = load_policy(Path("language_conditioned"))
 
     assert _entry(policy, "task_instruction_missing").weight == 5
+
+
+def test_the_language_conditioned_policy_keeps_the_instruction_core_flag():
+    """Verify language_conditioned keeps the instruction metric core via `extends`."""
+
+    policy = load_policy(Path("language_conditioned"))
+
+    assert _entry(policy, "task_instruction_missing").core is True
+
+
+def test_an_extending_policy_can_clear_a_core_flag(tmp_path):
+    """Verify an explicit `core: false` overrides the base's flag."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"integrity.spike_pct": {"core": False}},
+            }
+        )
+    )
+
+    assert _entry(load_policy(override), "spike_pct").core is False
 
 
 def test_an_extending_policy_merges_family_weights_key_by_key(tmp_path):

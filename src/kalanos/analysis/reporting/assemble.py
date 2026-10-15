@@ -80,7 +80,13 @@ from kalanos.analysis.scoring.eligibility import (
     sufficiency_of,
 )
 from kalanos.analysis.scoring.gate import apply_gate
-from kalanos.analysis.scoring.score import rollup, score_metrics, sort_findings
+from kalanos.analysis.scoring.score import (
+    dataset_metric_rollups,
+    rollup,
+    score_episode,
+    score_metrics,
+    sort_findings,
+)
 from kalanos.assets.dictionary import load_default_dictionary
 
 
@@ -280,8 +286,9 @@ def grade_stream(
                     )
                     findings.extend(channel_findings)
 
-    # Step 3: fold the stream's own score in alongside its channels' —
-    # one more equal-weight contributor, the same rule every other level uses.
+    # Step 3: fold the stream's own score in alongside its channels',
+    # as one more equal-weight contributor. The stream score is for display;
+    # the episode score reads the metrics themselves.
     stream_score = rollup(
         Level.STREAM, [*(gc.score for gc in graded_channels), own_score], policy=policy
     )
@@ -350,7 +357,7 @@ def grade_episode(
     -------
     tuple[GradedEpisode, list[Finding]]
         Every stream and channel in `episode`, graded, alongside the
-        episode's own metrics; a score rolled up over both;
+        episode's own metrics; a score folded from every metric graded in it;
         the recording's duration and sample count;
         and every finding raised anywhere in it, unsorted —
         only `assemble_report` sorts the dataset-wide list.
@@ -379,7 +386,7 @@ def grade_episode(
     # rather than reading any one of them alone.
     episode_ctx = EpisodeContext(episode=episode)
     episode_results = run_episode_metrics(episode_ctx)
-    episode_metrics, own_score, episode_findings = score_metrics(
+    episode_metrics, _own_score, episode_findings = score_metrics(
         results=episode_results,
         level=Level.EPISODE,
         taxonomy_type=Level.EPISODE.value,
@@ -388,11 +395,9 @@ def grade_episode(
     )
     findings.extend(episode_findings)
 
-    # Step 3: fold the episode's own score in alongside its streams' —
-    # one more equal-weight contributor, the same rule every other level uses.
-    episode_score = rollup(
-        Level.EPISODE, [*(gs.score for gs in graded_streams), own_score], policy=policy
-    )
+    # Step 3: score the episode from every metric it graded,
+    # each counted once at its worst channel, stream or camera.
+    episode_score = score_episode(graded_streams, episode_metrics, policy=policy)
 
     # Step 4: the recording's extent, from the timestamps its streams already carry.
     timed = [s.timestamps for s in episode.streams if s.timestamps.len()]
@@ -635,7 +640,7 @@ def assemble_report(
     # Step 2: the dataset rollup and the gate, which now only derives.
     dataset_score = rollup(
         Level.DATASET, [ge.score for ge in graded_episodes], policy=policy
-    )
+    ).model_copy(update={"metrics": dataset_metric_rollups(graded_episodes)})
     dataset_score, gate = apply_gate(
         graded_episodes,
         findings,

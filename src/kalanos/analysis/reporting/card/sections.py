@@ -32,6 +32,7 @@ from kalanos.analysis.models.report import GradedEpisode, Report
 from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.reporting.card.theme import Theme
 from kalanos.analysis.reporting.families import family_scores, format_family_score
+from kalanos.analysis.reporting.flagged import flagged_rows
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -459,6 +460,47 @@ def families(report: Report, ctx: CardContext) -> list[Text]:
         weight_cell = "" if weight is None else f"{weight:g}"
         pairs.append((label, f"{format_family_score(score):>5}  {weight_cell:>6}"))
     return _rows(pairs, ctx)
+
+
+def flagged_channels(report: Report, ctx: CardContext) -> list[Text]:
+    """The metrics that flagged channels, streams or cameras across the dataset.
+
+    Parameters
+    ----------
+    report : Report
+        The report to render.
+    ctx : CardContext
+        The theme and width to lay out against.
+
+    Returns
+    -------
+    list[Text]
+        Up to `_MAX_ROWS` rows, each naming the metric, how many subjects it
+        flagged out of how many it graded, in how many episodes, and its family,
+        then a count of the rest; no lines when nothing flagged.
+    """
+
+    rows = flagged_rows(report.score.metrics)
+    if not rows:
+        return []
+    shown = rows[:_MAX_ROWS]
+    # Each part padded to its widest, so the counts line up down the column.
+    subjects_width = max(len(row.subjects) for row in shown)
+    episodes_width = max(len(row.episodes or "") for row in shown)
+    pairs: list[tuple[Cell, Cell]] = [
+        (
+            row.label,
+            f"{row.subjects:<{subjects_width}}  "
+            f"{row.episodes or '':<{episodes_width}}  {row.family}",
+        )
+        for row in shown
+    ]
+    lines = _rows(pairs, ctx)
+    if len(rows) > _MAX_ROWS:
+        lines.append(
+            _note(f"+ {len(rows) - _MAX_ROWS} more metrics in report", "muted", ctx)
+        )
+    return lines
 
 
 def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
