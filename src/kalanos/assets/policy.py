@@ -45,6 +45,9 @@ _DEFAULT_POLICY_RESOURCE = ("policies", "default.yaml")
 # Policies shipped inside the package, loadable by name as well as by path.
 PACKAGED_POLICIES = ("default", "language_conditioned", "legacy_0_5")
 
+# Metric-entry keys an `extends` override keeps from its base unless it sets them.
+_INHERITED_METRIC_KEYS = ("weight", "core")
+
 
 def _packaged_yaml(name: str) -> str:
     """Read a packaged policy's YAML text by name."""
@@ -60,8 +63,9 @@ def _resolve_extends(payload: Any, *, source: str) -> Any:
     """Merge a policy that `extends` a packaged one over its base.
 
     `metrics` merge entry by entry, each entry replacing the base's whole
-    entry except its `weight`, which the entry keeps from the base unless it
-    sets one (`weight: null` included). `family_weights` merge family by family.
+    entry except its `weight` and `core`, which the entry keeps from the base
+    unless it sets them (`weight: null` included). `family_weights` merge
+    family by family.
     Every other top-level key replaces the base's, so `gate: null` switches
     the gate off.
     """
@@ -80,13 +84,13 @@ def _resolve_extends(payload: Any, *, source: str) -> Any:
     metrics = {**base_metrics}
     for key, entry in payload.get("metrics", {}).items():
         base_entry = base_metrics.get(key)
-        if (
-            isinstance(entry, dict)
-            and isinstance(base_entry, dict)
-            and "weight" in base_entry
-            and "weight" not in entry
-        ):
-            entry = {**entry, "weight": base_entry["weight"]}
+        if isinstance(entry, dict) and isinstance(base_entry, dict):
+            inherited = {
+                name: base_entry[name]
+                for name in _INHERITED_METRIC_KEYS
+                if name in base_entry and name not in entry
+            }
+            entry = {**entry, **inherited}
         metrics[key] = entry
     merged["metrics"] = metrics
     family_weights = payload.get("family_weights", {})

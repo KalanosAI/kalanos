@@ -384,7 +384,12 @@ def _resolve(
     if result.status == MetricStatus.NOT_APPLICABLE or (
         result.availability is not None and result.availability != Availability.COMPUTED
     ):
-        return result.model_copy(update={"status": MetricStatus.NOT_APPLICABLE}), None
+        return (
+            result.model_copy(
+                update={"status": MetricStatus.NOT_APPLICABLE, "points": None}
+            ),
+            None,
+        )
 
     evidence = dict(result.evidence)
 
@@ -398,7 +403,11 @@ def _resolve(
         )
         return (
             result.model_copy(
-                update={"status": MetricStatus.NOT_APPLICABLE, "evidence": evidence}
+                update={
+                    "status": MetricStatus.NOT_APPLICABLE,
+                    "evidence": evidence,
+                    "points": None,
+                }
             ),
             None,
         )
@@ -407,7 +416,11 @@ def _resolve(
         evidence["ungraded_reason"] = reason
         return (
             result.model_copy(
-                update={"status": MetricStatus.REPORT_ONLY, "evidence": evidence}
+                update={
+                    "status": MetricStatus.REPORT_ONLY,
+                    "evidence": evidence,
+                    "points": None,
+                }
             ),
             None,
         )
@@ -472,7 +485,12 @@ def _resolve(
         evidence["capped_reason"] = (
             "never changed in this episode: unused or disconnected"
         )
-    return result.model_copy(update={"status": status, "evidence": evidence}), points
+    return (
+        result.model_copy(
+            update={"status": status, "evidence": evidence, "points": points}
+        ),
+        points,
+    )
 
 
 def resolve_status(

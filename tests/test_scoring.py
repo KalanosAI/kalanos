@@ -286,6 +286,64 @@ def test_a_higher_is_better_band_scores_from_the_opposite_direction():
     assert at_midpoint.status == MetricStatus.WARNING
 
 
+def test_resolve_stores_the_points_it_graded_on_the_result():
+    """Verify a graded result carries its points, and an ungraded one carries none."""
+
+    policy = Policy(
+        schema_version=1,
+        metrics={
+            "integrity.snr_db": MetricPolicy(
+                higher_is_better=True,
+                thresholds={"default": Band(good=20.0, bad=6.0)},
+            ),
+            "integrity.drift": MetricPolicy(report_only=True),
+        },
+        letters=_LETTERS,
+    )
+
+    graded = resolve_status(
+        _report_only(13.0, unit="dB"),
+        metric_name="snr_db",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+    report_only = resolve_status(
+        _report_only(1.0, unit="unit/min").model_copy(update={"points": 42.0}),
+        metric_name="drift",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+    not_applicable = resolve_status(
+        _not_applicable().model_copy(update={"points": 42.0}),
+        metric_name="snr_db",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+
+    assert graded.points == pytest.approx(50.0)
+    assert report_only.points is None
+    assert not_applicable.points is None
+
+
+def test_resolve_stores_the_capped_points_of_a_channel_that_never_changed():
+    """Verify the never-changed cap's midway points are the ones stored."""
+
+    policy = load_default_policy()
+    result = _report_only(100.0, unit="%").model_copy(
+        update={"evidence": {"never_changed": True}}
+    )
+
+    resolved = resolve_status(
+        result,
+        metric_name="flatline_pct",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+
+    assert resolved.status == MetricStatus.WARNING
+    assert resolved.points == pytest.approx(50.0)
+
+
 def test_abs_dev_scores_full_points_when_the_value_equals_its_declared_target():
     """Verify effective_hz-shaped grading: a value at its nominal rate scores 100."""
 

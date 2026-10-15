@@ -9,6 +9,7 @@
 
 schema_version: 1
 
+# A family scores in an episode only when at least one of its `core` metrics graded there.
 metrics:
   # Recorded-axis diagnostics are report-only. They establish no capture quality.
   timing.recorded_hz: {weight: 1}
@@ -18,6 +19,7 @@ metrics:
   # Both bounds decided: good < 1%, bad > 5%.
   timing.drop_rate:
     weight: 4
+    core: true
     thresholds:
       default:
         good: 0.01
@@ -41,6 +43,7 @@ metrics:
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good just below the worst clean camera stream, bad at the median stream blurred by a 5x5 box.
   vision.sharpness_score:
     weight: 5
+    core: true
     higher_is_better: true
     thresholds:
       default:
@@ -50,6 +53,7 @@ metrics:
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good at the worst clean camera stream, bad at the median stream with 40% of its frames clipped.
   vision.exposure_shift_pct:
     weight: 3
+    core: true
     thresholds:
       default:
         good: 10.0
@@ -65,6 +69,7 @@ metrics:
   # manifest; the band itself stays candidate.
   vision.frame_count_vs_timebase:
     weight: 4
+    core: true
     route: contract
     thresholds:
       default:
@@ -79,6 +84,7 @@ metrics:
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:
     weight: 6
+    core: true
     thresholds:
       default:
         good: 0.01
@@ -88,6 +94,7 @@ metrics:
   # recordings.
   timing.effective_hz:
     weight: 5
+    core: true
     mode: abs_dev  # grade |value - target| / |target| instead of value directly
     target: nominal_hz  # key looked up under this metric's own `limits`
     # an adapter's describe() naming a declared rate auto-fills the target
@@ -101,6 +108,7 @@ metrics:
   # Candidate: the percent bounds are unconfirmed against real recordings.
   integrity.missing_pct:
     weight: 4
+    core: true
     thresholds:
       default:
         good: 0.5
@@ -118,6 +126,7 @@ metrics:
   # nearly the whole episode, so the band now sits there.
   integrity.flatline_pct:
     weight: 4
+    core: true
     thresholds:
       default:
         good: 50.0
@@ -148,6 +157,7 @@ metrics:
   # type-keyed band is never merged with the default.
   integrity.spike_pct:
     weight: 4
+    core: true
     thresholds:
       default:
         good: 0.1
@@ -194,6 +204,7 @@ metrics:
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.dead_taxel_pct:
     weight: 3
+    core: true
     thresholds:
       default:
         good: 2.0
@@ -202,6 +213,7 @@ metrics:
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.hysteresis:
     weight: 2
+    core: true
     thresholds:
       default:
         good: 0.05
@@ -264,6 +276,7 @@ metrics:
   # real recordings — validate before treating these as decided.
   motion.hf_vibration_ratio:
     weight: 2
+    core: true
     thresholds:
       default:
         good: 0.1
@@ -289,7 +302,9 @@ metrics:
   # instruction should cost points depends on the policy being trained, so it
   # is measured and shown in every report and grades nothing until a band is
   # settled against real recordings.
-  annotation.task_instruction_missing: {weight: 5}
+  annotation.task_instruction_missing:
+    weight: 5
+    core: true
 
 # Weights are relative and renormalise over what graded: 1 is supporting evidence, 3 a standard core check, 5 or 6 a defect that directly corrupts training.
 family_weights:
