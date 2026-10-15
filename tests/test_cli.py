@@ -25,6 +25,15 @@ from typer.testing import CliRunner
 # Internal
 from kalanos.analysis.metrics import vision
 from kalanos.analysis.models.report import Report
+from kalanos.analysis.reporting.card import render_terminal
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
+from kalanos.analysis.reporting.write import write_report
+from kalanos.api import grade
 from kalanos.cli import app
 
 # Local
@@ -286,6 +295,8 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
     collector.feed(html_path.read_text())
 
     expected = [("dataset", str(report.root), score_attr(report.score))]
+    for family, _, score in family_scores(report.score.families):
+        expected.append(("family", family, repr(score)))
     for episode in report.episodes:
         expected.append(("episode", episode.id, score_attr(episode.score)))
         for stream in episode.streams:
@@ -296,6 +307,87 @@ def test_html_and_json_reports_carry_the_same_scores(tmp_path):
                 )
 
     assert collector.rows == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "bundle"),
+    [(LEROBOT_FIXTURE, Path("vision-imitation-v1")), (FIXTURES_DIR, None)],
+    ids=["lerobot", "corpus"],
+)
+def test_card_html_and_inspect_show_the_same_family_scores(tmp_path, source, bundle):
+    """Verify the card, the HTML report and `inspect` show one run's families alike.
+
+    The corpus has one episode scoring integrity below 70, so its tail is not
+    trivially zero on every surface.
+    """
+
+    report = grade(source, bundle=bundle)
+    json_path = tmp_path / "report.json"
+    html_path = tmp_path / "report.html"
+    write_report(report, json_path)
+    write_report(report, html_path)
+
+    inspected = runner.invoke(app, ["inspect", str(json_path)])
+
+    assert inspected.exit_code == 0
+    scores = family_scores(report.score.families)
+    assert scores
+    card = render_terminal(report, width=300).splitlines()
+    html = html_path.read_text()
+    collector = ScoreAttributeCollector()
+    collector.feed(html)
+    for family, label, score in scores:
+        shown = format_family_score(score)
+        assert any(line.split()[:2] == [label, shown] for line in card)
+        assert ("family", family, repr(score)) in collector.rows
+        assert f'<td>{label}</td><td class="mono">{shown}</td>' in html
+        assert f"{label} {shown}" in inspected.stdout
+        tail = report.score.family_tails[family]
+        below, lowest = format_low_episodes(tail), format_lowest(tail)
+        card_line = next(line for line in card if line.split()[:1] == [label])
+        assert below in card_line and lowest in card_line
+        assert (
+            f'data-name="{family}" data-score="{score!r}" '
+            f'data-below="{tail.n_below}" data-lowest="{tail.lowest!r}"'
+        ) in html
+        assert f"{below} below 70, lowest {lowest}" in inspected.stdout
+
+
+def test_inspect_prints_the_card_flagged_rows_and_an_episode_worst(tmp_path):
+    """Verify `inspect` lists the card's flagged metrics, and an episode's worst."""
+
+    report = grade(LEROBOT_FIXTURE, bundle=Path("vision-imitation-v1"))
+    json_path = tmp_path / "report.json"
+    write_report(report, json_path)
+    episode_id = report.episodes[0].id
+
+    dataset = runner.invoke(app, ["inspect", str(json_path)])
+    one = runner.invoke(app, ["inspect", str(json_path), "--episode", episode_id])
+
+    assert dataset.exit_code == 0 and one.exit_code == 0
+    flagged = [
+        line for line in dataset.stdout.splitlines() if line.startswith("flagged ")
+    ]
+    assert flagged
+    assert all(line.endswith("1 of 1 stream · 2 episodes") for line in flagged)
+    card = _card_rows(render_terminal(report, width=300))
+    labels = [line.removeprefix("flagged ").split(" 1 of")[0] for line in flagged]
+    assert labels[: len(card)] == card
+    episode_flagged = [
+        line for line in one.stdout.splitlines() if line.startswith("flagged ")
+    ]
+    assert episode_flagged
+    assert all("· worst " in line for line in episode_flagged)
+
+
+def _card_rows(text: str) -> list[str]:
+    """The metric labels the card's Flagged channels section lists, in order."""
+
+    lines = text.splitlines()
+    start = lines.index("Flagged channels") + 1
+    end = next(i for i in range(start, len(lines)) if not lines[i])
+    rows = [line.strip() for line in lines[start:end]]
+    return [row.split("  ")[0] for row in rows if not row.startswith("+")]
 
 
 def test_report_with_an_unsupported_suffix_exits_nonzero_and_writes_nothing(

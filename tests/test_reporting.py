@@ -12,6 +12,7 @@ import logging
 import polars as pl
 import pytest
 import yaml
+from calibration_helpers import grade_with_test_calibration
 from upath import UPath
 
 # Internal
@@ -53,20 +54,29 @@ from kalanos.analysis.reporting.assemble import (
     grade_episode,
     grade_stream,
 )
+from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
 from kalanos.analysis.reporting.write import write_report
 from kalanos.analysis.scoring.gate import worse
-from kalanos.analysis.scoring.score import grade_for, rollup, score_metrics
+from kalanos.analysis.scoring.score import (
+    grade_for,
+    rollup,
+    score_episode,
+    score_metrics,
+)
+from kalanos.api import grade
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 
 # Local
 from helpers import (
+    FIXTURES_DIR,
     DisclosureStateCollector,
     ScoreAttributeCollector,
     decided,
     score_attr,
+    write_arm,
 )
 
 
@@ -498,13 +508,13 @@ def test_an_episode_spans_from_its_earliest_to_its_latest_timestamp():
 def test_grade_episode_score_is_unchanged_with_no_episode_metrics_registered(
     monkeypatch,
 ):
-    """Verify an episode's rollup still equals a plain rollup of its streams.
+    """Verify an episode's score still equals the fold of its streams alone.
 
     Filters EPISODE-level entries out of a temporary registry copy, rather
     than relying on none being registered in the shipped catalogue — that
     would break, for no real reason, the moment a first episode metric
     lands. The invariant under test is that an empty `results` dict
-    contributes nothing to the rollup, never a shifting zero.
+    contributes nothing to the score, never a shifting zero.
     """
 
     import kalanos.analysis.metrics.registry as registry
@@ -527,20 +537,17 @@ def test_grade_episode_score_is_unchanged_with_no_episode_metrics_registered(
     )
 
     assert graded.metrics == {}
-    assert graded.score == rollup(
-        Level.EPISODE, [gs.score for gs in graded.streams], policy=policy
-    )
+    assert graded.score == score_episode(graded.streams, {}, policy=policy)
 
 
-def test_grade_episode_folds_its_own_score_in_as_one_more_equal_weight_child(
+def test_grade_episode_folds_its_own_metrics_in_beside_its_stream_metrics(
     monkeypatch,
 ):
-    """Verify an episode's score is the plain mean of its own metrics and its streams'.
+    """Verify an episode metric enters its family's fold beside the stream metrics.
 
-    Mirrors `test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child`:
-    a stub episode metric graded to one end of the scale, contrasted
-    against a stub stream metric graded to the other, makes the two
-    contributions distinguishable.
+    A stub episode metric graded to one end of the scale, contrasted
+    against a stub stream metric graded to the other, both in one family
+    with undecided weights, makes the two contributions distinguishable.
     """
 
     import kalanos.analysis.metrics.registry as registry
@@ -702,7 +709,9 @@ def test_report_grades_integrity_without_unverified_acquisition_timing():
     assert report.score.score == episode.score.score
     report_score = report.score.score
     assert report_score is not None
-    assert report_score > 85
+    # Integrity alone scores, each metric at its worst channel: flatline_pct
+    # 50 and missing_pct 100 at weight 4, snr_db 7.24 at weight 2.
+    assert report_score == pytest.approx(61.448, abs=1e-3)
 
     # Missing provenance must not turn a recorded-axis estimate into a
     # critical acquisition finding. The real channel finding keeps its address.
@@ -719,13 +728,16 @@ def test_report_grades_integrity_without_unverified_acquisition_timing():
 
 
 def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_children():
-    """Verify every level's score equals `rollup` applied to its own children.
+    """Verify every level's score equals its fold applied to its own children.
+
+    The episode reconstructs through `score_episode` over its streams and own
+    metrics; the stream and the dataset through `rollup`.
 
     A stream's score folds in its own metrics alongside its channels', so
     its independent reconstruction re-derives that contribution by calling
     `score_metrics` again over `stream.metrics` — deterministic, since
     interpolation depends only on the value each metric already carries.
-    Pins the wiring itself — that `assemble_report` calls `rollup` with the
+    Pins the wiring itself — that `assemble_report` calls each fold with the
     right children at the right level — as a separate concern from the
     previous test's real numbers, which pin that the walk reaches the
     right channels in the first place.
@@ -762,9 +774,7 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
     # The episode's `train_ready` is the compatibility mirror of its
     # eligibility, filled in by assembly; an independent rollup leaves it
     # `None`, so compare everything else.
-    independent_episode = rollup(
-        Level.EPISODE, [gs.score for gs in episode.streams], policy=policy
-    )
+    independent_episode = score_episode(episode.streams, episode.metrics, policy=policy)
     assert (
         independent_episode.model_copy(
             update={"train_ready": episode.score.train_ready}
@@ -790,6 +800,53 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
             )
             == stream.score
         )
+
+
+def test_a_graded_report_records_family_tails_on_the_dataset_score_only():
+    """Verify the tails count every graded episode and leave every score unchanged.
+
+    The fixture folder has one episode scoring integrity below 70 among those
+    that scored it, so the count is above zero on real grading.
+    """
+
+    report = grade(FIXTURES_DIR)
+    integrity = [
+        e.score.families["integrity"]
+        for e in report.episodes
+        if "integrity" in e.score.families
+    ]
+
+    tail = report.score.family_tails["integrity"]
+
+    assert tail.n_scored == len(integrity) == len(report.episodes)
+    assert tail.n_below >= 1
+    assert tail.lowest == min(integrity)
+    assert all(e.score.family_tails == {} for e in report.episodes)
+    independent = rollup(
+        Level.DATASET,
+        [e.score for e in report.episodes],
+        policy=load_default_policy(),
+    )
+    assert report.score.families == independent.families
+
+
+def test_blocked_episodes_count_toward_the_family_tails(tmp_path):
+    """Verify a blocked episode counts toward its family's tail, as it does the mean.
+
+    The four glitched episodes are blocked and are the only ones scoring
+    integrity below 70, so leaving blocked episodes out would read 0 of 16.
+    """
+
+    path = tmp_path / "arm.hdf5"
+    write_arm(path, 20, glitched={2, 7, 11, 16})
+
+    report = grade_with_test_calibration(path)
+
+    assert report.eligibility_counts is not None
+    assert report.eligibility_counts.blocked == 4
+    tail = report.score.family_tails["integrity"]
+    assert tail.n_scored == 20
+    assert tail.n_below == 4
 
 
 def test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child(
@@ -982,6 +1039,8 @@ def test_every_data_score_in_the_html_matches_the_models_score_at_that_level():
     collector.feed(render_html(report))
 
     expected = [("dataset", str(report.root), score_attr(report.score))]
+    for family, _, score in family_scores(report.score.families):
+        expected.append(("family", family, repr(score)))
     for episode in report.episodes:
         expected.append(("episode", episode.id, score_attr(episode.score)))
         for stream in episode.streams:
@@ -992,6 +1051,24 @@ def test_every_data_score_in_the_html_matches_the_models_score_at_that_level():
                 )
 
     assert collector.rows == expected
+
+
+def test_family_scores_order_named_families_first_and_fall_back_to_the_id():
+    """Verify the named families lead in their own order, and any other shows its id."""
+
+    scores = family_scores({"consistency": 80.0, "vision": 50.0, "timing": 90.0})
+
+    assert scores == [
+        ("timing", "Temporal", 90.0),
+        ("vision", "Vision", 50.0),
+        ("consistency", "consistency", 80.0),
+    ]
+
+
+def test_every_family_label_names_a_known_family():
+    """Verify a display name never hangs off a family id the engine cannot score."""
+
+    assert set(FAMILY_LABELS) <= {family.value for family in Family}
 
 
 def test_a_not_applicable_metric_renders_an_em_dash_and_critical_shows_its_value():

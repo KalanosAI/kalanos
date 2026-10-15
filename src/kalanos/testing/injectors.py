@@ -75,6 +75,9 @@ class Defect(str, Enum):
     REPEATED_TIMESTAMPS = "repeated_timestamps"
     BLUR          = "blur"
     CLIPPED       = "clipped"
+    CUT           = "cut"
+    DROPPED_CHUNK = "dropped_chunk"
+    VIDEO_OFFSET  = "video_offset"
     # fmt: on
 
 
@@ -1128,6 +1131,173 @@ def freeze_frames(stream: Stream, *, start: int = 10, length: int = 10) -> Strea
     return stream.model_copy(update={"payload": SyntheticFrames(frames=frames)})
 
 
+def _restamped(stream: Stream, rows: int, operation: str) -> Stream:
+    """Copy `stream` with `rows` timestamps at its own period from its first one.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream whose first timestamp and median period are kept.
+    rows : int
+        How many timestamps the copy carries.
+    operation : str
+        What changed the rows, recorded in the clock's transforms.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` with evenly spaced timestamps and no native ones.
+    """
+
+    first = stream.timestamps[0]
+    period = stream.timestamps.diff().median()
+    assert isinstance(first, float) and isinstance(period, float)
+    return stream.model_copy(
+        update={
+            "timestamps": pl.Series(
+                stream.timestamps.name, [first + period * row for row in range(rows)]
+            ),
+            "native_timestamps": None,
+            "clock_info": _retimed_info(stream, operation),
+        }
+    )
+
+
+def cut_frames(
+    video: Stream, controls: Sequence[Stream], *, start: int, length: int
+) -> tuple[Stream, list[Stream]]:
+    """Remove the same stretch from a camera and its control streams, as an edit would.
+
+    Parameters
+    ----------
+    video : Stream
+        The camera stream to cut; left unchanged.
+    controls : Sequence[Stream]
+        The control streams to cut alongside it, on the camera's rows; left unchanged.
+    start : int
+        The first frame, and control row, to remove.
+    length : int
+        How many consecutive frames and rows to remove.
+
+    Returns
+    -------
+    tuple of (Stream, list of Stream)
+        Copies of `video` and of each of `controls`,
+        each `length` rows shorter and restamped at its own period from its first
+        timestamp, so the cut leaves no gap in time.
+
+    Raises
+    ------
+    ValueError
+        If the video's payload is not a `SyntheticFrames`,
+        a control's is not a `FramePayload`,
+        or the window falls outside either.
+    """
+
+    frames = list(_synthetic_frames(video).frames)
+    end = start + length
+    if start < 0 or end > len(frames):
+        raise ValueError(
+            f"window [{start}, {end}) falls outside a payload of {len(frames)} frames"
+        )
+    kept = frames[:start] + frames[end:]
+    cut_video = _restamped(video, len(kept), "cut").model_copy(
+        update={"payload": SyntheticFrames(frames=kept)}
+    )
+
+    cut_controls = []
+    for control in controls:
+        frame = _channel_frame(control)
+        _window(frame, start, length)
+        keep = [row for row in range(frame.height) if not start <= row < end]
+        cut_controls.append(
+            _restamped(control, len(keep), "cut").model_copy(
+                update={"payload": FramePayload(frame=frame[keep])}
+            )
+        )
+    return cut_video, cut_controls
+
+
+def drop_chunk(stream: Stream, *, start: int, length: int, pad: bool = False) -> Stream:
+    """Remove a chunk of frames but keep the timestamps uniform, as a lost grab would.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged.
+    start : int
+        The first frame index to remove.
+    length : int
+        How many consecutive frames to remove.
+    pad : bool
+        Repeat the last frame `length` times, so the frame count still matches.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` whose frames after `start` are those from `start + length`,
+        `length` frames short or padded at the end.
+        Timestamps are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the payload is not a `SyntheticFrames`,
+        or the window falls outside it.
+    """
+
+    frames = list(_synthetic_frames(stream).frames)
+    end = start + length
+    if start < 0 or end > len(frames):
+        raise ValueError(
+            f"window [{start}, {end}) falls outside a payload of {len(frames)} frames"
+        )
+    kept = frames[:start] + frames[end:]
+    if pad:
+        kept += [kept[-1].copy() for _ in range(length)]
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=kept)})
+
+
+def shift_video(stream: Stream, *, frames: int, drift: int = 0) -> Stream:
+    """Show each frame `frames` early, as a camera running ahead of its controls would.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream to inject into; left unchanged.
+    frames : int
+        How many frames the footage leads by; negative to trail.
+    drift : int
+        How many more frames it leads by at the last frame than at the first,
+        growing evenly in between.
+
+    Returns
+    -------
+    Stream
+        A copy of `stream` whose frame i shows the frame at
+        `round(i + frames + drift * i / (n - 1))`, clamped to the frames there are,
+        so the end repeats the last frame (the start the first, for a negative lead).
+        Frame count and timestamps are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the payload is not a `SyntheticFrames`.
+    """
+
+    source = list(_synthetic_frames(stream).frames)
+    n = len(source)
+    shifted = [
+        source[
+            min(
+                max(round(i + frames + (drift * i / (n - 1) if n > 1 else 0)), 0), n - 1
+            )
+        ].copy()
+        for i in range(n)
+    ]
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=shifted)})
+
+
 def _synthetic_frames(stream: Stream) -> SyntheticFrames:
     """Return the stream's `SyntheticFrames` payload, or raise `ValueError`."""
 
@@ -1314,6 +1484,18 @@ def apply_defect(ctx: MetricInput, defect: Defect) -> MetricInput:
             injected = blur_frames(stream)
         case Defect.CLIPPED:
             injected = clip_frames(stream)
+        case Defect.CUT:
+            # A cut also rewrites the control streams in episode_streams,
+            # and apply_defect replaces only the context's own stream;
+            # cut_frames builds a cut across the camera and its controls.
+            raise ValueError(
+                "no injector builds an episode-shaped defect; pass defective= to "
+                "check_metric instead"
+            )
+        case Defect.DROPPED_CHUNK:
+            injected = drop_chunk(stream, start=start, length=length, pad=True)
+        case Defect.VIDEO_OFFSET:
+            injected = shift_video(stream, frames=count)
         case _:
             _unhandled_defect(defect)
 

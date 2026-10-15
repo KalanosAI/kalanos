@@ -25,6 +25,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    declared_format,
     declared_series_streams,
     describe_from_info,
     episode_clock,
@@ -91,7 +92,8 @@ def _video_stream(
     Parameters
     ----------
     info : dict
-        The parsed `info.json`, for `video_path`'s template.
+        The parsed `info.json`,
+        for `video_path`'s template and the feature's declared format.
     video_key : str
         The video feature key.
     taxonomy_type : str
@@ -133,6 +135,7 @@ def _video_stream(
             start_s=0.0,
             end_s=len(timestamps) / fps,
             whole_file=True,
+            declared=declared_format(info["features"][video_key]),
         ),
         source_path=video_path,
         source_field=video_key,

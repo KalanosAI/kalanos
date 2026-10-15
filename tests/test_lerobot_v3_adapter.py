@@ -20,6 +20,7 @@ from upath import UPath
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
+    declared_format,
     episode_clock,
     resolve_taxonomy,
     series_stream,
@@ -177,6 +178,40 @@ def test_a_video_stream_carries_frames_it_has_not_read(monkeypatch):
 
     assert video_stream.payload is not None
     assert len(video_stream.payload) == len(video_stream.timestamps)
+    # The fixture's shape has no `names`, so only the rate is declared.
+    assert video_stream.payload.declared == video.DeclaredFormat(fps=30.0)
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (
+            {
+                "shape": [96, 128, 3],
+                "names": ["height", "width", "channel"],
+                "video_info": {"video.fps": 10.0, "video.pix_fmt": "yuv420p"},
+            },
+            video.DeclaredFormat(width=128, height=96, fps=10.0, pix_fmt="yuv420p"),
+        ),
+        (
+            {
+                "shape": [3, 96, 128],
+                "info": {"video.height": 480, "video.width": 640},
+            },
+            video.DeclaredFormat(width=640, height=480),
+        ),
+        ({"shape": [32, 32, 3]}, None),
+        (
+            {"info": {"video.fps": "fast", "video.height": 48}},
+            video.DeclaredFormat(height=48),
+        ),
+    ],
+    ids=["v3_video_info", "info_size", "nothing", "uncoercible"],
+)
+def test_declared_format_reads_only_what_the_feature_states(spec, expected):
+    """Verify the frame size comes from labelled axes or `info`, and bad values drop."""
+
+    assert declared_format(spec) == expected
 
 
 def test_a_feature_key_resolves_through_the_dictionary():

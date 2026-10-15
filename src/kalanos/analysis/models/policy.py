@@ -85,6 +85,9 @@ class MetricPolicy(BaseModel):
     weight : float or None
         This metric's share of its family's weighted rollup.
         `None` where `docs/METRICS.md` marks the weight *to define*.
+    core : bool
+        Whether this metric must grade for its family to score in an episode.
+        A family with no core metric scores whenever any of its metrics graded.
     thresholds : dict[str, Band]
         Bands keyed by taxonomy type, since the same metric can want different
         bands per signal (joint velocity and joint acceleration, for instance).
@@ -115,6 +118,7 @@ class MetricPolicy(BaseModel):
     target: str | None = None
     target_source: str | None = None
     weight: float | None = Field(default=None, ge=0)
+    core: bool = False
     thresholds: dict[str, Band] = Field(default_factory=dict)
     limits: dict[str, float] = Field(default_factory=dict)
 
@@ -291,11 +295,15 @@ class Policy(BaseModel):
         `"skip"` is the only decided behaviour, so it is the only member —
         a second one would be a decision nobody made.
     fail_penalty : float or None
-        Points subtracted per distinct metric that scored 0 in a channel,
-        or `None` to apply no penalty at all.
+        Points subtracted from an episode's score per distinct metric whose
+        worst subject scored 0 there, and from a channel's or stream's display
+        score per metric that scored 0 on it, or `None` to apply no penalty at all.
     fail_penalty_cap : float or None
-        The most `fail_penalty` may subtract from one channel,
-        or `None` for no cap.
+        The most `fail_penalty` may subtract from one episode's score,
+        or from one channel's or stream's display score, or `None` for no cap.
+    low_episode_score : float
+        An episode whose score in a family is below this counts toward that
+        family's low-episode count on the dataset score. Changes no score.
     letters : dict[str, float]
         The minimum score each of `A`, `B`, `C`, `D` needs;
         below `D`'s minimum is `F`, which carries no minimum of its own.
@@ -323,6 +331,7 @@ class Policy(BaseModel):
     missing_family: Literal["skip"] = "skip"
     fail_penalty: float | None = Field(default=None, ge=0)
     fail_penalty_cap: float | None = Field(default=None, ge=0)
+    low_episode_score: float = Field(default=70.0, ge=0, le=100)
     letters: dict[str, float]
     gate: GatePolicy | None = None
 

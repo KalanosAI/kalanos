@@ -69,7 +69,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "7.0.0"
+CURRENT_SCHEMA_VERSION = "7.1.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -426,6 +426,31 @@ class CameraSummary(BaseModel):
     repeated_footage: list[list[str]] = Field(default_factory=list)
 
 
+class DuplicateEpisodes(BaseModel):
+    """Two episodes whose numeric payloads are identical or nearly so.
+
+    Attributes
+    ----------
+    episodes : list[str]
+        The pair, in episode order.
+    tier : {"exact", "near"}
+        `exact` when every payload hashes identically,
+        `near` when the resampled trajectories lie within the near-duplicate limit.
+    nrmse : float
+        The normalized RMSE between the two trajectories, 0.0 for an exact pair.
+    footage_identical : bool
+        Whether the pair also repeats its camera footage exactly.
+    cameras : list[str]
+        The cameras whose footage the pair repeats exactly.
+    """
+
+    episodes: list[str]
+    tier: Literal["exact", "near"]
+    nrmse: float
+    footage_identical: bool = False
+    cameras: list[str] = Field(default_factory=list)
+
+
 class NotObservable(BaseModel):
     """A metric that could not grade this dataset, and why.
 
@@ -536,6 +561,9 @@ class Report(BaseModel):
         The `Policy.schema_version` graded against, so a result stays
         traceable to the policy that produced it. `None` when no policy
         was involved in assembling this report.
+    family_weights : dict[str, float]
+        The policy's `family_weights` the run graded with, keyed by family id.
+        Empty when the policy weights no family.
     duration_s : float or None
         Wall-clock time the analysis run took, or `None` when not timed.
     source : SourceInfo or None
@@ -570,6 +598,10 @@ class Report(BaseModel):
     cameras : list[CameraSummary]
         Each camera compared across the episodes it appears in:
         descriptive, and the source of the cross-episode vision findings.
+    duplicates : list[DuplicateEpisodes]
+        Each pair of episodes whose numeric payloads are identical or nearly so.
+        Identical episodes pair only with the first of them,
+        which also stands for them in a near pair.
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
@@ -587,6 +619,7 @@ class Report(BaseModel):
     skipped: list[SkippedSource] = Field(default_factory=list)
     unresolved: list[UnresolvedSource] = Field(default_factory=list)
     policy_version: int | None = None
+    family_weights: dict[str, float] = Field(default_factory=dict)
     duration_s: float | None = None
     source: SourceInfo | None = None
     datasets: list[DatasetInfo] = Field(default_factory=list)
@@ -602,6 +635,7 @@ class Report(BaseModel):
     sufficiency: Sufficiency | None = None
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
+    duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":

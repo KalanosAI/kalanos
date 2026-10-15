@@ -42,6 +42,13 @@ from kalanos.analysis.models.metrics import Family
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
+from kalanos.analysis.reporting.families import (
+    family_scores,
+    format_family_score,
+    format_low_episodes,
+    format_lowest,
+)
+from kalanos.analysis.reporting.flagged import flagged_rows
 from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.bundle import load_bundle, load_bundle_policy
@@ -704,14 +711,35 @@ def inspect(
             if r.score is not None
             else "readiness undefined: " + "; ".join(r.reasons)
         )
-    if loaded.sufficiency is not None:
-        console.print(f"sufficiency {loaded.sufficiency.status.value}")
+    if loaded.score.families:
+        console.print(
+            "families "
+            + " · ".join(
+                f"{label} {format_family_score(score)}"
+                + (
+                    f" ({format_low_episodes(tail)} below {tail.below:g},"
+                    f" lowest {format_lowest(tail)})"
+                    if (tail := loaded.score.family_tails.get(family))
+                    else ""
+                )
+                for family, label, score in family_scores(loaded.score.families)
+            ),
+            markup=False,
+        )
     selected = (
         next((e for e in loaded.episodes if e.id == episode), None) if episode else None
     )
     if episode and selected is None:
         print(f"kalanos: no episode {episode!r}", file=sys.stderr)
         raise typer.Exit(code=2)
+    flagged_from = selected.score.metrics if selected else loaded.score.metrics
+    for row in flagged_rows(flagged_from):
+        detail = (
+            f"worst {row.worst:.1f}" if row.worst is not None else row.episodes or ""
+        )
+        console.print(f"flagged {row.label} {row.subjects} · {detail}", markup=False)
+    if loaded.sufficiency is not None:
+        console.print(f"sufficiency {loaded.sufficiency.status.value}")
     for line in coverage_lines(selected.coverage if selected else loaded.coverage):
         console.print(line, markup=False)
     if loaded.diagnostics:

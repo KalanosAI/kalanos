@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 
 # Internal
+from kalanos.analysis.models.domain import Channel
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
+from kalanos.analysis.models.report import GradedChannel, GradedEpisode, GradedStream
 from kalanos.analysis.models.scoring import (
     Finding,
     FindingLocation,
@@ -22,9 +24,12 @@ from kalanos.analysis.models.scoring import (
     Severity,
 )
 from kalanos.analysis.scoring.score import (
+    dataset_family_tails,
+    dataset_metric_rollups,
     grade_for,
     resolve_status,
     rollup,
+    score_episode,
     score_metrics,
     sort_findings,
 )
@@ -148,6 +153,107 @@ def _score(
         train_ready=None,
         n_contributing=1 if score is not None else 0,
         families=families or {},
+    )
+
+
+def _episode(
+    episode_id: str, streams: list[GradedStream], policy: Policy
+) -> GradedEpisode:
+    """Build a GradedEpisode scored by `score_episode`.
+
+    Parameters
+    ----------
+    episode_id : str
+        The episode's id.
+    streams : list[GradedStream]
+        The episode's graded streams.
+    policy : Policy
+        The policy to score it with.
+
+    Returns
+    -------
+    GradedEpisode
+        The episode, with its `score` from `score_episode`.
+    """
+
+    return GradedEpisode(
+        id=episode_id,
+        adapter="csv",
+        adapter_confidence=1.0,
+        score=score_episode(streams, {}, policy=policy),
+        streams=streams,
+    )
+
+
+def _graded(points: float, *, status: MetricStatus | None = None) -> MetricResult:
+    """Build a MetricResult as `_resolve` leaves it once it graded.
+
+    Parameters
+    ----------
+    points : float
+        The 0-100 the result graded to.
+    status : MetricStatus or None
+        The status, derived from `points` the way scoring derives it when `None`.
+
+    Returns
+    -------
+    MetricResult
+        A graded result carrying `points`.
+    """
+
+    if status is None:
+        status = (
+            MetricStatus.GOOD
+            if points >= 100.0
+            else MetricStatus.CRITICAL
+            if points <= 0.0
+            else MetricStatus.WARNING
+        )
+    return MetricResult(value=1.0, unit="%", status=status, points=points)
+
+
+def _stream(
+    channels: dict[str, dict[str, MetricResult]],
+    *,
+    metrics: dict[str, MetricResult] | None = None,
+    instance: str = "armA",
+    taxonomy_type: str = _TAXONOMY_TYPE,
+) -> GradedStream:
+    """Build a GradedStream from per-channel metric results.
+
+    Parameters
+    ----------
+    channels : dict[str, dict[str, MetricResult]]
+        Each channel's name and its graded metrics.
+    metrics : dict[str, MetricResult] or None
+        The stream's own graded metrics.
+    instance : str
+        The stream's instance.
+    taxonomy_type : str
+        The stream's taxonomy type.
+
+    Returns
+    -------
+    GradedStream
+        A stream whose display score is irrelevant to the episode fold.
+    """
+
+    empty = ScoreResult(
+        level=Level.STREAM, score=None, grade=None, train_ready=None, n_contributing=0
+    )
+    return GradedStream(
+        taxonomy_type=taxonomy_type,
+        instance=instance,
+        score=empty,
+        metrics=metrics or {},
+        channels=[
+            GradedChannel(
+                channel=Channel(name=name),
+                score=empty.model_copy(update={"level": Level.CHANNEL}),
+                metrics=results,
+            )
+            for name, results in channels.items()
+        ],
     )
 
 
@@ -284,6 +390,64 @@ def test_a_higher_is_better_band_scores_from_the_opposite_direction():
     assert at_good.status == MetricStatus.GOOD
     assert at_bad.status == MetricStatus.CRITICAL
     assert at_midpoint.status == MetricStatus.WARNING
+
+
+def test_resolve_stores_the_points_it_graded_on_the_result():
+    """Verify a graded result carries its points, and an ungraded one carries none."""
+
+    policy = Policy(
+        schema_version=1,
+        metrics={
+            "integrity.snr_db": MetricPolicy(
+                higher_is_better=True,
+                thresholds={"default": Band(good=20.0, bad=6.0)},
+            ),
+            "integrity.drift": MetricPolicy(report_only=True),
+        },
+        letters=_LETTERS,
+    )
+
+    graded = resolve_status(
+        _report_only(13.0, unit="dB"),
+        metric_name="snr_db",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+    report_only = resolve_status(
+        _report_only(1.0, unit="unit/min").model_copy(update={"points": 42.0}),
+        metric_name="drift",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+    not_applicable = resolve_status(
+        _not_applicable().model_copy(update={"points": 42.0}),
+        metric_name="snr_db",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+
+    assert graded.points == pytest.approx(50.0)
+    assert report_only.points is None
+    assert not_applicable.points is None
+
+
+def test_resolve_stores_the_capped_points_of_a_channel_that_never_changed():
+    """Verify the never-changed cap's midway points are the ones stored."""
+
+    policy = load_default_policy()
+    result = _report_only(100.0, unit="%").model_copy(
+        update={"evidence": {"never_changed": True}}
+    )
+
+    resolved = resolve_status(
+        result,
+        metric_name="flatline_pct",
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+    )
+
+    assert resolved.status == MetricStatus.WARNING
+    assert resolved.points == pytest.approx(50.0)
 
 
 def test_abs_dev_scores_full_points_when_the_value_equals_its_declared_target():
@@ -726,7 +890,7 @@ def test_mixing_a_decided_weight_with_an_undecided_one_refuses_to_guess():
 
 
 def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess():
-    """Verify the same refusal applies one level up, across families."""
+    """Verify the same refusal applies one level up, naming the unweighted family."""
 
     policy = Policy(
         schema_version=1,
@@ -743,9 +907,7 @@ def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess()
     )
     results = {"metric_x": _report_only(2.0), "metric_y": _report_only(2.0)}
 
-    with pytest.raises(
-        ValueError, match="mixes a decided weight with an undecided one"
-    ):
+    with pytest.raises(ValueError, match=r"\['family_b'\] carry no weight"):
         score_metrics(
             results,
             level=Level.CHANNEL,
@@ -1029,6 +1191,63 @@ def test_rollup_of_a_missing_family_averages_only_over_children_that_measured_it
     }
 
 
+def test_dataset_family_tails_count_episodes_below_the_cutoff_and_the_lowest():
+    """Verify a family's tail counts the episodes below 70 and keeps the lowest."""
+
+    policy = load_default_policy()
+    episodes = [
+        _score(policy, Level.EPISODE, value, families={"integrity": value})
+        for value in (100.0, 100.0, 95.0, 66.7, 50.0)
+    ]
+
+    tail = dataset_family_tails(episodes, policy=policy)["integrity"]
+
+    assert tail.below == 70
+    assert tail.n_below == 2
+    assert tail.n_scored == 5
+    assert tail.lowest == 50.0
+
+
+def test_an_episode_without_the_family_is_left_out_of_its_tail():
+    """Verify an episode with nothing to score in a family adds nothing to its tail."""
+
+    policy = load_default_policy()
+    episodes = [
+        _score(policy, Level.EPISODE, 90.0, families={"vision": 90.0}),
+        _score(policy, Level.EPISODE, 80.0, families={"vision": 60.0}),
+        _score(policy, Level.EPISODE, 20.0, families={"integrity": 20.0}),
+        _score(policy, Level.EPISODE, None),
+    ]
+
+    tails = dataset_family_tails(episodes, policy=policy)
+
+    assert tails["vision"].n_scored == 2
+    assert tails["vision"].n_below == 1
+    assert tails["vision"].lowest == 60.0
+    assert tails["integrity"].n_scored == 1
+
+
+def test_a_score_exactly_at_the_cutoff_is_not_below_it():
+    """Verify the count is strictly below the cutoff, so a 70.0 is not counted."""
+
+    policy = load_default_policy()
+    episodes = [_score(policy, Level.EPISODE, 70.0, families={"integrity": 70.0})]
+
+    assert dataset_family_tails(episodes, policy=policy)["integrity"].n_below == 0
+
+
+def test_family_tails_follow_the_policys_cutoff():
+    """Verify the count reads `low_episode_score` from the policy it is given."""
+
+    policy = load_default_policy().model_copy(update={"low_episode_score": 96.0})
+    episodes = [_score(policy, Level.EPISODE, 95.0, families={"integrity": 95.0})]
+
+    tail = dataset_family_tails(episodes, policy=policy)["integrity"]
+
+    assert tail.below == 96.0
+    assert tail.n_below == 1
+
+
 def test_rollup_composes_family_scores_unchanged_from_stream_through_dataset():
     """Verify a family score chains all the way from Stream to Dataset unchanged.
 
@@ -1042,19 +1261,17 @@ def test_rollup_composes_family_scores_unchanged_from_stream_through_dataset():
         _score(policy, Level.CHANNEL, 40.0, families={"timing": 40.0}),
     ]
     stream = rollup(Level.STREAM, channels, policy=policy)
-    episode = rollup(Level.EPISODE, [stream], policy=policy)
-    dataset = rollup(Level.DATASET, [episode], policy=policy)
+    dataset = rollup(Level.DATASET, [stream], policy=policy)
 
-    for result in (stream, episode, dataset):
+    for result in (stream, dataset):
         assert result.families == {"timing": pytest.approx(70.0)}
 
 
 def test_rollup_composes_unchanged_from_stream_through_dataset():
     """Verify the same function chains all the way from Stream to Dataset.
 
-    Two channels score 100 and 40; their stream averages to 70, which is
-    this episode's only stream and this dataset's only episode, so the same
-    70 should surface unchanged at every level above it.
+    Two channels score 100 and 40; their stream averages to 70, and a
+    dataset rolled up over that one child should carry the same 70.
     """
 
     policy = load_default_policy()
@@ -1063,12 +1280,10 @@ def test_rollup_composes_unchanged_from_stream_through_dataset():
         _score(policy, Level.CHANNEL, 40.0),
     ]
     stream = rollup(Level.STREAM, channels, policy=policy)
-    episode = rollup(Level.EPISODE, [stream], policy=policy)
-    dataset = rollup(Level.DATASET, [episode], policy=policy)
+    dataset = rollup(Level.DATASET, [stream], policy=policy)
 
     for result, level in (
         (stream, Level.STREAM),
-        (episode, Level.EPISODE),
         (dataset, Level.DATASET),
     ):
         assert result.level == level
@@ -1165,12 +1380,18 @@ def test_no_metric_threshold_value_is_hardcoded_in_scoring_source():
         if value is not None
     }
 
-    # `_weighted_mean`'s unweighted-contribution default and
-    # `score_metrics`'s failing-metric increment are both a literal `1`,
-    # generic scoring machinery that happens to coincide with a real band
-    # value below. Skip their bodies rather than the value itself, so a
-    # genuine hardcoded `1.0` anywhere else in the package still trips this.
-    _GENERIC_MACHINERY_FUNCTIONS = {"_weighted_mean", "score_metrics"}
+    # `_weighted_mean`'s unweighted-contribution default, the failing-metric
+    # increments of `score_metrics` and `score_episode`, and the subject and
+    # episode counters of `score_episode` and `dataset_metric_rollups` are all
+    # a literal `1`, generic scoring machinery that happens to coincide with a
+    # real band value below. Skip their bodies rather than the value itself, so
+    # a genuine hardcoded `1.0` anywhere else in the package still trips this.
+    _GENERIC_MACHINERY_FUNCTIONS = {
+        "_weighted_mean",
+        "score_metrics",
+        "score_episode",
+        "dataset_metric_rollups",
+    }
 
     def _constants(node: ast.AST) -> set[int | float]:
         found: set[int | float] = set()
@@ -1195,3 +1416,152 @@ def test_no_metric_threshold_value_is_hardcoded_in_scoring_source():
         literals |= _constants(tree)
 
     assert not (literals & band_values)
+
+
+def test_an_episode_family_counts_a_metric_at_its_worst_channel():
+    """Verify one failing channel among passing ones scores the metric at 0."""
+
+    policy = load_default_policy()
+    streams = [
+        _stream(
+            {
+                "x": {"missing_pct": _graded(0.0), "flatline_pct": _graded(100.0)},
+                "y": {"missing_pct": _graded(100.0), "flatline_pct": _graded(100.0)},
+            }
+        )
+    ]
+
+    score = score_episode(streams, {}, policy=policy)
+
+    # missing_pct at 0 and flatline_pct at 100, both weight 4.
+    assert score.families == {"integrity": pytest.approx(50.0)}
+    missing = score.metrics["integrity.missing_pct"]
+    assert missing.level == Level.CHANNEL
+    assert missing.points == 0.0
+    assert missing.n_graded == 2
+    assert missing.n_flagged == 1
+
+
+def test_the_episode_score_is_the_family_weighted_mean():
+    """Verify integrity 50 at weight 3 and vision 100 at weight 2 give 70."""
+
+    policy = load_default_policy()
+    arm = _stream(
+        {
+            "x": {"missing_pct": _graded(0.0), "flatline_pct": _graded(100.0)},
+            "y": {"missing_pct": _graded(100.0), "flatline_pct": _graded(100.0)},
+        }
+    )
+    camera = _stream(
+        {},
+        metrics={"sharpness_score": _graded(100.0)},
+        instance="cam",
+        taxonomy_type="unmapped.camera",
+    )
+
+    score = score_episode([arm, camera], {}, policy=policy)
+
+    assert score.families == {
+        "integrity": pytest.approx(50.0),
+        "vision": pytest.approx(100.0),
+    }
+    assert score.score == pytest.approx(70.0)
+    assert score.grade == Grade.C
+    assert score.n_contributing == 3
+
+
+def test_a_family_without_a_graded_core_metric_has_no_score():
+    """Verify integrity drops out when only its non-core snr_db graded."""
+
+    policy = load_default_policy()
+    streams = [_stream({"x": {"snr_db": _graded(40.0)}})]
+
+    score = score_episode(streams, {}, policy=policy)
+
+    assert "integrity" not in score.families
+    assert score.score is None
+    assert score.metrics["integrity.snr_db"].points == 40.0
+
+
+def test_non_core_metrics_renormalise_around_a_graded_core_metric():
+    """Verify snr_db counts at its weight once a core integrity metric graded."""
+
+    policy = load_default_policy()
+    streams = [_stream({"x": {"missing_pct": _graded(100.0), "snr_db": _graded(40.0)}})]
+
+    score = score_episode(streams, {}, policy=policy)
+
+    # missing_pct 100 at weight 4, snr_db 40 at weight 2.
+    assert score.families == {"integrity": pytest.approx(80.0)}
+
+
+def test_a_family_with_no_core_metric_scores_when_any_metric_graded():
+    """Verify a policy that marks nothing core scores a family from any metric."""
+
+    policy = Policy(
+        schema_version=1,
+        metrics={
+            "integrity.snr_db": MetricPolicy(
+                weight=1,
+                higher_is_better=True,
+                thresholds={"default": Band(good=30.0, bad=15.0)},
+            )
+        },
+        family_weights={"integrity": 1},
+        letters=_LETTERS,
+    )
+    streams = [_stream({"x": {"snr_db": _graded(40.0)}})]
+
+    score = score_episode(streams, {}, policy=policy)
+
+    assert score.families == {"integrity": pytest.approx(40.0)}
+    assert score.score == pytest.approx(40.0)
+
+
+def test_the_episode_fail_penalty_counts_each_failing_metric_once():
+    """Verify three channels failing one metric cost one penalty."""
+
+    policy = load_default_policy().model_copy(update={"fail_penalty": 5.0})
+    streams = [
+        _stream(
+            {
+                name: {"missing_pct": _graded(0.0), "flatline_pct": _graded(100.0)}
+                for name in ("x", "y", "z")
+            }
+        )
+    ]
+
+    score = score_episode(streams, {}, policy=policy)
+
+    assert score.families == {"integrity": pytest.approx(50.0)}
+    assert score.score == pytest.approx(45.0)
+
+
+def test_dataset_metric_rollups_count_distinct_subjects():
+    """Verify a channel flagged in two episodes counts once, in two episodes."""
+
+    policy = load_default_policy()
+    episodes = [
+        _episode(
+            episode_id,
+            [
+                _stream(
+                    {
+                        "x": {"missing_pct": _graded(0.0)},
+                        "y": {"missing_pct": _graded(100.0)},
+                    }
+                )
+            ],
+            policy,
+        )
+        for episode_id in ("e0", "e1")
+    ]
+
+    rollups = dataset_metric_rollups(episodes)
+
+    missing = rollups["integrity.missing_pct"]
+    assert missing.level == Level.CHANNEL
+    assert missing.points is None
+    assert missing.n_graded == 2
+    assert missing.n_flagged == 1
+    assert missing.n_episodes_flagged == 2

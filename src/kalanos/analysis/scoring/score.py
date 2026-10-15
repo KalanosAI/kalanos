@@ -7,6 +7,12 @@ This is where that gets resolved: each metric's value interpolates between
 its policy's `good` and `bad` bound into a 0-100 score, metrics fold into a
 family score by weight, families fold into a level score the same way,
 and the result becomes a letter grade at every level from Channel up to Dataset.
+
+An episode's score folds each metric once, at the worst channel, stream or
+camera it graded in the episode. Channel and stream scores fold only their
+own metrics and are for display; the dataset averages its episodes.
+The dataset also records, per family, how many episodes scored below the
+policy's `low_episode_score` and the lowest of them.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -16,7 +22,8 @@ and the result becomes a letter grade at every level from Channel up to Dataset.
 # Built-in
 import math
 import statistics
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from typing import TypeAlias
 
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
@@ -24,10 +31,13 @@ from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 # Internal
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
+from kalanos.analysis.models.report import GradedEpisode, GradedStream
 from kalanos.analysis.models.scoring import (
+    FamilyTail,
     Finding,
     FindingLocation,
     Grade,
+    MetricRollup,
     ScoreResult,
     Severity,
 )
@@ -44,6 +54,13 @@ from kalanos.analysis.models.scoring import (
 # A metric that lands exactly on the bad bound scores 0 points,
 # which this module treats as a failure for `fail_penalty` purposes.
 _FAILING_POINTS = 0.0
+
+# The statuses that count a subject as flagged in a metric's rollup.
+_FLAGGED = (MetricStatus.WARNING, MetricStatus.CRITICAL)
+
+# Where one graded result sits in its episode: the stream identity, plus the
+# channel name for a channel metric; empty for an episode metric.
+_Subject: TypeAlias = tuple[str | None, ...]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -384,7 +401,12 @@ def _resolve(
     if result.status == MetricStatus.NOT_APPLICABLE or (
         result.availability is not None and result.availability != Availability.COMPUTED
     ):
-        return result.model_copy(update={"status": MetricStatus.NOT_APPLICABLE}), None
+        return (
+            result.model_copy(
+                update={"status": MetricStatus.NOT_APPLICABLE, "points": None}
+            ),
+            None,
+        )
 
     evidence = dict(result.evidence)
 
@@ -398,7 +420,11 @@ def _resolve(
         )
         return (
             result.model_copy(
-                update={"status": MetricStatus.NOT_APPLICABLE, "evidence": evidence}
+                update={
+                    "status": MetricStatus.NOT_APPLICABLE,
+                    "evidence": evidence,
+                    "points": None,
+                }
             ),
             None,
         )
@@ -407,7 +433,11 @@ def _resolve(
         evidence["ungraded_reason"] = reason
         return (
             result.model_copy(
-                update={"status": MetricStatus.REPORT_ONLY, "evidence": evidence}
+                update={
+                    "status": MetricStatus.REPORT_ONLY,
+                    "evidence": evidence,
+                    "points": None,
+                }
             ),
             None,
         )
@@ -472,7 +502,12 @@ def _resolve(
         evidence["capped_reason"] = (
             "never changed in this episode: unused or disconnected"
         )
-    return result.model_copy(update={"status": status, "evidence": evidence}), points
+    return (
+        result.model_copy(
+            update={"status": status, "evidence": evidence, "points": points}
+        ),
+        points,
+    )
 
 
 def resolve_status(
@@ -551,6 +586,33 @@ def _weighted_mean(
     if total_weight <= 0:
         return None
     return sum(points * weight for points, weight in resolved) / total_weight
+
+
+def _apply_fail_penalty(score: float, failing: int, *, policy: Policy) -> float:
+    """Subtract the policy's capped per-failure penalty from a score.
+
+    Parameters
+    ----------
+    score : float
+        The score before the penalty.
+    failing : int
+        How many distinct metrics scored `_FAILING_POINTS` or less.
+    policy : Policy
+        The loaded grading policy, carrying the penalty and its cap.
+
+    Returns
+    -------
+    float
+        `score` less the penalty, floored at 0,
+        or `score` unchanged when the policy declares no penalty.
+    """
+
+    if policy.fail_penalty is None:
+        return score
+    penalty = failing * policy.fail_penalty
+    if policy.fail_penalty_cap is not None:
+        penalty = min(penalty, policy.fail_penalty_cap)
+    return max(0.0, score - penalty)
 
 
 def score_metrics(
@@ -682,11 +744,7 @@ def score_metrics(
         )
 
     # Step 4: apply the capped per-failure penalty, if the policy declares one.
-    if policy.fail_penalty is not None:
-        penalty = failing * policy.fail_penalty
-        if policy.fail_penalty_cap is not None:
-            penalty = min(penalty, policy.fail_penalty_cap)
-        score = max(0.0, score - penalty)
+    score = _apply_fail_penalty(score, failing, policy=policy)
 
     return (
         graded,
@@ -702,22 +760,269 @@ def score_metrics(
     )
 
 
+def _graded_subjects(
+    streams: Sequence[GradedStream], own_metrics: Mapping[str, MetricResult]
+) -> Iterator[tuple[str, Level, _Subject, float, bool]]:
+    """Walk every graded result in one episode, wherever it ran.
+
+    Parameters
+    ----------
+    streams : Sequence[GradedStream]
+        The episode's graded streams, unmapped ones included.
+    own_metrics : Mapping[str, MetricResult]
+        The episode's own regraded metrics.
+
+    Yields
+    ------
+    tuple[str, Level, tuple[str or None, ...], float, bool]
+        The metric's bare name, the level it ran at, the subject it ran on,
+        its points, and whether it graded `warning` or `critical`.
+    """
+
+    for stream in streams:
+        stream_subject = (stream.instance, stream.taxonomy_type, stream.source_field)
+        for channel in stream.channels:
+            for name, result in channel.metrics.items():
+                if result.points is not None:
+                    yield (
+                        name,
+                        Level.CHANNEL,
+                        (*stream_subject, channel.channel.name),
+                        result.points,
+                        result.status in _FLAGGED,
+                    )
+        for name, result in stream.metrics.items():
+            if result.points is not None:
+                yield (
+                    name,
+                    Level.STREAM,
+                    stream_subject,
+                    result.points,
+                    result.status in _FLAGGED,
+                )
+    for name, result in own_metrics.items():
+        if result.points is not None:
+            yield name, Level.EPISODE, (), result.points, result.status in _FLAGGED
+
+
+def score_episode(
+    streams: Sequence[GradedStream],
+    own_metrics: Mapping[str, MetricResult],
+    *,
+    policy: Policy,
+) -> ScoreResult:
+    """Score one episode from its metrics, each counted at its worst subject.
+
+    A metric that ran on several channels, streams or cameras counts once,
+    at the points of the worst of them, so one failing channel among many
+    moves its family as much as a failing single channel would.
+
+    Parameters
+    ----------
+    streams : Sequence[GradedStream]
+        The episode's graded streams, whose channel and stream metrics
+        `score_metrics` already regraded.
+    own_metrics : Mapping[str, MetricResult]
+        The episode's own regraded metrics.
+    policy : Policy
+        The loaded grading policy.
+
+    Returns
+    -------
+    ScoreResult
+        The episode's score and family scores, with `metrics` holding every
+        metric that graded in the episode, including those whose family did
+        not score.
+
+    Raises
+    ------
+    ValueError
+        If a family's graded metrics, or the scoring families, mix a
+        policy-decided weight with an undecided one.
+    """
+
+    # Step 1: every graded result in the episode, grouped by metric.
+    by_metric: dict[str, list[tuple[Level, float, bool]]] = {}
+    for name, level, _subject, points, flagged in _graded_subjects(
+        streams, own_metrics
+    ):
+        by_metric.setdefault(name, []).append((level, points, flagged))
+
+    # Step 2: each metric counts once, at its worst subject.
+    metrics: dict[str, MetricRollup] = {}
+    by_family: dict[str, list[tuple[str, float, float | None]]] = {}
+    for name, graded in by_metric.items():
+        # entry_for can't miss here: _resolve only sets points once
+        # entry_for already found the entry.
+        entry = policy.entry_for(name)
+        assert entry is not None
+        family, metric_policy = entry
+        worst = min(points for _, points, _ in graded)
+        metrics[f"{family}.{name}"] = MetricRollup(
+            level=graded[0][0],
+            points=worst,
+            n_graded=len(graded),
+            n_flagged=sum(1 for _, _, flagged in graded if flagged),
+        )
+        by_family.setdefault(family, []).append((name, worst, metric_policy.weight))
+
+    # Step 3: a family scores only when one of its core metrics graded;
+    # the rest of its graded metrics renormalise around that one.
+    core: dict[str, set[str]] = {}
+    for key, metric_policy in policy.metrics.items():
+        if metric_policy.core:
+            family, _, bare = key.partition(".")
+            core.setdefault(family, set()).add(bare)
+
+    family_scores: list[tuple[str, float, float | None]] = []
+    families: dict[str, float] = {}
+    contributing_metrics = 0
+    failing = 0
+    for family, contributions in by_family.items():
+        family_core = core.get(family)
+        if family_core and not any(name in family_core for name, _, _ in contributions):
+            continue
+        family_points = _weighted_mean(contributions)
+        if family_points is None:
+            continue
+        family_scores.append((family, family_points, policy.family_weights.get(family)))
+        families[family] = family_points
+        contributing_metrics += len(contributions)
+        failing += sum(1 for _, points, _ in contributions if points <= _FAILING_POINTS)
+
+    metrics = dict(sorted(metrics.items()))
+
+    # Step 4: the episode score is the family-weighted mean of its families.
+    score = _weighted_mean(family_scores)
+    if score is None:
+        return ScoreResult(
+            level=Level.EPISODE,
+            score=None,
+            grade=None,
+            train_ready=None,
+            n_contributing=0,
+            families=families,
+            metrics=metrics,
+        )
+
+    # Step 5: the penalty counts each failing metric once, however many
+    # subjects failed it.
+    score = _apply_fail_penalty(score, failing, policy=policy)
+
+    return ScoreResult(
+        level=Level.EPISODE,
+        score=score,
+        grade=grade_for(score, policy),
+        train_ready=None,
+        n_contributing=contributing_metrics,
+        families=families,
+        metrics=metrics,
+    )
+
+
+def dataset_metric_rollups(
+    episodes: Sequence[GradedEpisode],
+) -> dict[str, MetricRollup]:
+    """Count, per metric, the distinct subjects it graded and flagged in a dataset.
+
+    Parameters
+    ----------
+    episodes : Sequence[GradedEpisode]
+        Every graded episode, each carrying its own `score.metrics`.
+
+    Returns
+    -------
+    dict[str, MetricRollup]
+        Keyed `family.metric`. A channel, stream or camera counts once
+        however many episodes graded or flagged it, and `n_episodes_flagged`
+        counts the episodes where the metric flagged anything.
+    """
+
+    levels: dict[str, Level] = {}
+    graded: dict[str, set[_Subject]] = {}
+    flagged: dict[str, set[_Subject]] = {}
+    episodes_flagged: dict[str, int] = {}
+
+    for episode in episodes:
+        # The family is read off the episode's own rollup, so this needs no policy.
+        keys = {key.split(".", 1)[-1]: key for key in episode.score.metrics}
+        for name, level, subject, _points, is_flagged in _graded_subjects(
+            episode.streams, episode.metrics
+        ):
+            key = keys[name]
+            if level == Level.EPISODE:
+                subject = (episode.id,)
+            levels.setdefault(key, level)
+            graded.setdefault(key, set()).add(subject)
+            if is_flagged:
+                flagged.setdefault(key, set()).add(subject)
+        for key, rollup_ in episode.score.metrics.items():
+            if rollup_.n_flagged > 0:
+                episodes_flagged[key] = episodes_flagged.get(key, 0) + 1
+
+    return {
+        key: MetricRollup(
+            level=levels[key],
+            points=None,
+            n_graded=len(graded[key]),
+            n_flagged=len(flagged.get(key, ())),
+            n_episodes_flagged=episodes_flagged.get(key, 0),
+        )
+        for key in sorted(graded)
+    }
+
+
+def dataset_family_tails(
+    episode_scores: Sequence[ScoreResult], *, policy: Policy
+) -> dict[str, FamilyTail]:
+    """Count, per family, the episodes that scored it below the policy's cutoff.
+
+    Parameters
+    ----------
+    episode_scores : Sequence[ScoreResult]
+        Every graded episode's score, the same ones the dataset mean averages.
+    policy : Policy
+        The loaded grading policy, carrying `low_episode_score`.
+
+    Returns
+    -------
+    dict[str, FamilyTail]
+        Keyed by family id, in id order. An episode that did not score a
+        family adds nothing to its tail.
+    """
+
+    family_values: dict[str, list[float]] = {}
+    for score in episode_scores:
+        for family, value in score.families.items():
+            family_values.setdefault(family, []).append(value)
+    cutoff = policy.low_episode_score
+    return {
+        family: FamilyTail(
+            below=cutoff,
+            n_below=sum(value < cutoff for value in family_values[family]),
+            n_scored=len(family_values[family]),
+            lowest=min(family_values[family]),
+        )
+        for family in sorted(family_values)
+    }
+
+
 def rollup(
     level: Level, children: Sequence[ScoreResult], *, policy: Policy
 ) -> ScoreResult:
     """Combine one level's child ScoreResults into this level's own.
 
-    The same function serves every step from Stream up through Dataset —
-    Channel to Stream, Stream to Episode, Episode to Dataset — since nothing
-    decides a different weight between children at any of those levels;
-    each child with a score counts once.
+    The same function serves Channel to Stream and Episode to Dataset,
+    since nothing decides a different weight between children at either
+    step; each child with a score counts once. An episode's own score comes
+    from `score_episode` instead.
 
     Parameters
     ----------
     level : Level
         The level this result attaches to — normally one step above every child's level.
-        Exception: a Stream's or an Episode's `children` can include that node's own
-        `score_metrics` result alongside its channels' or streams', so one child may sit
+        Exception: a Stream's `children` can include that stream's own
+        `score_metrics` result alongside its channels', so one child may sit
         at `level` itself rather than one below it.
     children : Sequence[ScoreResult]
         The level below's results, exactly as `score_metrics`

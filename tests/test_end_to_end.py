@@ -268,6 +268,34 @@ def test_a_folder_with_one_gradeable_file_and_one_unclaimed_file(tmp_path):
     assert report.skipped[0].path.name == "unclaimed.bin"
 
 
+def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
+    """Three copies of one recording pair with the first copy,
+    and all three are held for review."""
+
+    for name in ("run_a.csv", "run_b.csv", "run_c.csv"):
+        (tmp_path / name).write_bytes(CSV_FIXTURE.read_bytes())
+
+    report = _grade(tmp_path)
+
+    assert [(d.episodes, d.tier) for d in report.duplicates] == [
+        (["run_a.csv", "run_b.csv"], "exact"),
+        (["run_a.csv", "run_c.csv"], "exact"),
+    ]
+    flagged = [
+        f.episode_id
+        for f in report.findings
+        if f.metric_id == "integrity.duplicate_episode"
+    ]
+    assert sorted(flagged) == ["run_a.csv", "run_b.csv", "run_c.csv"]
+    assert {e.eligibility.status.value for e in report.episodes if e.eligibility} == {
+        "review"
+    }
+    assert (
+        Report.model_validate_json(report.model_dump_json()).duplicates
+        == report.duplicates
+    )
+
+
 def test_the_graded_episode_names_the_adapter_that_read_it(single_file_report):
     """Verify GradedEpisode.adapter names `csv`, end to end through the CLI."""
 

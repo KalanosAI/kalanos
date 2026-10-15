@@ -9,14 +9,17 @@
 
 schema_version: 1
 
+# A family scores in an episode only when at least one of its `core` metrics graded there.
 metrics:
   # Recorded-axis diagnostics are report-only. They establish no capture quality.
-  timing.recorded_hz: {}
-  timing.recorded_dt_spread_ms: {}
-  timing.recorded_drop_estimate: {}
+  timing.recorded_hz: {weight: 1}
+  timing.recorded_dt_spread_ms: {weight: 1}
+  timing.recorded_drop_estimate: {weight: 2}
 
   # Both bounds decided: good < 1%, bad > 5%.
   timing.drop_rate:
+    weight: 4
+    core: true
     thresholds:
       default:
         good: 0.01
@@ -27,6 +30,7 @@ metrics:
   # absolute-ms band only fits ~100 Hz, and a two-sided ms band grades the
   # jittery-clock fixture (armD) that the corpus builds to stay ungraded.
   timing.dt_jitter_ms:
+    weight: 3
     thresholds:
       default:
         good: 5.0
@@ -34,10 +38,12 @@ metrics:
   # No bound decided; docs/METRICS.md marks it to define. Measured and shown in
   # every report, but it grades nothing until a band is settled against real
   # recordings.
-  timing.monotonic_violations: {}
+  timing.monotonic_violations: {weight: 4}
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good just below the worst clean camera stream, bad at the median stream blurred by a 5x5 box.
   vision.sharpness_score:
+    weight: 5
+    core: true
     higher_is_better: true
     thresholds:
       default:
@@ -46,6 +52,8 @@ metrics:
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good at the worst clean camera stream, bad at the median stream with 40% of its frames clipped.
   vision.exposure_shift_pct:
+    weight: 3
+    core: true
     thresholds:
       default:
         good: 10.0
@@ -55,11 +63,27 @@ metrics:
   # read alike here; Report.cameras compares each camera across episodes instead.
   vision.exposure_level: {}
 
+  # Reported, never graded: measured on the calibration datasets (docs/METRICS.md), no band decided.
+  vision.blank_frame_pct:
+    weight: 5
+    report_only: true
+  vision.contrast_score:
+    weight: 2
+    report_only: true
+  vision.dark_frame_pct:
+    weight: 3
+    report_only: true
+  vision.bright_frame_pct:
+    weight: 3
+    report_only: true
+
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
   # real recordings. A count mismatch breaks a declared invariant with direct
   # evidence, so it blocks through the contract route without a calibration
   # manifest; the band itself stays candidate.
   vision.frame_count_vs_timebase:
+    weight: 4
+    core: true
     route: contract
     thresholds:
       default:
@@ -68,10 +92,56 @@ metrics:
 
   # Reported, never graded: no band is decided.
   vision.pts_defect_pct:
+    weight: 2
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.max_gap_s:
+    weight: 3
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.camera_sync_skew_ms:
+    weight: 2
+    report_only: true
+
+  # A declared camera whose file is missing, unreadable or frameless breaks a
+  # declared invariant with direct evidence, so it blocks through the contract
+  # route without a calibration manifest, under a scope that grades vision.
+  # The flag is only ever 0 or 1, so any bad bound between them grades it the same.
+  # Weight 0: a pass/fail gate, not a quality measure, so it never moves the vision score.
+  vision.camera_stream_present:
+    weight: 0
+    route: contract
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 0.5
+
+  # Reported, never graded: no band is decided.
+  vision.video_format_consistency:
+    weight: 1
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.cut_count:
+    weight: 4
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.dropped_chunk_count:
+    weight: 4
+    report_only: true
+
+  # Reported, never graded: no band is decided.
+  vision.video_control_lag_ms:
     report_only: true
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:
+    weight: 6
+    core: true
     thresholds:
       default:
         good: 0.01
@@ -80,6 +150,8 @@ metrics:
   # Candidate: the 10%/25% deviation bounds are unconfirmed against real
   # recordings.
   timing.effective_hz:
+    weight: 5
+    core: true
     mode: abs_dev  # grade |value - target| / |target| instead of value directly
     target: nominal_hz  # key looked up under this metric's own `limits`
     # an adapter's describe() naming a declared rate auto-fills the target
@@ -92,6 +164,8 @@ metrics:
 
   # Candidate: the percent bounds are unconfirmed against real recordings.
   integrity.missing_pct:
+    weight: 4
+    core: true
     thresholds:
       default:
         good: 0.5
@@ -108,6 +182,8 @@ metrics:
   # band called "stuck" in nearly every episode. A stuck sensor is unchanged for
   # nearly the whole episode, so the band now sits there.
   integrity.flatline_pct:
+    weight: 4
+    core: true
     thresholds:
       default:
         good: 50.0
@@ -137,6 +213,8 @@ metrics:
   # recordings. Joint velocity now carries a two-sided band of its own; a
   # type-keyed band is never merged with the default.
   integrity.spike_pct:
+    weight: 4
+    core: true
     thresholds:
       default:
         good: 0.1
@@ -149,6 +227,7 @@ metrics:
   # an episode, which this metric's per-minute unit cannot convert to
   # without a duration the policy does not hold.
   integrity.drift:
+    weight: 1
     report_only: true
 
   # Candidate: default and per-type bad bounds unconfirmed against real
@@ -156,6 +235,7 @@ metrics:
   # joint acceleration now carry two-sided bands of their own; a type-keyed
   # band is never merged with the default.
   integrity.snr_db:
+    weight: 2
     higher_is_better: true
     thresholds:
       default:
@@ -180,6 +260,8 @@ metrics:
 
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.dead_taxel_pct:
+    weight: 3
+    core: true
     thresholds:
       default:
         good: 2.0
@@ -187,6 +269,8 @@ metrics:
 
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.hysteresis:
+    weight: 2
+    core: true
     thresholds:
       default:
         good: 0.05
@@ -198,6 +282,7 @@ metrics:
   # smooth 0.5 Hz joint motion measures ~44, far past this band. The candidate
   # band is kept on file so the numbers are not lost, but it does not grade.
   motion.mean_jerk_norm:
+    weight: 1
     report_only: true
     thresholds:
       default:
@@ -206,6 +291,7 @@ metrics:
 
   # Report-only for the same reason as mean_jerk_norm above.
   motion.max_abs_jerk:
+    weight: 1
     report_only: true
     thresholds:
       default:
@@ -215,33 +301,39 @@ metrics:
   # Report-only: no band is decided. One waits on the detector benchmark measuring
   # how often this fires on clean real recordings.
   motion.velocity_spike_pct:
+    weight: 4
     report_only: true
 
   # Report-only: dimensionless, unlike mean_jerk_norm, but no smoothness band has
   # been set against real recordings.
   motion.log_dimensionless_jerk:
+    weight: 5
     report_only: true
 
   # No bound decided; docs/METRICS.md marks it to define.
-  motion.action_chatter: {}
+  motion.action_chatter: {weight: 2}
 
   # The observed maximum is an estimate, not a declared limit;
   # the documented good < 1% band waits on a declared limit being wired in.
   motion.vel_saturation_pct:
+    weight: 2
     report_only: true
 
   # The observed range is an estimate, not a declared limit;
   # the documented band waits on a declared limit being wired in.
   motion.limit_proximity_pct:
+    weight: 1
     report_only: true
 
   # No bound decided; docs/METRICS.md marks it to define.
-  motion.still_drift: {}
+  motion.still_drift: {weight: 1}
 
   # Candidate (low confidence): deliberate motion lives below ~5 Hz, so a large
   # share of torque energy above 20 Hz is mechanical. Bounds unconfirmed against
   # real recordings — validate before treating these as decided.
   motion.hf_vibration_ratio:
+    weight: 2
+    core: true
     thresholds:
       default:
         good: 0.1
@@ -250,6 +342,7 @@ metrics:
   # Report-only by design: what counts as high torque depends on the robot
   # and the task, not on a threshold this file could hold.
   motion.p99_torque:
+    weight: 1
     report_only: true
 
   motion.max_torque:
@@ -266,7 +359,17 @@ metrics:
   # instruction should cost points depends on the policy being trained, so it
   # is measured and shown in every report and grades nothing until a band is
   # settled against real recordings.
-  annotation.task_instruction_missing: {}
+  annotation.task_instruction_missing:
+    weight: 5
+    core: true
+
+# Weights are relative and renormalise over what graded: 1 is supporting evidence, 3 a standard core check, 5 or 6 a defect that directly corrupts training.
+family_weights:
+  integrity: 3
+  timing: 2
+  motion: 2
+  vision: 2
+  annotation: 1
 
 missing_family: skip
 
@@ -285,6 +388,9 @@ gate:
   # A task needs this many episodes before a finding on all of them is read as
   # the task's own behaviour rather than a coincidence.
   task_trait_min_episodes: 20
+
+# The cutoff for each family's count of low episodes on the dataset score.
+low_episode_score: 70
 
 letters:
   A: 90

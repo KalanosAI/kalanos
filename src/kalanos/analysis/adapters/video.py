@@ -87,6 +87,14 @@ class DecodeFailed(RuntimeError):
     """Raised when PyAV is installed but a video file cannot be opened or decoded."""
 
 
+class ReadInterrupted(DecodeFailed):
+    """Raised when a video file's read fails outside the file, such as on the network.
+
+    The file may well be readable on the next attempt,
+    so the failure says nothing about the file itself.
+    """
+
+
 class DecodeLimitReached(RuntimeError):
     """Raised when a read stops at `max_decode_frames` or `max_pixels`."""
 
@@ -179,13 +187,59 @@ class SegmentPackets:
         Seconds per tick.
     fps : float
         The rate the segment was placed by:
-        the container's average rate,
-        or the segment's declared one when the file has none.
+        the segment's own, its frame count over its span,
+        or the container's average rate when the segment has no frames or no span.
     """
 
     pts: tuple[int, ...]
     time_base: float
     fps: float
+
+
+@dataclass(frozen=True)
+class DeclaredFormat:
+    """The format a dataset declares for one camera's video files.
+
+    Each field is what the dataset's own metadata states; `None` means undeclared.
+
+    Attributes
+    ----------
+    width : int or None
+        The frame width in pixels.
+    height : int or None
+        The frame height in pixels.
+    fps : float or None
+        The frame rate.
+    pix_fmt : str or None
+        The pixel format, as FFmpeg names it (`yuv420p`).
+    """
+
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    pix_fmt: str | None = None
+
+
+@dataclass(frozen=True)
+class ContainerHeader:
+    """The format a video file's container states for its first video stream.
+
+    Attributes
+    ----------
+    width : int
+        The frame width in pixels.
+    height : int
+        The frame height in pixels.
+    fps : float or None
+        The container's average frame rate, `None` when it states none.
+    pix_fmt : str or None
+        The pixel format, `None` when the codec parameters state none.
+    """
+
+    width: int
+    height: int
+    fps: float | None
+    pix_fmt: str | None
 
 
 @dataclass(frozen=True)
@@ -205,6 +259,9 @@ class VideoPayload:
     whole_file : bool
         Whether `path` holds this episode alone,
         so frames past `end_s` still belong to it.
+    declared : DeclaredFormat or None
+        The format the dataset declares for this camera,
+        `None` when the adapter reads no declaration.
     """
 
     path: UPath
@@ -212,6 +269,7 @@ class VideoPayload:
     start_s: float
     end_s: float
     whole_file: bool = False
+    declared: DeclaredFormat | None = None
 
     def __len__(self) -> int:
         """Return the declared frame count, reading nothing.
@@ -255,12 +313,22 @@ class VideoPayload:
         Both bounds sit half a frame early:
         a float `start_s`/`end_s` does not land exactly on a frame's pts,
         and strict bounds misread 11 of 40 toto episodes by one frame.
+        The frame is the segment's own, its frame count over its span, when it has one:
+        a stall anywhere in a shared file lowers the container's average rate,
+        and once it falls to half the real rate or below,
+        half of that longer frame spans a whole real one,
+        and every segment is pulled a frame early.
         """
 
-        rate = float(stream.average_rate or 0)
-        if rate <= 0 and (self.frame_count <= 0 or self.end_s <= self.start_s):
-            raise DecodeFailed(f"{self.path}: no frame rate in the file or the segment")
-        fps = rate if rate > 0 else self.frame_count / (self.end_s - self.start_s)
+        span = self.end_s - self.start_s
+        if self.frame_count > 0 and span > 0:
+            fps = self.frame_count / span
+        else:
+            fps = float(stream.average_rate or 0)
+            if fps <= 0:
+                raise DecodeFailed(
+                    f"{self.path}: no frame rate in the file or the segment"
+                )
         time_base = float(stream.time_base)
         lo = round((self.start_s - 0.5 / fps) / time_base)
         hi = round((self.end_s - 0.5 / fps) / time_base)
@@ -442,7 +510,49 @@ class VideoPayload:
         except (av.error.FFmpegError, OSError) as exc:
             # A handle that failed mid-read may be broken; the next payload reopens.
             _forget_remote_handle(self.path)
-            raise DecodeFailed(f"{self.path}: {exc}") from exc
+            raise _read_failure(self.path, exc) from exc
+
+    def header(self) -> ContainerHeader:
+        """Read the format the container states for its first video stream.
+
+        Decodes nothing.
+
+        Returns
+        -------
+        ContainerHeader
+            The stream's frame size, average rate and pixel format.
+
+        Raises
+        ------
+        DecoderUnavailable
+            If PyAV is not installed in this process.
+        DecodeFailed
+            If the file cannot be opened, or holds no video stream.
+        """
+
+        if av is None:
+            raise DecoderUnavailable(self.path)
+        try:
+            with self._open(av) as container:
+                if not container.streams.video:
+                    raise DecodeFailed(f"{self.path}: no video stream")
+                stream = container.streams.video[0]
+                codec = stream.codec_context
+                rate = stream.average_rate
+                # PyAV 17 segfaults reading codec.pix_fmt on a stream with none set;
+                # codec.format is None there instead.
+                pixel_format = codec.format
+                return ContainerHeader(
+                    width=int(codec.width),
+                    height=int(codec.height),
+                    fps=float(rate) if rate else None,
+                    pix_fmt=pixel_format.name if pixel_format is not None else None,
+                )
+        # A remote open fails with OSError from fsspec, not with an FFmpegError.
+        except (av.error.FFmpegError, OSError) as exc:
+            # A handle that failed mid-read may be broken; the next payload reopens.
+            _forget_remote_handle(self.path)
+            raise _read_failure(self.path, exc) from exc
 
     def packet_times(self) -> SegmentPackets:
         """Read the timestamp of every packet in this segment, decoding nothing.
@@ -485,7 +595,7 @@ class VideoPayload:
         except (av.error.FFmpegError, OSError) as exc:
             # A handle that failed mid-read may be broken; the next payload reopens.
             _forget_remote_handle(self.path)
-            raise DecodeFailed(f"{self.path}: {exc}") from exc
+            raise _read_failure(self.path, exc) from exc
         return SegmentPackets(
             pts=tuple(sorted(collected)), time_base=time_base, fps=fps
         )
@@ -583,6 +693,32 @@ def _forget_remote_handle(path: UPath) -> None:
         handle = _REMOTE_HANDLES.pop(str(path), None)
         if handle is not None:
             handle.close()
+
+
+def _read_failure(path: UPath, exc: Exception) -> DecodeFailed:
+    """Classify a failed read as the file's fault or an interruption outside it.
+
+    Parameters
+    ----------
+    path : UPath
+        The video file the read was for.
+    exc : Exception
+        What the read raised: an FFmpeg error, or an OSError from fsspec.
+
+    Returns
+    -------
+    DecodeFailed
+        `DecodeFailed` when FFmpeg rejected the bytes or the file does not exist,
+        `ReadInterrupted` for any other OSError,
+        which a remote file raises on a dropped connection or an HTTP error status.
+    """
+
+    # FFmpeg's errors subclass OSError too, so they are matched first.
+    if isinstance(exc, FileNotFoundError) or (
+        av is not None and isinstance(exc, av.error.FFmpegError)
+    ):
+        return DecodeFailed(f"{path}: {exc}")
+    return ReadInterrupted(f"{path}: {exc}")
 
 
 def _luminance(frame: Any) -> "np.ndarray":

@@ -29,9 +29,16 @@ from kalanos.analysis.models.eligibility import (
     SufficiencyStatus,
     worst_status,
 )
+from kalanos.analysis.models.metrics import Level
 from kalanos.analysis.models.provenance import FailedEpisode, Inventory
-from kalanos.analysis.models.report import Report
-from kalanos.analysis.scoring.eligibility import counts_of, readiness_of, sufficiency_of
+from kalanos.analysis.models.report import GradedEpisode, Report
+from kalanos.analysis.models.scoring import MetricRollup, ScoreResult
+from kalanos.analysis.scoring.eligibility import (
+    _requirement_reasons,
+    counts_of,
+    readiness_of,
+    sufficiency_of,
+)
 from kalanos.api import grade
 from kalanos.assets.policy import load_policy
 from kalanos.cli import app
@@ -370,6 +377,34 @@ def test_a_required_family_that_graded_nothing_makes_the_episode_unknown(tmp_pat
         for e in report.episodes
         if e.eligibility
     )
+
+
+def test_a_required_family_that_graded_only_a_non_core_metric_is_not_unknown():
+    """A family with a graded result counts as graded, even with no family score."""
+
+    episode = GradedEpisode(
+        id="e0",
+        adapter="csv",
+        adapter_confidence=1.0,
+        score=ScoreResult(
+            level=Level.EPISODE,
+            score=None,
+            grade=None,
+            train_ready=None,
+            n_contributing=0,
+            metrics={
+                "integrity.snr_db": MetricRollup(
+                    level=Level.CHANNEL, points=40.0, n_graded=1, n_flagged=1
+                )
+            },
+        ),
+    )
+    requirements = RequirementsSection(required_families=["integrity", "vision"])
+
+    reasons = {r.id for r in _requirement_reasons(episode, requirements)}
+
+    assert "family:integrity" not in reasons
+    assert "family:vision" in reasons
 
 
 # Dataset train_ready follows the counts, gate or no gate

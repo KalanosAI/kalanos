@@ -8,12 +8,18 @@ so the names exported there are the contract.
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from importlib import resources
+from pathlib import Path
+
 # External
 import pytest
+import yaml
 
 # Internal
 import kalanos
 from kalanos.analysis.models.provenance import ExecutionTier
+from kalanos.assets.policy import load_policy
 
 # Local
 from helpers import FIXTURES_DIR
@@ -62,6 +68,43 @@ PUBLIC_SURFACE = {
     "Bundle",
     "ExecutionTier",
 }
+
+
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture
+def heavier_integrity_policy(tmp_path) -> Path:
+    """A full policy file, the default with integrity's family weight raised to 7."""
+
+    payload = _default_policy_payload()
+    payload["family_weights"]["integrity"] = 7
+    return _write_policy(tmp_path / "policy.yaml", payload)
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _default_policy_payload() -> dict:
+    """The packaged default policy as a dict, to edit into a full policy."""
+
+    text = (
+        resources.files("kalanos.assets")
+        .joinpath("policies", "default.yaml")
+        .read_text(encoding="utf-8")
+    )
+    return yaml.safe_load(text)
+
+
+def _write_policy(path: Path, payload: dict) -> Path:
+    """Write `payload` as a policy file at `path` and return the path."""
+
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return path
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -134,7 +177,7 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "7.0.0"
+    assert report.schema_version == "7.1.0"
 
 
 def test_the_full_tier_reads_every_camera_frame():
@@ -150,3 +193,122 @@ def test_the_full_tier_reads_every_camera_frame():
         camera = next(s for s in episode.streams if s.kind == "video")
         evidence = camera.metrics["sharpness_score"].evidence
         assert evidence["n_sampled"] == evidence["n_frames"]
+
+
+def test_a_default_grade_records_the_default_family_weights():
+    """Verify the report carries the family weights the run graded with."""
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.family_weights == {
+        "integrity": 3,
+        "timing": 2,
+        "motion": 2,
+        "vision": 2,
+        "annotation": 1,
+    }
+
+
+def test_a_7_0_0_report_without_family_weights_still_loads():
+    """Verify the field is additive: an older report validates with no weights."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    del payload["family_weights"]
+    payload["schema_version"] = "7.0.0"
+
+    assert kalanos.Report.model_validate(payload).family_weights == {}
+
+
+def test_a_graded_report_rolls_up_each_metric_and_round_trips_them():
+    """Verify the dataset and episode scores carry per-metric rollups that reload."""
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.score.metrics
+    assert all(e.score.metrics for e in report.episodes)
+    reloaded = kalanos.Report.model_validate(report.model_dump(mode="json"))
+    assert reloaded.score.metrics == report.score.metrics
+    assert [e.score.metrics for e in reloaded.episodes] == [
+        e.score.metrics for e in report.episodes
+    ]
+
+
+def test_a_7_0_0_report_without_family_tails_still_loads():
+    """Verify `family_tails` is additive: a 7.0.0 report validates without it."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    del payload["score"]["family_tails"]
+    for episode in payload["episodes"]:
+        del episode["score"]["family_tails"]
+    payload["schema_version"] = "7.0.0"
+
+    assert kalanos.Report.model_validate(payload).score.family_tails == {}
+
+
+def test_a_7_0_0_report_without_metric_rollups_still_loads():
+    """Verify the per-metric fields are additive: a 7.0.0 report loads without them."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    del payload["score"]["metrics"]
+    for episode in payload["episodes"]:
+        del episode["score"]["metrics"]
+        for result in episode["metrics"].values():
+            del result["points"]
+        for stream in episode["streams"]:
+            for result in stream["metrics"].values():
+                del result["points"]
+            for channel in stream["channels"]:
+                for result in channel["metrics"].values():
+                    del result["points"]
+    payload["schema_version"] = "7.0.0"
+
+    report = kalanos.Report.model_validate(payload)
+
+    assert report.score.metrics == {}
+    assert all(e.score.metrics == {} for e in report.episodes)
+    assert all(
+        result.points is None
+        for e in report.episodes
+        for s in e.streams
+        for result in s.metrics.values()
+    )
+
+
+def test_a_policy_passed_to_grade_overrides_the_default_weights(
+    heavier_integrity_policy,
+):
+    """Verify `policy=` grades with, and records, the policy's own family weights."""
+
+    policy = load_policy(heavier_integrity_policy)
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny", policy=policy)
+
+    assert policy.family_weights["integrity"] == 7
+    assert report.family_weights["integrity"] == 7
+
+
+def test_a_policy_from_the_environment_overrides_the_default_weights(
+    heavier_integrity_policy, monkeypatch
+):
+    """Verify `KALANOS_POLICY_PATH` grades with, and records, its own family weights."""
+
+    monkeypatch.setenv("KALANOS_POLICY_PATH", str(heavier_integrity_policy))
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.family_weights["integrity"] == 7
+
+
+def test_grading_fails_naming_a_metric_left_without_a_weight(tmp_path):
+    """Verify a graded metric without a weight beside weighted ones fails by name."""
+
+    flatline = _default_policy_payload()["metrics"]["integrity.flatline_pct"]
+    policy = _write_policy(
+        tmp_path / "policy.yaml",
+        {
+            "extends": "default",
+            "metrics": {"integrity.flatline_pct": {**flatline, "weight": None}},
+        },
+    )
+
+    with pytest.raises(ValueError, match="flatline_pct"):
+        kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny", policy=load_policy(policy))

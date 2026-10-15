@@ -1,8 +1,36 @@
-# Report schema 7.0.0
+# Report schema 7.1.0
 
-Written by Kalanos 0.7.0. This page lists what changed from 6.5, what a consumer must do, and what a legacy file can and cannot provide.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 7.1.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `family_weights` | `dict[str, float]` | The policy's family weights the run graded with, keyed by family id. Empty when the policy weights no family. |
+| `MetricResult.points` | `float` or `null` | The 0-100 the policy graded the result to, on every channel, stream and episode metric. `null` when the result stayed `not_applicable` or `report_only`. |
+| `ScoreResult.metrics` | `dict[str, MetricRollup]` | One rollup per metric that graded, keyed `family.metric`. Filled on `episodes[].score` and the dataset `score`; empty on channel and stream scores. |
+| `MetricRollup.level` | `channel`, `stream` or `episode` | Where the metric ran. |
+| `MetricRollup.points` | `float` or `null` | In an episode, the points of the worst channel, stream or camera it graded. `null` at dataset level. |
+| `MetricRollup.n_graded` | `int` | How many subjects it graded. At dataset level, distinct channels, streams or cameras across every episode. |
+| `MetricRollup.n_flagged` | `int` | Of those, how many graded `warning` or `critical`. |
+| `MetricRollup.n_episodes_flagged` | `int` or `null` | At dataset level, how many episodes it flagged a subject in. `null` in an episode. |
+| `ScoreResult.family_tails` | `dict[str, FamilyTail]` | Per family, how many episodes scored it below the policy's cutoff and the lowest of them. Filled on the dataset `score`; empty on every other score. |
+| `FamilyTail.below` | `float` | The policy's `low_episode_score` the count compared against, 70 by default. |
+| `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
+| `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
+| `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
+| `duplicates` | `list[DuplicateEpisodes]` | Each pair of episodes whose numeric payloads are identical or nearly so. Identical episodes pair only with the first of them, which also stands for them in a near pair. |
+| `DuplicateEpisodes.episodes` | `list[str]` | The pair, in episode order. |
+| `DuplicateEpisodes.tier` | `exact` or `near` | `exact` when every payload hashes identically, `near` when the resampled trajectories lie within the near-duplicate limit. |
+| `DuplicateEpisodes.nrmse` | `float` | The normalized RMSE between the two trajectories, 0.0 for an exact pair. |
+| `DuplicateEpisodes.footage_identical` | `bool` | Whether the pair also repeats its camera footage exactly. |
+| `DuplicateEpisodes.cameras` | `list[str]` | The cameras whose footage the pair repeats exactly. |
+
+An episode's `score` and `families` now come from its metrics, each counted once at its worst subject and weighted within its family. A family scores only when one of its `core` metrics (a new `MetricPolicy.core` flag) graded in the episode. Channel and stream scores keep their own fold and are for display.
+
+A 7.0.0 report loads with `family_weights`, `duplicates`, every `metrics` and every `family_tails` empty, and every `points` null.
 
 ## New top-level fields
 

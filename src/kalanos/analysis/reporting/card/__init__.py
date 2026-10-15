@@ -21,7 +21,9 @@ from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card.sections import (
     CardContext,
     coverage,
+    families,
     findings,
+    flagged_channels,
     footer,
     headline,
     needs_attention,
@@ -45,6 +47,8 @@ Section = Callable[[Report, CardContext], list[Text]]
 SECTIONS: tuple[Section, ...] = (
     title,
     headline,
+    families,
+    flagged_channels,
     needs_attention,
     findings,
     coverage,
@@ -53,6 +57,8 @@ SECTIONS: tuple[Section, ...] = (
 )
 
 _HEADINGS: dict[Section, str] = {
+    families: "Family scores",
+    flagged_channels: "Flagged channels",
     needs_attention: "Needs attention",
     findings: "Findings",
     coverage: "Coverage",
