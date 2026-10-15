@@ -248,6 +248,7 @@ def write_arm(
 ) -> None:
     """Write an HDF5 arm recording of smooth 50 Hz joint commands.
 
+    Each episode's motion starts 0.1 rad further along than the previous one's.
     `glitched` episodes get large command jumps.
     `jittered` episodes get a physical clock's 50 µs timestamp jitter, so they grade.
     The rest are exactly even, so their timing is not observable.
@@ -277,8 +278,13 @@ def write_arm(
         data.attrs["fps"] = 50.0
         for index in range(n_episodes):
             group = data.create_group(f"demo_{index}")
+            # Each episode starts a little later in the motion, so no two are copies.
             actions = np.stack(
-                [0.2 * np.sin(2 * np.pi * 0.4 * t + phase) for phase in range(6)], 1
+                [
+                    0.2 * np.sin(2 * np.pi * 0.4 * t + phase + 0.1 * index)
+                    for phase in range(6)
+                ],
+                1,
             )
             if index in glitched:
                 rows = rng.choice(np.arange(1, 199), size=20, replace=False)

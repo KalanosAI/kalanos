@@ -90,6 +90,7 @@ integrity = "kalanos.analysis.metrics.integrity"
 annotation = "kalanos.analysis.metrics.annotation"
 motion = "kalanos.analysis.metrics.motion"
 vision = "kalanos.analysis.metrics.vision"
+continuity = "kalanos.analysis.metrics.continuity"
 
 [project.entry-points."kalanos.reporters"]
 render = "kalanos.analysis.reporting.render"

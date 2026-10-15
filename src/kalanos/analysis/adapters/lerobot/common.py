@@ -17,6 +17,7 @@ import polars as pl
 from upath import UPath
 
 # Internal
+from kalanos.analysis.adapters.video import DeclaredFormat
 from kalanos.analysis.inference.regularity import regularity
 from kalanos.analysis.inference.roles import roles
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
@@ -152,6 +153,77 @@ def video_keys(info: dict[str, Any]) -> list[str]:
         for key, spec in info.get("features", {}).items()
         if spec.get("dtype") == VIDEO_DTYPE
     ]
+
+
+def _coerced(value: Any, kind: type) -> Any:
+    """Return `value` as `kind`, or `None` when it is absent or does not convert.
+
+    Parameters
+    ----------
+    value : Any
+        The value the dataset's metadata holds, `None` when it holds none.
+    kind : type
+        The type to convert it to, such as `int` or `float`.
+
+    Returns
+    -------
+    Any
+        `kind(value)`, or `None` when `value` is `None` or the conversion fails.
+    """
+
+    if value is None:
+        return None
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def declared_format(spec: dict[str, Any]) -> DeclaredFormat | None:
+    """Read the video format one video feature declares.
+
+    The rate and pixel format come from the feature's `info`,
+    which LeRobot v3.0 datasets spell `video_info`.
+    The frame size comes from there as `video.height`/`video.width` when present,
+    and otherwise from `shape`, only when `names` labels its `height` and `width`.
+    A value that does not convert to its field's type counts as undeclared.
+
+    Parameters
+    ----------
+    spec : dict
+        One video feature's own entry under `info.json`'s `"features"`.
+
+    Returns
+    -------
+    DeclaredFormat or None
+        The declared fields, or `None` when the feature declares none of them.
+    """
+
+    info = spec.get("info")
+    if not isinstance(info, dict):
+        info = spec.get("video_info")
+    if not isinstance(info, dict):
+        info = {}
+    height = info.get("video.height")
+    width = info.get("video.width")
+    shape, names = spec.get("shape"), spec.get("names")
+    if (
+        isinstance(shape, list)
+        and isinstance(names, list)
+        and "height" in names
+        and "width" in names
+    ):
+        if height is None and names.index("height") < len(shape):
+            height = shape[names.index("height")]
+        if width is None and names.index("width") < len(shape):
+            width = shape[names.index("width")]
+    declared = DeclaredFormat(
+        width=_coerced(width, int),
+        height=_coerced(height, int),
+        fps=_coerced(info.get("video.fps"), float),
+        pix_fmt=_coerced(info.get("video.pix_fmt"), str),
+    )
+    return None if declared == DeclaredFormat() else declared
 
 
 def resolve_taxonomy(

@@ -790,7 +790,7 @@ def test_a_completed_sample_satisfies_sampled_video_quality_and_grades_vision():
 
 
 def test_a_missing_camera_file_names_its_cause(tmp_path):
-    """An unreadable camera leaves the episode unknown, its reason naming why."""
+    """A missing camera blocks its episode under a video scope; a reason names why."""
 
     dataset = tmp_path / "dataset"
     shutil.copytree(FIXTURE, dataset)
@@ -806,7 +806,11 @@ def test_a_missing_camera_file_names_its_cause(tmp_path):
 
     for episode in report.episodes:
         assert episode.eligibility is not None
-        assert episode.eligibility.status == EligibilityStatus.UNKNOWN
+        assert episode.eligibility.status == EligibilityStatus.BLOCKED
+        assert any(
+            r.id.endswith(".vision.camera_stream_present")
+            for r in episode.eligibility.reasons
+        )
         [reason] = [
             r
             for r in episode.eligibility.reasons

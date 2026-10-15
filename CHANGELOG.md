@@ -13,12 +13,28 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - `kalanos grade`, the HTML report and `kalanos inspect` show, for each family, how many episodes scored below 70 and the lowest episode score. The report records both in `score.family_tails` (report schema 7.1.0), and the policy's `low_episode_score` sets the cutoff.
 - The report records, for each metric in each episode and across the dataset, how many channels, streams or cameras it graded and how many it flagged, and each graded metric's points (report schema 7.1.0). The card's new "Flagged channels" section and `kalanos inspect` show the counts.
 - A `core` flag on a policy's metric entries marks the metrics a family needs graded before it scores in an episode. The default policy marks the core timing, integrity, motion, vision and annotation metrics (listed in `docs/METRICS.md`), and an `extends` override keeps the base's flag unless it sets one.
+- Two report-only vision metrics read from video packet timestamps, decoding nothing: `max_gap_s`, the longest gap between a camera's frames and where it sits, and `camera_sync_skew_ms`, the spread of an episode's cameras' offsets against their recorded timestamps, on one-file-per-episode videos.
+- Report-only vision metrics `blank_frame_pct`, `contrast_score`, `dark_frame_pct` and `bright_frame_pct`, read from the frames the vision metrics already sample. `dark_frame_pct` counts both crushed frames and dim ones, so a camera dimmed throughout reads 100.
+- `camera_stream_present` checks that each declared camera's video file opens and yields a frame inside the episode's segment.
+- `video_format_consistency` reports which of width, height, frame rate and pixel format in a camera's video file differ from what the dataset declares.
+- `integrity.duplicate_episode` flags episodes whose numeric payloads (state, action and any other graded series) are identical to another episode's, and requests review under every scope; `integrity.near_duplicate_episode` reports, without consequence, episodes whose resampled trajectories are nearly identical, such as a copy re-saved as float32. `Report.duplicates` (report schema 7.1.0) lists the pairs, each copy against the first of the episodes it copies, and whether each pair also repeats its camera footage exactly.
+- `cut_count` reports where camera footage was cut: a stretch removed from video and control alike, found at the largest jumps in the state and action streams, reward streams left out, and confirmed in a few decoded frames. It is report-only.
+- `dropped_chunk_count` reports a chunk of camera footage lost while its timestamps stayed uniform: a jump in the footage that the state does not share. It reads every frame, so it runs only with `--full-frame-scan`, and it is report-only.
+- `video_control_lag_ms` reports how far camera footage runs ahead of the state stream, or of the action stream when there is no state or the state does not move with the footage, by correlating the motion of both. It reads every frame, so it runs only with `--full-frame-scan`, and it is report-only.
 
 ### Changed
 
-- The default policy weights each metric and each family (integrity 3, timing 2, motion 2, vision 2, annotation 1; metric weights are listed in `docs/METRICS.md`), so a family, episode or dataset score changes wherever metrics of different weight grade differently. A policy that grades a metric without a `weight` beside weighted ones, such as one of the four unweighted report-only metrics given a band, now fails and names it.
+- The default policy weights each metric and each family (integrity 3, timing 2, motion 2, vision 2, annotation 1; metric weights are listed in `docs/METRICS.md`), so a family, episode or dataset score changes wherever metrics of different weight grade differently. A policy that grades a metric without a `weight` beside weighted ones, such as one of the unweighted report-only metrics given a band, now fails and names it.
 - A policy that `extends` another keeps the base's weight for a metric it overrides without setting `weight`, and merges `family_weights` family by family.
 - An episode's family scores count each metric once, at its worst channel, stream or camera, and a family scores only when one of its core metrics graded. The episode score is the family-weighted mean of those family scores, so family, episode and dataset scores drop where one channel fails among many. Channel and stream scores are shown as before and no longer feed the episode score.
+- Under a scope requiring `sampled_video_quality` or `video_quality`, a camera whose file is missing, unreadable or frameless now blocks its episode; it left the episode unknown before.
+  A network error reading a remote camera file still leaves the episode unknown.
+  `camera_stream_present` carries weight 0 in the default policy and is not a core metric, so it gates without moving the vision score.
+  A custom policy without a `vision.camera_stream_present` entry keeps the metric report-only.
+
+### Fixed
+
+- A video segment is placed by its own rate, its frame count over its recorded span, instead of the file's average rate. A stall that brought a shared file's average rate to half the real one or below pulled every segment of the file at least one frame early.
 
 ## [0.7.2] - 2026-10-08
 

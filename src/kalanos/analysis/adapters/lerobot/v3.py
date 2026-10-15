@@ -23,6 +23,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    declared_format,
     declared_series_streams,
     describe_from_info,
     episode_clock,
@@ -119,7 +120,8 @@ def _video_stream(
     Parameters
     ----------
     info : dict
-        The parsed `info.json`, for `video_path`'s template.
+        The parsed `info.json`,
+        for `video_path`'s template and the feature's declared format.
     row : dict
         This episode's own row from the episode index, for the chunk/file
         indices and the from/to timestamps `video_path` and `VideoPayload` need.
@@ -157,6 +159,7 @@ def _video_stream(
             frame_count=len(timestamps),
             start_s=row[f"videos/{video_key}/from_timestamp"],
             end_s=row[f"videos/{video_key}/to_timestamp"],
+            declared=declared_format(info["features"][video_key]),
         ),
         source_path=video_path,
         source_field=video_key,

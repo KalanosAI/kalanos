@@ -1,0 +1,696 @@
+"""Flag episodes whose numeric payloads repeat another episode's.
+
+A dataset assembled from several sources can hold the same episode twice,
+and a copy whose video was re-encoded no longer hashes like its original's footage.
+Its state and action data are carried over,
+while a re-run of the same task never repeats them,
+so this pass compares the numeric payloads of every pair of episodes after grading:
+
+- an exact duplicate hashes identically on every payload, and requests review;
+- a near duplicate lies within `_NEAR_RMSE` once each trajectory is resampled
+  and normalized, and is only reported.
+
+Camera footage takes no part in the comparison.
+A pair that also repeats its footage exactly, as `scoring.cameras` finds it, says so.
+It reads payloads the channel metrics already fetched, so it decodes no video.
+A copy trimmed or shifted in time resamples onto different points,
+so it is not found (docs/METRICS.md, "Duplicate episodes").
+"""
+
+# ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
+# ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
+
+# Built-in
+import hashlib
+import json
+import math
+import struct
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Literal
+
+# External
+import polars as pl
+from pydantic import BaseModel
+
+# Internal
+from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.metrics import Family, Level
+from kalanos.analysis.models.provenance import content_digest
+from kalanos.analysis.models.report import (
+    CameraSummary,
+    DuplicateEpisodes,
+    GradedEpisode,
+)
+from kalanos.analysis.models.scoring import Finding, Severity
+from kalanos.analysis.optional import load_numpy
+
+
+if TYPE_CHECKING:
+    import numpy as np
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# Points each channel is resampled to, over its relative row position.
+FINGERPRINT_POINTS = 32
+# The largest normalized RMSE at which two episodes are near duplicates,
+# a candidate measured on five LeRobot datasets (docs/METRICS.md, "Duplicate episodes").
+_NEAR_RMSE = 0.02
+# The most a near pair's streams may each differ in row count,
+# as a share of the longer one.
+_DURATION_TOLERANCE = 0.1
+# The most entries in one block of the pairwise distance matrix,
+# which bounds its memory.
+_CHUNK = 2_000_000
+# Below this many episodes comparing every pair takes well under a second,
+# and data with no main directions makes pruning slower than that.
+_PRUNE_FROM = 10_000
+# The main directions episodes are projected on, and how many rows estimate them.
+_PRUNE_AXES = 8
+_PRUNE_SAMPLE = 4_000
+# Above this share of every pair left to compare, pruning is dropped.
+_PRUNE_GIVE_UP = 0.25
+
+_UNCALIBRATED = {
+    "accepted": False,
+    "reason": "candidate cross-episode rule; not calibrated",
+}
+
+# Where a stream sits in its episode: taxonomy type, instance, source field,
+# and which of the streams sharing those three it is.
+StreamKey = tuple[str, str | None, str | None, int]
+
+
+# ░█▄█░█▀█░█▀▄░█▀▀░█░░░█▀▀
+# ░█░█░█░█░█░█░█▀▀░█░░░▀▀█
+# ░▀░▀░▀▀▀░▀▀░░▀▀▀░▀▀▀░▀▀▀
+
+
+class PayloadFingerprint(BaseModel):
+    """A stream's numeric payload, reduced to what the duplicate check compares.
+
+    It lives only for the run: grading collects it and this pass reads it,
+    and no report carries it.
+
+    Attributes
+    ----------
+    sha256 : str
+        SHA-256 over the channel names and every value as a float64, in channel order.
+    n_rows : int
+        How many rows the payload holds.
+    channels : list[str]
+        The channels hashed and resampled, in order.
+    points : bytes or None
+        A little-endian float32 array of `FINGERPRINT_POINTS` rows by one column
+        per channel, in C order: each channel linearly resampled over its relative
+        row position, less its mean. The mean is taken off before rounding,
+        since float32 keeps about 7 significant digits,
+        and a small motion around a large offset would round away with it.
+        Packed bytes keep a fingerprint near 4 bytes a number,
+        where a list of Python floats takes about 32, and every episode's
+        fingerprint is held until the pass runs.
+        `None` when a value is not finite, the payload has fewer than 2 rows,
+        or numpy is not installed.
+    means, variances : list of float or None
+        Each channel's mean and population variance over every row,
+        which the pass adds back to `points`,
+        and pools across episodes to scale each channel;
+        `None` exactly when `points` is.
+    varies : bool
+        Whether any channel takes more than one value.
+    """
+
+    sha256: str
+    n_rows: int
+    channels: list[str]
+    points: bytes | None = None
+    means: list[float] | None = None
+    variances: list[float] | None = None
+    varies: bool
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def payload_fingerprint(
+    frame: pl.DataFrame, channels: Sequence[str]
+) -> PayloadFingerprint | None:
+    """Reduce a stream's numeric payload to what the duplicate check compares.
+
+    Parameters
+    ----------
+    frame : polars.DataFrame
+        The fetched payload, one column per channel.
+    channels : Sequence[str]
+        The channels to fingerprint, in order.
+
+    Returns
+    -------
+    PayloadFingerprint or None
+        The fingerprint, or `None` when there is no channel
+        or a channel does not cast to float64.
+    """
+
+    if not channels:
+        return None
+    try:
+        cast = [frame[name].cast(pl.Float64) for name in channels]
+    except (pl.exceptions.PolarsError, KeyError):
+        return None
+    # A nested column can cast without error and still hold no plain numbers.
+    if any(series.dtype != pl.Float64 for series in cast):
+        return None
+    columns = [series.fill_null(math.nan).to_list() for series in cast]
+
+    digest = hashlib.sha256(json.dumps(list(channels)).encode())
+    for values in columns:
+        digest.update(struct.pack(f"<{len(values)}d", *values))
+    n_rows = frame.height
+    varies = any(frame[name].n_unique() > 1 for name in channels)
+
+    points = means = variances = None
+    numpy = load_numpy()
+    if numpy is not None and n_rows >= 2:
+        data = numpy.array(columns, dtype=numpy.float64)
+        if numpy.isfinite(data).all():
+            rows = numpy.linspace(0.0, 1.0, n_rows)
+            grid = numpy.linspace(0.0, 1.0, FINGERPRINT_POINTS)
+            centre = data.mean(axis=1)
+            points = (
+                (
+                    numpy.stack(
+                        [numpy.interp(grid, rows, column) for column in data], axis=1
+                    )
+                    - centre
+                )
+                .astype("<f4")
+                .tobytes()
+            )
+            means = centre.tolist()
+            variances = data.var(axis=1).tolist()
+
+    return PayloadFingerprint(
+        sha256=digest.hexdigest(),
+        n_rows=n_rows,
+        channels=list(channels),
+        points=points,
+        means=means,
+        variances=variances,
+        varies=varies,
+    )
+
+
+def _footage(cameras: Sequence[CameraSummary]) -> dict[str, dict[str, int]]:
+    """Where each episode sits among the cameras' exact footage repeats.
+
+    A pair is looked up from its two episodes' entries,
+    since listing every pair of a repeat group grows with the square of its size.
+
+    Parameters
+    ----------
+    cameras : Sequence[CameraSummary]
+        The camera summaries, whose `repeated_footage` groups name the episodes.
+
+    Returns
+    -------
+    dict of str to dict of str to int
+        For each episode in a repeat group, each camera it repeats on
+        and the index of its group there, in camera order.
+    """
+
+    groups: dict[str, dict[str, int]] = {}
+    for camera in cameras:
+        for index, group in enumerate(camera.repeated_footage):
+            for episode_id in group:
+                groups.setdefault(episode_id, {})[camera.camera] = index
+    return groups
+
+
+def _shared_footage(footage: dict[str, dict[str, int]], a: str, b: str) -> list[str]:
+    """The cameras whose footage episodes `a` and `b` repeat exactly.
+
+    Parameters
+    ----------
+    footage : dict of str to dict of str to int
+        Each episode's repeat groups, from `_footage`.
+    a, b : str
+        The two episodes.
+
+    Returns
+    -------
+    list of str
+        The cameras on which both episodes sit in one repeat group, in camera order.
+    """
+
+    left, right = footage.get(a, {}), footage.get(b, {})
+    return [camera for camera, group in left.items() if right.get(camera) == group]
+
+
+def _vectors(
+    members: list[dict[StreamKey, PayloadFingerprint]], keys: list[StreamKey]
+) -> "np.ndarray":
+    """One row per episode: its resampled trajectories,
+    z-scored per channel and concatenated.
+
+    Each channel is scaled by its standard deviation over every row of every member,
+    pooled from the per-episode means and variances.
+    The spread of the resampled points would do for a smooth channel,
+    but a sparse one, such as a reward that is 1 on a few rows,
+    is 0 at nearly every point, and dividing by that spread inflates any difference.
+
+    Parameters
+    ----------
+    members : list of dict
+        Each episode's fingerprints, all holding `points` on every key.
+    keys : list of tuple
+        The stream keys every member shares, in order.
+
+    Returns
+    -------
+    numpy.ndarray
+        An `(len(members), FINGERPRINT_POINTS * n_channels)` float32 array.
+        After scaling, float32 rounding moves a squared distance by far less
+        than the near limit, and halves the memory of float64.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n = len(members)
+    widths = [len(members[0][key].channels) for key in keys]
+    out = numpy.empty((n, FINGERPRINT_POINTS * sum(widths)), dtype=numpy.float32)
+    column = 0
+    for key, width in zip(keys, widths, strict=True):
+        stacked = numpy.frombuffer(
+            b"".join(m[key].points or b"" for m in members), dtype="<f4"
+        ).reshape(n, FINGERPRINT_POINTS, width)
+        weights = numpy.array([m[key].n_rows for m in members], dtype=numpy.float64)
+        means = numpy.array([m[key].means for m in members], dtype=numpy.float64)
+        variances = numpy.array(
+            [m[key].variances for m in members], dtype=numpy.float64
+        )
+        total = weights.sum()
+        mean = (weights[:, None] * means).sum(axis=0) / total
+        pooled = (weights[:, None] * (variances + (means - mean) ** 2)).sum(
+            axis=0
+        ) / total
+        std = numpy.sqrt(pooled)
+        # A channel constant across every episode carries no distance.
+        std[std == 0] = 1.0
+        # Written straight into its slice of `out`, so no full-size copy is made.
+        # The points are stored less each episode's own mean,
+        # so each episode's offset from the pooled mean is added back.
+        target = out[:, column : column + FINGERPRINT_POINTS * width].reshape(
+            n, FINGERPRINT_POINTS, width
+        )
+        numpy.add(stacked, (means - mean).astype(numpy.float32)[:, None, :], out=target)
+        target /= std.astype(numpy.float32)
+        column += FINGERPRINT_POINTS * width
+    return out
+
+
+def _confirm(
+    vectors: "np.ndarray", left: "np.ndarray", right: "np.ndarray", limit: float
+) -> list[tuple[int, int, float]]:
+    """The candidate pairs `(left[k], right[k])` within `limit` normalized RMSE.
+
+    Every search path ends here, so they agree on a pair that sits on the limit.
+
+    Parameters
+    ----------
+    vectors : numpy.ndarray
+        One row per episode, from `_vectors`.
+    left, right : numpy.ndarray
+        Row indices of the candidate pairs, `left[k] < right[k]`.
+    limit : float
+        The largest normalized RMSE kept.
+
+    Returns
+    -------
+    list of tuple of (int, int, float)
+        `(i, j, distance)` for each candidate within `limit`, in candidate order.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    dim = vectors.shape[1]
+    found: list[tuple[int, int, float]] = []
+    step = max(1, _CHUNK // dim)
+    for start in range(0, len(left), step):
+        i, j = left[start : start + step], right[start : start + step]
+        difference = vectors[i] - vectors[j]
+        distance = numpy.sqrt(
+            numpy.einsum("ij,ij->i", difference, difference, dtype=numpy.float64) / dim
+        )
+        keep = numpy.nonzero(distance <= limit)[0]
+        found.extend(
+            zip(
+                i[keep].tolist(), j[keep].tolist(), distance[keep].tolist(), strict=True
+            )
+        )
+    return found
+
+
+def _all_close_pairs(
+    vectors: "np.ndarray", limit: float
+) -> list[tuple[int, int, float]]:
+    """`close_pairs` by comparing every pair, a block of rows at a time.
+
+    Parameters
+    ----------
+    vectors : numpy.ndarray
+        One row per episode, from `_vectors`.
+    limit : float
+        The largest normalized RMSE kept.
+
+    Returns
+    -------
+    list of tuple of (int, int, float)
+        `(i, j, distance)` with `i < j`, ordered by `i` then `j`.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n, dim = vectors.shape
+    squares = (vectors**2).sum(axis=1)
+    # The expanded square loses a little to rounding, so it only shortlists,
+    # with some slack, and `_confirm` decides.
+    bound = (limit * 1.01) ** 2 * dim + 1e-3
+    # Its rounding grows with the rows' squared lengths, not with their distance,
+    # so a pair of copies far from every other episode needs slack in proportion:
+    # summing `dim` products, the squares and the dot product each lose
+    # at most `dim` units of rounding on the squared lengths.
+    tolerance = 2 * (dim + 1) * float(numpy.finfo(vectors.dtype).eps)
+    rows = max(1, _CHUNK // max(1, n))
+    left, right = [], []
+    for start in range(0, n, rows):
+        stop = min(start + rows, n)
+        # Only columns after the block's first row can hold a pair above the diagonal.
+        block = squares[start:stop, None] + squares[None, start:]
+        cut = block * tolerance + bound
+        block -= 2 * vectors[start:stop] @ vectors[start:].T
+        rows_i, cols = numpy.nonzero(block <= cut)
+        above = start + cols > start + rows_i
+        left.append(start + rows_i[above])
+        right.append(start + cols[above])
+    if not left:
+        return []
+    return _confirm(vectors, numpy.concatenate(left), numpy.concatenate(right), limit)
+
+
+def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, float]]:
+    """Every pair of rows of `vectors` whose normalized RMSE is at most `limit`.
+
+    Comparing every pair grows with the square of the episode count,
+    while a near duplicate lies far closer than distinct episodes do.
+    So the rows are projected on their `_PRUNE_AXES` main directions,
+    sorted along the first, and only rows within `limit * sqrt(dim)` of each other
+    on every projection are compared.
+    A projection never lengthens a distance, so no pair within `limit` is skipped,
+    and the result equals comparing every pair.
+    When the rows sit too close together for the projections to separate them,
+    as in a dataset of near-identical demonstrations, every pair is compared.
+
+    Parameters
+    ----------
+    vectors : numpy.ndarray
+        One row per episode, from `_vectors`.
+    limit : float
+        The largest normalized RMSE kept.
+
+    Returns
+    -------
+    list of tuple of (int, int, float)
+        `(i, j, distance)` with `i < j`, ordered by `i` then `j`.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n, dim = vectors.shape
+    if n < _PRUNE_FROM:
+        return _all_close_pairs(vectors, limit)
+
+    # Step 1: the main directions, from evenly spaced rows, and every row's projection.
+    sample = vectors[numpy.linspace(0, n - 1, min(n, _PRUNE_SAMPLE)).astype(int)]
+    centre = sample.mean(axis=0, dtype=numpy.float64)
+    covariance = numpy.cov(sample - centre, rowvar=False, dtype=numpy.float64)
+    _values, axes = numpy.linalg.eigh(covariance)
+    axes = axes[:, ::-1][:, : min(_PRUNE_AXES, dim)]
+    coords = (vectors - centre.astype(vectors.dtype)) @ axes.astype(vectors.dtype)
+    coords = coords.astype(numpy.float64)
+
+    # Step 2: along the first projection, each row's window of later rows.
+    radius = limit * math.sqrt(dim) * 1.01 + 1e-6
+    order = numpy.argsort(coords[:, 0], kind="stable")
+    first = coords[order, 0]
+    ends = numpy.searchsorted(first, first + radius, side="right")
+    counts = ends - numpy.arange(n) - 1
+    if counts.sum() > _PRUNE_GIVE_UP * n * (n - 1) / 2:
+        return _all_close_pairs(vectors, limit)
+
+    # Step 3: the window's pairs, kept where every other projection is close too,
+    # a slice of rows at a time so the candidate arrays stay bounded.
+    found: list[tuple[int, int, float]] = []
+    position = 0
+    while position < n:
+        stop = position + 1
+        budget = counts[position]
+        while stop < n and budget + counts[stop] <= _CHUNK:
+            budget += counts[stop]
+            stop += 1
+        rows = numpy.repeat(numpy.arange(position, stop), counts[position:stop])
+        offsets = numpy.arange(len(rows)) - numpy.repeat(
+            numpy.cumsum(counts[position:stop]) - counts[position:stop],
+            counts[position:stop],
+        )
+        partners = rows + 1 + offsets
+        a, b = order[rows], order[partners]
+        near = (numpy.abs(coords[a, 1:] - coords[b, 1:]) <= radius).all(axis=1)
+        a, b = a[near], b[near]
+        swap = a > b
+        a[swap], b[swap] = b[swap], a[swap]
+        found.extend(_confirm(vectors, a, b, limit))
+        position = stop
+    found.sort()
+    return found
+
+
+def _finding(
+    episode_id: str,
+    tier: Literal["exact", "near"],
+    partners: list[tuple[str, float]],
+    count: int,
+    footage: dict[str, dict[str, int]],
+) -> Finding:
+    """An episode-level finding that `episode_id` duplicates each of `partners`.
+
+    Parameters
+    ----------
+    episode_id : str
+        The episode the finding is about.
+    tier : {"exact", "near"}
+        `exact` requests review, `near` is only reported.
+    partners : list of tuple of (str, float)
+        Each partner's episode id and normalized RMSE.
+    count : int
+        How many episodes `episode_id` duplicates, counting the exact copies
+        a partner stands for.
+    footage : dict of str to dict of str to int
+        Each episode's repeat groups, from `_footage`.
+
+    Returns
+    -------
+    Finding
+        The finding, with the partners in its evidence.
+    """
+
+    exact = tier == "exact"
+    metric_id = (
+        "integrity.duplicate_episode" if exact else "integrity.near_duplicate_episode"
+    )
+    evidence: dict = {
+        "partners": [partner for partner, _d in partners],
+        "footage_identical": [
+            bool(_shared_footage(footage, episode_id, partner))
+            for partner, _d in partners
+        ],
+    }
+    # An exact partner is always 0 apart, so only a near finding lists distances.
+    if not exact:
+        evidence["nrmse"] = [distance for _p, distance in partners]
+        evidence["max_nrmse"] = _NEAR_RMSE
+    return Finding(
+        id=content_digest({"metric": metric_id, "episode": episode_id}),
+        metric_id=metric_id,
+        family=Family.INTEGRITY.value,
+        severity=Severity.CRITICAL if exact else Severity.WARNING,
+        value=float(count),
+        unit="episodes",
+        points=0,
+        episode_id=episode_id,
+        subject_level=Level.EPISODE,
+        evidence_strength="deterministic" if exact else "statistical",
+        evidence=evidence,
+        consequence=Consequence.REVIEW if exact else Consequence.REPORT_ONLY,
+        route=None,
+        calibration=dict(_UNCALIBRATED),
+    )
+
+
+def find_duplicate_episodes(
+    episodes: Sequence[GradedEpisode],
+    fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
+    cameras: Sequence[CameraSummary] = (),
+) -> tuple[list[DuplicateEpisodes], list[Finding]]:
+    """Pair the episodes whose numeric payloads are identical or nearly so.
+
+    Only episodes whose fingerprinted streams sit at the same keys
+    with the same channels are compared,
+    and an episode whose every channel is constant takes no part,
+    since two such episodes would pair whatever they recorded.
+
+    Episodes that hash identically form a group, which the earliest of them stands for,
+    so that k copies give k - 1 pairs rather than one for every two of them:
+
+    - each later copy pairs with the earliest, exactly;
+    - a near pair joins the earliest episodes of two groups,
+      and every copy in either group is near the other group's earliest episode.
+
+    Every copy still carries each finding the pair implies.
+
+    Parameters
+    ----------
+    episodes : Sequence[GradedEpisode]
+        Every graded episode, which sets the order of pairs and findings.
+    fingerprints : Mapping
+        Each episode's fingerprints by episode id, as grading collected them.
+    cameras : Sequence[CameraSummary]
+        The camera summaries, whose exact footage repeats annotate a pair.
+
+    Returns
+    -------
+    tuple of (list of DuplicateEpisodes, list of Finding)
+        Every pair in episode order, and one finding per episode and tier
+        with at least one partner.
+    """
+
+    # Step 1: each taking part episode's fingerprints, grouped by what they hold.
+    order = {episode.id: index for index, episode in enumerate(episodes)}
+    groups: dict[tuple, list[tuple[str, dict[StreamKey, PayloadFingerprint]]]] = {}
+    for episode in episodes:
+        prints = dict(fingerprints.get(episode.id, {}))
+        if not any(p.varies for p in prints.values()):
+            continue
+        signature = tuple(sorted((key, tuple(p.channels)) for key, p in prints.items()))
+        groups.setdefault(signature, []).append((episode.id, prints))
+
+    footage = _footage(cameras)
+    pairs: list[DuplicateEpisodes] = []
+    # Each group's episodes by its earliest one, which comes first.
+    copies: dict[str, list[str]] = {}
+    for signature, members in groups.items():
+        if len(members) < 2:
+            continue
+        keys = [key for key, _channels in signature]
+
+        # Step 2: exact copies hash identically, row count included, on every key.
+        by_hash: dict[tuple, list[str]] = {}
+        for episode_id, prints in members:
+            identity = tuple((prints[k].sha256, prints[k].n_rows) for k in keys)
+            by_hash.setdefault(identity, []).append(episode_id)
+        for ids in by_hash.values():
+            first = ids[0]
+            copies[first] = ids
+            for b in ids[1:]:
+                shared = _shared_footage(footage, first, b)
+                pairs.append(
+                    DuplicateEpisodes(
+                        episodes=[first, b],
+                        tier="exact",
+                        nrmse=0.0,
+                        footage_identical=bool(shared),
+                        cameras=shared,
+                    )
+                )
+
+        # Step 3: near pairs, among the earliest episodes of the groups
+        # resampled on every key. Copies resample to the same points,
+        # so the other copies would only repeat their earliest one's pairs.
+        if load_numpy() is None:
+            continue
+        resampled = [
+            (episode_id, prints)
+            for episode_id, prints in members
+            if all(prints[k].points is not None for k in keys)
+        ]
+        if len(resampled) < 2:
+            continue
+        # Scaled over every copy, as each copy's rows weigh in the pooled spread.
+        vectors = _vectors([p for _id, p in resampled], keys)
+        firsts = [
+            index
+            for index, (episode_id, _p) in enumerate(resampled)
+            if episode_id in copies
+        ]
+        if len(firsts) < 2:
+            continue
+        if len(firsts) < len(resampled):
+            vectors = vectors[firsts]
+        for i, j, distance in close_pairs(vectors, _NEAR_RMSE):
+            (a, left), (b, right) = resampled[firsts[i]], resampled[firsts[j]]
+            mismatch = max(
+                abs(left[k].n_rows - right[k].n_rows)
+                / max(left[k].n_rows, right[k].n_rows)
+                for k in keys
+            )
+            if mismatch > _DURATION_TOLERANCE:
+                continue
+            shared = _shared_footage(footage, a, b)
+            pairs.append(
+                DuplicateEpisodes(
+                    episodes=[a, b],
+                    tier="near",
+                    nrmse=distance,
+                    footage_identical=bool(shared),
+                    cameras=shared,
+                )
+            )
+
+    # Step 4: pairs in episode order, then one finding per episode and tier.
+    pairs = [
+        pair.model_copy(
+            update={"episodes": sorted(pair.episodes, key=order.__getitem__)}
+        )
+        for pair in pairs
+    ]
+    pairs.sort(key=lambda p: (order[p.episodes[0]], order[p.episodes[1]], p.tier))
+    partners: dict[tuple[str, Literal["exact", "near"]], list[tuple[str, float]]] = {}
+    counts: dict[tuple[str, Literal["exact", "near"]], int] = {}
+    for pair in pairs:
+        a, b = pair.episodes
+        if pair.tier == "exact":
+            # `a` is the group's earliest episode, and lists every other copy.
+            partners.setdefault((a, "exact"), []).append((b, 0.0))
+            partners[(b, "exact")] = [(a, 0.0)]
+            counts[(a, "exact")] = counts[(b, "exact")] = len(copies[a]) - 1
+            continue
+        for episode_id, partner in ((a, b), (b, a)):
+            for copy in copies[episode_id]:
+                key = (copy, "near")
+                partners.setdefault(key, []).append((partner, pair.nrmse))
+                counts[key] = counts.get(key, 0) + len(copies[partner])
+    findings = [
+        _finding(episode_id, tier, found, counts[(episode_id, tier)], footage)
+        for (episode_id, tier), found in sorted(
+            partners.items(), key=lambda item: (order[item[0][0]], item[0][1])
+        )
+    ]
+    return pairs, findings

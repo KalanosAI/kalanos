@@ -105,7 +105,8 @@ def grade_with_test_calibration(path, *, policy=None, **kwargs):
     contexts = {
         content_digest(f.calibration["context"]): f.calibration["context"]
         for f in initial.findings
-        if f.calibration
+        # Cross-episode rules carry an uncalibrated marker with no context to approve.
+        if f.calibration and "context" in f.calibration
     }
     approved = policy.model_copy(
         update={

@@ -1380,12 +1380,18 @@ def test_no_metric_threshold_value_is_hardcoded_in_scoring_source():
         if value is not None
     }
 
-    # `_weighted_mean`'s unweighted-contribution default and
-    # `score_metrics`'s failing-metric increment are both a literal `1`,
-    # generic scoring machinery that happens to coincide with a real band
-    # value below. Skip their bodies rather than the value itself, so a
-    # genuine hardcoded `1.0` anywhere else in the package still trips this.
-    _GENERIC_MACHINERY_FUNCTIONS = {"_weighted_mean", "score_metrics"}
+    # `_weighted_mean`'s unweighted-contribution default, the failing-metric
+    # increments of `score_metrics` and `score_episode`, and the subject and
+    # episode counters of `score_episode` and `dataset_metric_rollups` are all
+    # a literal `1`, generic scoring machinery that happens to coincide with a
+    # real band value below. Skip their bodies rather than the value itself, so
+    # a genuine hardcoded `1.0` anywhere else in the package still trips this.
+    _GENERIC_MACHINERY_FUNCTIONS = {
+        "_weighted_mean",
+        "score_metrics",
+        "score_episode",
+        "dataset_metric_rollups",
+    }
 
     def _constants(node: ast.AST) -> set[int | float]:
         found: set[int | float] = set()
