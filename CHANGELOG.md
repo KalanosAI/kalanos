@@ -10,8 +10,8 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - `kalanos grade`, the HTML report and `kalanos inspect` show the dataset's 0-100 score for each metric family that scored, under a display name (`timing` as Temporal, `integrity` as Integrity, `motion` as Motion, `vision` as Vision, `annotation` as Annotations); any other family shows under its id.
 - The report records the family weights it graded with in `family_weights` (report schema 7.1.0), and `kalanos grade` shows each family's weight beside its score.
-- `kalanos grade`, the HTML report and `kalanos inspect` show, for each family, how many episodes scored below 70 and the lowest episode score. The report records both in `score.family_tails` (report schema 7.3.0), and the policy's `low_episode_score` sets the cutoff.
-- The report records, for each metric in each episode and across the dataset, how many channels, streams or cameras it graded and how many it flagged, and each graded metric's points (report schema 7.2.0). The card's new "Flagged channels" section and `kalanos inspect` show the counts.
+- `kalanos grade`, the HTML report and `kalanos inspect` show, for each family, how many episodes scored below 70 and the lowest episode score. The report records both in `score.family_tails` (report schema 7.1.0), and the policy's `low_episode_score` sets the cutoff.
+- The report records, for each metric in each episode and across the dataset, how many channels, streams or cameras it graded and how many it flagged, and each graded metric's points (report schema 7.1.0). The card's new "Flagged channels" section and `kalanos inspect` show the counts.
 - A `core` flag on a policy's metric entries marks the metrics a family needs graded before it scores in an episode. The default policy marks the core timing, integrity, motion, vision and annotation metrics (listed in `docs/METRICS.md`), and an `extends` override keeps the base's flag unless it sets one.
 
 ### Changed

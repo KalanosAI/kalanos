@@ -92,7 +92,7 @@ def _row(text: str, label: str) -> str:
 
 
 def _without_tails(report: Report) -> Report:
-    """A copy of `report` whose dataset score has no family tails, like a 7.2.0 one."""
+    """A copy of `report` whose dataset score carries no family tails."""
 
     score = report.score.model_copy(update={"family_tails": {}})
     return report.model_copy(update={"score": score})

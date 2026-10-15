@@ -120,7 +120,7 @@ Not analysed
   README.md        no adapter
   video_meta.json  no schema: no candidate column resolved as a time axis (name 'fps' does not match a time-like patt...
 
-schema 7.3.0 - policy v1 - 0.42s
+schema 7.1.0 - policy v1 - 0.41s
 ```
 
 The same card on a dataset with video: the coverage rows grow with the data.
@@ -156,7 +156,7 @@ Coverage
   mapping        2 stream types unmapped - type them with --map
   inventory      complete
 
-schema 7.3.0 - policy v1 - 0.24s
+schema 7.1.0 - policy v1 - 0.23s
 ```
 
 How to read it, top to bottom:

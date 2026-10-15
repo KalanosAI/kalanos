@@ -1,25 +1,14 @@
-# Report schema 7.3.0
+# Report schema 7.1.0
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0, 7.2.0 and 7.3.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
 
-## Added in 7.3.0
+## Added in 7.1.0
 
 | Field | Type | What it is |
 |---|---|---|
-| `ScoreResult.family_tails` | `dict[str, FamilyTail]` | Per family, how many episodes scored it below the policy's cutoff and the lowest of them. Filled on the dataset `score`; empty on every other score. |
-| `FamilyTail.below` | `float` | The policy's `low_episode_score` the count compared against, 70 by default. |
-| `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
-| `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
-| `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
-
-A 7.2.0 report loads with `family_tails` empty.
-
-## Added in 7.2.0
-
-| Field | Type | What it is |
-|---|---|---|
+| `family_weights` | `dict[str, float]` | The policy's family weights the run graded with, keyed by family id. Empty when the policy weights no family. |
 | `MetricResult.points` | `float` or `null` | The 0-100 the policy graded the result to, on every channel, stream and episode metric. `null` when the result stayed `not_applicable` or `report_only`. |
 | `ScoreResult.metrics` | `dict[str, MetricRollup]` | One rollup per metric that graded, keyed `family.metric`. Filled on `episodes[].score` and the dataset `score`; empty on channel and stream scores. |
 | `MetricRollup.level` | `channel`, `stream` or `episode` | Where the metric ran. |
@@ -27,14 +16,15 @@ A 7.2.0 report loads with `family_tails` empty.
 | `MetricRollup.n_graded` | `int` | How many subjects it graded. At dataset level, distinct channels, streams or cameras across every episode. |
 | `MetricRollup.n_flagged` | `int` | Of those, how many graded `warning` or `critical`. |
 | `MetricRollup.n_episodes_flagged` | `int` or `null` | At dataset level, how many episodes it flagged a subject in. `null` in an episode. |
+| `ScoreResult.family_tails` | `dict[str, FamilyTail]` | Per family, how many episodes scored it below the policy's cutoff and the lowest of them. Filled on the dataset `score`; empty on every other score. |
+| `FamilyTail.below` | `float` | The policy's `low_episode_score` the count compared against, 70 by default. |
+| `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
+| `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
+| `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
 
-An episode's `score` and `families` now come from its metrics, each counted once at its worst subject and weighted within its family. A family scores only when one of its `core` metrics (a new `MetricPolicy.core` flag) graded in the episode. Channel and stream scores keep their own fold and are for display. A 7.1.0 report loads with every `points` null and every `metrics` empty.
+An episode's `score` and `families` now come from its metrics, each counted once at its worst subject and weighted within its family. A family scores only when one of its `core` metrics (a new `MetricPolicy.core` flag) graded in the episode. Channel and stream scores keep their own fold and are for display.
 
-## Added in 7.1.0
-
-| Field | Type | What it is |
-|---|---|---|
-| `family_weights` | `dict[str, float]` | The policy's family weights the run graded with, keyed by family id. Empty when the policy weights no family. Reports written as 7.0.0 load with it empty. |
+A 7.0.0 report loads with `family_weights`, every `metrics` and every `family_tails` empty, and every `points` null.
 
 ## New top-level fields
 

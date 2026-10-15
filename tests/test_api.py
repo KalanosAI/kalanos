@@ -177,7 +177,7 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "7.3.0"
+    assert report.schema_version == "7.1.0"
 
 
 def test_the_full_tier_reads_every_camera_frame():
@@ -233,20 +233,20 @@ def test_a_graded_report_rolls_up_each_metric_and_round_trips_them():
     ]
 
 
-def test_a_7_2_0_report_without_family_tails_still_loads():
-    """Verify the 7.3.0 field is additive: a 7.2.0 report validates without it."""
+def test_a_7_0_0_report_without_family_tails_still_loads():
+    """Verify `family_tails` is additive: a 7.0.0 report validates without it."""
 
     payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
     del payload["score"]["family_tails"]
     for episode in payload["episodes"]:
         del episode["score"]["family_tails"]
-    payload["schema_version"] = "7.2.0"
+    payload["schema_version"] = "7.0.0"
 
     assert kalanos.Report.model_validate(payload).score.family_tails == {}
 
 
-def test_a_7_1_0_report_without_metric_rollups_still_loads():
-    """Verify the 7.2.0 fields are additive: a 7.1.0 report validates without them."""
+def test_a_7_0_0_report_without_metric_rollups_still_loads():
+    """Verify the per-metric fields are additive: a 7.0.0 report loads without them."""
 
     payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
     del payload["score"]["metrics"]
@@ -260,7 +260,7 @@ def test_a_7_1_0_report_without_metric_rollups_still_loads():
             for channel in stream["channels"]:
                 for result in channel["metrics"].values():
                     del result["points"]
-    payload["schema_version"] = "7.1.0"
+    payload["schema_version"] = "7.0.0"
 
     report = kalanos.Report.model_validate(payload)
 
