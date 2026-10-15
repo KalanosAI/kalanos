@@ -101,7 +101,9 @@ def _requirement_reasons(
             )
         )
     for family in requirements.required_families:
-        if family not in episode.score.families:
+        # Read the graded metrics: a family can grade a result and still have
+        # no score when none of its core metrics graded.
+        if not any(key.startswith(f"{family}.") for key in episode.score.metrics):
             reasons.append(
                 EligibilityReason(
                     id=f"family:{family}",

@@ -58,7 +58,12 @@ from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
 from kalanos.analysis.reporting.write import write_report
 from kalanos.analysis.scoring.gate import worse
-from kalanos.analysis.scoring.score import grade_for, rollup, score_metrics
+from kalanos.analysis.scoring.score import (
+    grade_for,
+    rollup,
+    score_episode,
+    score_metrics,
+)
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 
@@ -499,13 +504,13 @@ def test_an_episode_spans_from_its_earliest_to_its_latest_timestamp():
 def test_grade_episode_score_is_unchanged_with_no_episode_metrics_registered(
     monkeypatch,
 ):
-    """Verify an episode's rollup still equals a plain rollup of its streams.
+    """Verify an episode's score still equals the fold of its streams alone.
 
     Filters EPISODE-level entries out of a temporary registry copy, rather
     than relying on none being registered in the shipped catalogue — that
     would break, for no real reason, the moment a first episode metric
     lands. The invariant under test is that an empty `results` dict
-    contributes nothing to the rollup, never a shifting zero.
+    contributes nothing to the score, never a shifting zero.
     """
 
     import kalanos.analysis.metrics.registry as registry
@@ -528,20 +533,17 @@ def test_grade_episode_score_is_unchanged_with_no_episode_metrics_registered(
     )
 
     assert graded.metrics == {}
-    assert graded.score == rollup(
-        Level.EPISODE, [gs.score for gs in graded.streams], policy=policy
-    )
+    assert graded.score == score_episode(graded.streams, {}, policy=policy)
 
 
-def test_grade_episode_folds_its_own_score_in_as_one_more_equal_weight_child(
+def test_grade_episode_folds_its_own_metrics_in_beside_its_stream_metrics(
     monkeypatch,
 ):
-    """Verify an episode's score is the plain mean of its own metrics and its streams'.
+    """Verify an episode metric enters its family's fold beside the stream metrics.
 
-    Mirrors `test_grade_stream_folds_its_own_score_in_as_one_more_equal_weight_child`:
-    a stub episode metric graded to one end of the scale, contrasted
-    against a stub stream metric graded to the other, makes the two
-    contributions distinguishable.
+    A stub episode metric graded to one end of the scale, contrasted
+    against a stub stream metric graded to the other, both in one family
+    with undecided weights, makes the two contributions distinguishable.
     """
 
     import kalanos.analysis.metrics.registry as registry
@@ -703,7 +705,9 @@ def test_report_grades_integrity_without_unverified_acquisition_timing():
     assert report.score.score == episode.score.score
     report_score = report.score.score
     assert report_score is not None
-    assert report_score > 85
+    # Integrity alone scores, each metric at its worst channel: flatline_pct
+    # 50 and missing_pct 100 at weight 4, snr_db 7.24 at weight 2.
+    assert report_score == pytest.approx(61.448, abs=1e-3)
 
     # Missing provenance must not turn a recorded-axis estimate into a
     # critical acquisition finding. The real channel finding keeps its address.
@@ -720,13 +724,16 @@ def test_report_grades_integrity_without_unverified_acquisition_timing():
 
 
 def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_children():
-    """Verify every level's score equals `rollup` applied to its own children.
+    """Verify every level's score equals its fold applied to its own children.
+
+    The episode reconstructs through `score_episode` over its streams and own
+    metrics; the stream and the dataset through `rollup`.
 
     A stream's score folds in its own metrics alongside its channels', so
     its independent reconstruction re-derives that contribution by calling
     `score_metrics` again over `stream.metrics` — deterministic, since
     interpolation depends only on the value each metric already carries.
-    Pins the wiring itself — that `assemble_report` calls `rollup` with the
+    Pins the wiring itself — that `assemble_report` calls each fold with the
     right children at the right level — as a separate concern from the
     previous test's real numbers, which pin that the walk reaches the
     right channels in the first place.
@@ -763,9 +770,7 @@ def test_assemble_report_rolls_up_exactly_like_an_independent_rollup_of_its_chil
     # The episode's `train_ready` is the compatibility mirror of its
     # eligibility, filled in by assembly; an independent rollup leaves it
     # `None`, so compare everything else.
-    independent_episode = rollup(
-        Level.EPISODE, [gs.score for gs in episode.streams], policy=policy
-    )
+    independent_episode = score_episode(episode.streams, episode.metrics, policy=policy)
     assert (
         independent_episode.model_copy(
             update={"train_ready": episode.score.train_ready}
