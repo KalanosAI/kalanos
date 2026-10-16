@@ -734,6 +734,15 @@ def test_commands_and_rewards_are_exempt_from_flatline(taxonomy_type):
     assert band.bad is None
 
 
+def test_frame_reward_is_exempt_from_spike():
+    """A computed reward steps up and down with the task, which reads as spikes."""
+
+    band = _entry(load_default_policy(), "spike_pct").thresholds["reward.frame_reward"]
+
+    assert band.good is None
+    assert band.bad is None
+
+
 def test_sensors_still_grade_flatline():
     """A stuck sensor is what the metric is for: measured signals keep the band."""
 

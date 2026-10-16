@@ -222,6 +222,11 @@ metrics:
       proprio.joint_velocity:
         good: 0.1
         bad: 2.0
+      # A computed reward steps up and down as the task progresses, which a 6σ
+      # local window reads as spikes (found on lerobot/pusht).
+      reward.frame_reward:
+          good: null
+          bad: null
 
   # Report-only by design: the documented threshold is a total change over
   # an episode, which this metric's per-minute unit cannot convert to

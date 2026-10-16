@@ -6,6 +6,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Changed
+
+- `spike_pct` no longer grades `reward.frame_reward` channels: a computed reward rises and falls in steps that read as spikes. The value is still reported, as `flatline_pct` already does for rewards.
+
 ### Fixed
 
 - `kalanos grade` and `kalanos benchmark` report a policy that weights some metrics or families and leaves another without a weight as one `kalanos:` line naming it, and exit 2 instead of printing a traceback and exiting 1. The Python API raises `MixedWeights`, which is still a `ValueError`.
