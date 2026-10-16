@@ -158,6 +158,9 @@ def grade(
         or if the bundle's diagnostic plan does not cover what the policy reviews.
     ConfigurationError
         If the bundle's policy cannot be located or loaded.
+    MixedWeights
+        If the policy weights some graded metrics of a family, or some scoring families,
+        and leaves another without a weight. It is also a `ValueError`.
 
     Notes
     -----

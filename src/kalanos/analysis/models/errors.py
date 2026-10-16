@@ -36,3 +36,12 @@ class ConfigurationError(KalanosError):
 
     Always a user-facing exit 2: the run never started.
     """
+
+
+class MixedWeights(ConfigurationError, ValueError):
+    """The policy weights some graded metrics or families and leaves another unweighted.
+
+    The mix is among one family's graded metrics, or among the scoring families.
+    Raised while scoring, once the metrics that grade are known.
+    It is also a `ValueError`, so callers catching `ValueError` catch it.
+    """

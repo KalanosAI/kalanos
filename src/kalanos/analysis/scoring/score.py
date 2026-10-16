@@ -29,6 +29,7 @@ from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 
 # Internal
+from kalanos.analysis.models.errors import MixedWeights
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
 from kalanos.analysis.models.report import GradedEpisode, GradedStream
@@ -542,6 +543,8 @@ def resolve_status(
 
 def _weighted_mean(
     contributions: Sequence[tuple[str, float, float | None]],
+    *,
+    family: str | None,
 ) -> float | None:
     """Weighted-average a list of (name, points, weight) contributions.
 
@@ -553,6 +556,8 @@ def _weighted_mean(
     ----------
     contributions : Sequence[tuple[str, float, float or None]]
         Each contribution's name (for the error message), its points, and its weight.
+    family : str or None
+        The family whose metrics are folded, or `None` when folding families.
 
     Returns
     -------
@@ -561,7 +566,7 @@ def _weighted_mean(
 
     Raises
     ------
-    ValueError
+    MixedWeights
         If some contributions carry a decided weight and others do not.
     """
 
@@ -573,9 +578,16 @@ def _weighted_mean(
         weight is None for weight in weights
     ):
         undecided = [name for name, _, weight in contributions if weight is None]
-        raise ValueError(
-            "mixes a decided weight with an undecided one among its "
-            f"contributions: {undecided} carry no weight"
+        names = ", ".join(undecided)
+        pronoun = "it" if len(undecided) == 1 else "them"
+        if family is None:
+            raise MixedWeights(
+                f"the policy weights some families but not {names}; "
+                f"give {pronoun} a family weight or leave every family without one"
+            )
+        raise MixedWeights(
+            f"the policy weights some {family} metrics but not {names}; "
+            f"give {pronoun} a weight or leave every {family} metric without one"
         )
 
     resolved = [
@@ -659,7 +671,7 @@ def score_metrics(
 
     Raises
     ------
-    ValueError
+    MixedWeights
         If the node's graded metrics mix a policy-decided weight with
         an undecided one, at either the per-family or the cross-family step.
     """
@@ -714,7 +726,7 @@ def score_metrics(
     contributing_metrics = 0
     failing = 0
     for family, contributions in by_family.items():
-        family_points = _weighted_mean(contributions)
+        family_points = _weighted_mean(contributions, family=family)
         if family_points is not None:
             family_scores.append(
                 (family, family_points, policy.family_weights.get(family))
@@ -728,7 +740,7 @@ def score_metrics(
     # Step 3: fold family scores into this node's own — this is missing_family:
     # skip, since a family that graded nothing simply never enters `family_scores`
     # in the first place.
-    score = _weighted_mean(family_scores)
+    score = _weighted_mean(family_scores, family=None)
     if score is None:
         return (
             graded,
@@ -836,7 +848,7 @@ def score_episode(
 
     Raises
     ------
-    ValueError
+    MixedWeights
         If a family's graded metrics, or the scoring families, mix a
         policy-decided weight with an undecided one.
     """
@@ -882,7 +894,7 @@ def score_episode(
         family_core = core.get(family)
         if family_core and not any(name in family_core for name, _, _ in contributions):
             continue
-        family_points = _weighted_mean(contributions)
+        family_points = _weighted_mean(contributions, family=family)
         if family_points is None:
             continue
         family_scores.append((family, family_points, policy.family_weights.get(family)))
@@ -893,7 +905,7 @@ def score_episode(
     metrics = dict(sorted(metrics.items()))
 
     # Step 4: the episode score is the family-weighted mean of its families.
-    score = _weighted_mean(family_scores)
+    score = _weighted_mean(family_scores, family=None)
     if score is None:
         return ScoreResult(
             level=Level.EPISODE,
