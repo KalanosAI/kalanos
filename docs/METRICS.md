@@ -452,7 +452,7 @@ A mean lets a minority of bad episodes hide: eight glitched episodes in fifty st
 
 **Every gated report states what readiness rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. A readiness of 100 graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the number. Required capabilities and metrics must be evaluated before an episode can pass. Optional missing capabilities do not invent a score penalty, but remain visible in the separate coverage ledger. Required acquisition timing, for example, stays unknown without usable producer capture evidence.
 
-A dataset graded with `legacy_0_5` gets no gate, reproducing a grade published before 0.6. `language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
+`language_conditioned` extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
 
 **Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 

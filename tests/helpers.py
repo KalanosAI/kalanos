@@ -25,9 +25,11 @@ from kalanos.analysis.models.domain import (
     TimestampDtype,
 )
 from kalanos.analysis.models.metrics import ChannelContext, StreamContext
+from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.report import GradedEpisode
 from kalanos.analysis.models.schema import SourceSchema
 from kalanos.analysis.models.scoring import ScoreResult
+from kalanos.assets.policy import load_policy
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -328,6 +330,25 @@ def write_spiked_arm(path: Path, n_episodes: int, glitched: set[int]) -> None:
                 signal[50:60] += 40.0
             group.create_dataset("joint_pos", data=signal)
             group.create_dataset("timestamp", data=t)
+
+
+def no_gate_policy(tmp_path: Path) -> Policy:
+    """The default policy with its dataset gate switched off.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        The directory to write the policy file into.
+
+    Returns
+    -------
+    Policy
+        The default policy, with `gate` set to `None`.
+    """
+
+    path = tmp_path / "no-gate-policy.yaml"
+    path.write_text("extends: default\ngate: null\n")
+    return load_policy(path)
 
 
 def channel_ctx(
