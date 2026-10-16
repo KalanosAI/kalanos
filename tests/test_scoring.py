@@ -1349,6 +1349,26 @@ def test_flatline_pct_stays_report_only_for_a_reward_channel(taxonomy_type: str)
     assert resolved.status == MetricStatus.REPORT_ONLY
 
 
+def test_spike_pct_stays_report_only_for_a_frame_reward():
+    """Verify a frame reward's spike_pct is reported but not graded.
+
+    A reward computed from object pose rises and falls in steps, which a
+    6σ local window reads as spikes, so its band is `None`/`None` and the
+    value passes through without points.
+    """
+
+    resolved = resolve_status(
+        _report_only(0.4, unit="%"),
+        metric_name="spike_pct",
+        taxonomy_type="reward.frame_reward",
+        policy=load_default_policy(),
+    )
+
+    assert resolved.status == MetricStatus.REPORT_ONLY
+    assert resolved.value == 0.4
+    assert resolved.points is None
+
+
 def test_drift_stays_report_only_by_policy_design():
     """Verify drift's ungraded reason names its design, not a missing band.
 
