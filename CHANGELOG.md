@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Fixed
+
+- `kalanos grade` and `kalanos benchmark` report a policy that weights some metrics or families and leaves another without a weight as one `kalanos:` line naming it, and exit 2 instead of printing a traceback and exiting 1. The Python API raises `MixedWeights`, which is still a `ValueError`.
+
 ## [0.8.0] - 2026-10-15
 
 Report schema 7.1.0.
