@@ -18,8 +18,8 @@ import yaml
 
 # Internal
 import kalanos
-from kalanos.analysis.models.provenance import ExecutionTier
-from kalanos.assets.policy import load_policy
+from kalanos.analysis.models.provenance import ExecutionTier, content_digest
+from kalanos.assets.policy import load_default_policy, load_policy
 
 # Local
 from helpers import FIXTURES_DIR
@@ -296,6 +296,68 @@ def test_a_policy_from_the_environment_overrides_the_default_weights(
     report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
 
     assert report.family_weights["integrity"] == 7
+
+
+def test_a_packaged_policy_from_the_environment_is_named_in_the_report(monkeypatch):
+    """Verify the report names a packaged policy from `KALANOS_POLICY_PATH`."""
+
+    monkeypatch.setenv("KALANOS_POLICY_PATH", "language_conditioned")
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.run is not None and report.run.policy is not None
+    assert report.run.policy.id == "language_conditioned"
+    assert report.run.policy.origin == "builtin"
+    assert report.scope is not None
+    assert report.scope.policy_id == "language_conditioned"
+    for episode in report.episodes:
+        assert episode.eligibility is not None
+        assert episode.eligibility.policy_id == "language_conditioned"
+
+
+def test_a_policy_file_from_the_environment_is_named_by_its_path(tmp_path, monkeypatch):
+    """Verify a policy file from the environment is named by its stem and path."""
+
+    path = tmp_path / "strict.yaml"
+    path.write_text("extends: default\n")
+    monkeypatch.setenv("KALANOS_POLICY_PATH", str(path))
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.run is not None and report.run.policy is not None
+    assert report.run.policy.origin == str(path)
+    assert report.run.policy.id == "strict"
+    assert report.scope is not None
+    assert report.scope.policy_id == "strict"
+
+
+def test_without_a_policy_in_the_environment_the_report_names_the_default():
+    """Verify a run with no policy override names the built-in default."""
+
+    report = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert report.run is not None and report.run.policy is not None
+    assert report.run.policy.id == "default-decisions-v1"
+    assert report.run.policy.origin == "builtin"
+    assert report.run.policy.digest == content_digest(
+        load_default_policy().model_dump(mode="json")
+    )
+    assert report.scope is not None
+    assert report.scope.policy_id == "default-decisions-v1"
+
+
+def test_an_explicit_policy_wins_over_the_environment(monkeypatch):
+    """Verify `policy=` keeps its own identity when `KALANOS_POLICY_PATH` is set."""
+
+    monkeypatch.setenv("KALANOS_POLICY_PATH", "language_conditioned")
+
+    report = kalanos.grade(
+        FIXTURES_DIR / "lerobot_v3_tiny", policy=load_default_policy()
+    )
+
+    assert report.run is not None and report.run.policy is not None
+    assert report.run.policy.id == "explicit-policy"
+    assert report.run.policy.origin == "argument"
 
 
 def test_grading_fails_naming_a_metric_left_without_a_weight(tmp_path):

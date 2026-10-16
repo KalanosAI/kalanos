@@ -113,6 +113,33 @@ def test_relative_bundle_policy_is_shared_by_grade_and_benchmark(tmp_path):
     assert bench.configuration["policy"] == report.run.policy
 
 
+def test_a_bundle_policy_path_wins_over_the_environment(tmp_path, monkeypatch):
+    (tmp_path / "review-policy.yaml").write_text("extends: default\n")
+    bundle = tmp_path / "bundle.yaml"
+    bundle.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "policy": {"id": "review-v1", "path": "review-policy.yaml"},
+            }
+        )
+    )
+    monkeypatch.setenv("KALANOS_POLICY_PATH", "language_conditioned")
+    report = grade(TINY_V3, bundle=bundle)
+    assert report.scope is not None and report.scope.policy_id == "review-v1"
+    assert report.run is not None and report.run.policy is not None
+    assert report.run.policy.origin is not None
+    assert report.run.policy.origin.endswith("review-policy.yaml")
+
+
+def test_an_environment_policy_is_shared_by_grade_and_benchmark(monkeypatch):
+    monkeypatch.setenv("KALANOS_POLICY_PATH", "language_conditioned")
+    report = grade(FIXTURE)
+    bench = benchmark_dataset(str(FIXTURE), sample=0)
+    assert report.run is not None
+    assert bench.configuration["policy"] == report.run.policy
+
+
 def test_missing_or_malformed_policy_is_a_configuration_error_exit_two(tmp_path):
     bundle = tmp_path / "bundle.yaml"
     bundle.write_text(
