@@ -1,0 +1,1264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>kalanos report — data/arm_multi_device.csv</title>
+<style>
+  :root {
+    --paper: #f4f1ea;
+    --panel: #e9e5dc;
+    --ink: #171717;
+    --prose: #3B1410;
+    --muted: #65625c;
+    --rule: #bbb7af;
+    --accent: #e63b2e;
+    --navy: #0a2540;
+    --warning: #f59e0b;
+    --good: #176b75;
+    --sans: 'IBM Plex Sans', 'Inter', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+
+  .column {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.5rem 4rem;
+  }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  /* The score rack: one grid declared once, reused at every level so the
+     rails share an alignment column all the way down the page. A node
+     with no score skips the rail element entirely, so each track is
+     pinned explicitly rather than left to fall out from source order. */
+  .row {
+    display: grid;
+    grid-template-columns: 2.25rem 1fr minmax(6rem, 13rem) 4rem;
+    align-items: baseline;
+    column-gap: 1rem;
+    padding: 0.5rem 0;
+  }
+  .row > .chip { grid-column: 1; }
+  .row > .name { grid-column: 2; }
+  .row > .rail { grid-column: 3; }
+  .row > .score { grid-column: 4; }
+
+  .chip {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-weight: 600;
+    border-radius: 3px;
+  }
+  .grade-a, .grade-b { background: var(--good); color: var(--paper); }
+  .grade-c, .grade-d { background: var(--warning); color: var(--ink); }
+  .grade-f { background: var(--accent); color: var(--paper); font-weight: 600; }
+  .grade-none { background: var(--panel); color: var(--muted); }
+
+  .rail {
+    display: inline-block;
+    width: 100%;
+    height: 0.5rem;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .rail-fill {
+    display: block;
+    height: 100%;
+    width: var(--fill);
+    background: var(--muted);
+  }
+  .rail-fill.grade-a, .rail-fill.grade-b { background: var(--good); }
+  .rail-fill.grade-c, .rail-fill.grade-d { background: var(--warning); }
+  .rail-fill.grade-f { background: var(--accent); }
+  .rail-fill.grade-none { background: var(--rule); }
+  @media (prefers-reduced-motion: no-preference) {
+    .rail-fill {
+      animation: fill-in 480ms cubic-bezier(.2,.7,.2,1) both;
+      animation-delay: calc(var(--i, 0) * 30ms);
+    }
+    @keyframes fill-in {
+      from { width: 0; }
+      to { width: var(--fill); }
+    }
+  }
+  .rail-sm { width: 4rem; height: 0.375rem; }
+
+  .score { font-family: var(--mono); font-size: 0.8125rem; text-align: right; }
+
+  .name { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+  .name-main { font-family: var(--sans); font-weight: 600; font-size: 0.9375rem; }
+  .name-sub { font-size: 0.8125rem; color: var(--muted); }
+  .metric-list { display: flex; flex-wrap: wrap; gap: 0.15rem 0.35rem; }
+
+  .marker {
+    display: inline-block;
+    margin-right: 0.35rem;
+    transition: transform 150ms ease;
+  }
+  .marker::before { content: "▸"; }
+  details[open] > summary .marker { transform: rotate(90deg); }
+
+  summary.row {
+    list-style: none;
+    cursor: pointer;
+  }
+  summary.row::-webkit-details-marker { display: none; }
+  summary.row:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .node-body {
+    border-left: 1px solid var(--rule);
+    padding-left: 1rem;
+    margin-left: 1.125rem;
+  }
+
+  /* A solid navy surface, so the top of the page reads as a device faceplate. */
+  header.plate {
+    background: var(--navy);
+    color: var(--paper);
+  }
+  header.plate .column { padding-top: 2rem; padding-bottom: 2rem; }
+  header.plate .path { font-family: var(--mono); font-size: 1.125rem; margin: 0.5rem 0 0; }
+  header.plate .meta {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+    margin: 0.5rem 0 0;
+  }
+  .plate-main {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .plate-score { display: flex; align-items: baseline; gap: 1rem; }
+  .dataset-score {
+    font-family: var(--mono);
+    font-size: clamp(3rem, 9vw, 4.75rem);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .verdict { font-family: var(--mono); font-size: 0.8125rem; letter-spacing: 0.03em; }
+  .verdict-good { color: var(--good); }
+  .verdict-bad { color: var(--accent); }
+  .verdict-unknown { color: var(--muted); }
+
+  .tiles-bar { background: var(--panel); border-bottom: 1px solid var(--rule); }
+  .tiles {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .tile { padding: 1rem 1.5rem; border-left: 1px solid var(--rule); }
+  .tile:first-child { border-left: none; }
+  .tile-count { font-family: var(--mono); font-size: 1.5rem; margin: 0; font-variant-numeric: tabular-nums; }
+  .tile-label { font-family: var(--mono); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted); margin: 0.15rem 0 0; }
+
+  section { padding-top: 2rem; }
+
+  .empty { color: var(--muted); }
+
+  table.findings { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
+  table.findings th, table.findings td { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+  table.findings td:first-child { padding-left: 0.75rem; border-left: 3px solid var(--bar, transparent); }
+  tr.sev-critical { --bar: var(--accent); }
+  tr.sev-warning { --bar: var(--warning); }
+  .points { display: flex; align-items: center; gap: 0.5rem; }
+
+  .toolbar { display: flex; align-items: baseline; justify-content: space-between; }
+  .toolbar-buttons { display: flex; gap: 0.5rem; }
+  .toolbar-buttons button {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    padding: 0.3rem 0.6rem;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .metric {
+    display: inline-block;
+    margin: 0.15rem 0.35rem 0.15rem 0;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    border: 1px solid;
+  }
+  .metric.status-good {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--good) 14%, var(--paper));
+    border-color: var(--good);
+    color: var(--ink);
+  }
+  .metric.status-warning {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--warning) 14%, var(--paper));
+    border-color: var(--warning);
+    color: var(--ink);
+  }
+  .metric.status-critical {
+    background: var(--panel);
+    background: color-mix(in srgb, var(--accent) 14%, var(--paper));
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+  .metric.status-not_applicable, .metric.status-report_only {
+    background: transparent;
+    border-color: var(--rule);
+    color: var(--muted);
+  }
+
+  .stream-metrics { margin-bottom: 0.25rem; }
+  .episode-metrics { margin-bottom: 0.75rem; }
+
+  table.plain { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-family: var(--mono); font-size: 0.8125rem; }
+  table.plain th, table.plain td { text-align: left; padding: 0.3rem 0.75rem; border-bottom: 1px solid var(--rule); }
+
+  @media (max-width: 40rem) {
+    .row { grid-template-columns: 2.25rem 1fr 4rem; }
+    .row > .rail { display: none; }
+    .row > .score { grid-column: 3; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+
+
+
+
+
+
+
+
+<header class="plate" data-level="dataset" data-name="data/arm_multi_device.csv" data-score="61.44832235703186">
+  <div class="column">
+    <p class="eyebrow" style="color: var(--paper); opacity: 0.7;">KALANOS &middot; DATASET REPORT</p>
+    <div class="plate-main">
+      <div>
+        <h1 class="path">data/arm_multi_device.csv</h1>
+        <p class="meta">
+          schema 7.1.0 &middot; policy v1 &middot; 0.05s
+        </p>
+      </div>
+      <div class="plate-score">
+        <span>Readiness</span>
+        <span class="dataset-score">61.4</span>
+        <span>Quality: 61.4</span>
+        
+        
+        <span class="verdict verdict-good">1/1 eligible</span>
+        
+        <span>Sufficiency: unknown</span>
+        
+        <span class="verdict verdict-unknown">scope numeric-core-v1 &middot; default-decisions-v1</span>
+        
+        
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="tiles-bar">
+  <div class="tiles">
+    <div class="tile">
+      <p class="tile-count">1</p>
+      <p class="tile-label">RECORDINGS</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">6</p>
+      <p class="tile-label">FINDINGS</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">0</p>
+      <p class="tile-label">NOT ANALYSED</p>
+    </div>
+    <div class="tile">
+      <p class="tile-count">0</p>
+      <p class="tile-label">NO SCHEMA</p>
+    </div>
+  </div>
+</div>
+
+<div class="column">
+
+<section aria-label="Family scores">
+  <h2>Family scores</h2>
+  <table class="plain">
+  <tr><th>Family</th><th>Score</th><th>Below 70</th><th>Lowest</th></tr>
+  <tr data-level="family" data-name="integrity" data-score="61.44832235703186" data-below="1" data-lowest="61.44832235703186"><td>Integrity</td><td class="mono">61</td><td class="mono">1 of 1</td><td class="mono">61.4</td></tr>
+  </table>
+</section>
+<section aria-label="Analysis coverage">
+  <h2>Analysis coverage</h2>
+  <p>numeric: 1/1 required episode checks computed; 0 unavailable, 0 skipped, 0 errors</p><p>behavioral_diversity: 0/0 episode computed; 1 not required</p><p>capture_origin_evidence: 0/4 stream_episode computed; 0 not required</p><p>semantic_mapping: 12/12 channel_episode computed; 0 not required</p><p>Visual quality not evaluated: 0 of 0 discovered camera stream-episodes examined; decoded frame coverage unknown.</p><p>Coverage counts loaded subjects only; 0 known episodes unassessed, 0 refused sources; inventory complete.</p>
+  <details><summary>Metric coverage counts</summary><table class="plain"><tr><th>Metric</th><th>Computed / eligible</th><th>Unit</th><th>Unavailable / skipped / error</th><th>Not applicable</th></tr>
+  <tr><td>annotation.task_instruction_missing</td><td>0 / 1</td><td>episode_episode</td><td>1 / 0 / 0</td><td>0</td></tr><tr><td>integrity.dead_taxel_pct</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>integrity.drift</td><td>11 / 12</td><td>channel_episode</td><td>1 / 0 / 0</td><td>0</td></tr><tr><td>integrity.flatline_pct</td><td>12 / 12</td><td>channel_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>integrity.hysteresis</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>integrity.missing_pct</td><td>12 / 12</td><td>channel_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>integrity.snr_db</td><td>11 / 12</td><td>channel_episode</td><td>1 / 0 / 0</td><td>0</td></tr><tr><td>integrity.spike_pct</td><td>0 / 12</td><td>channel_episode</td><td>12 / 0 / 0</td><td>0</td></tr><tr><td>motion.action_chatter</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>motion.energy_proxy</td><td>0 / 1</td><td>episode_episode</td><td>1 / 0 / 0</td><td>0</td></tr><tr><td>motion.hf_vibration_ratio</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.limit_proximity_pct</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.log_dimensionless_jerk</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.max_abs_jerk</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>motion.max_torque</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.mean_jerk_norm</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>motion.mean_torque</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.p99_torque</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.still_drift</td><td>0 / 0</td><td>stream_episode</td><td>0 / 0 / 0</td><td>4</td></tr><tr><td>motion.vel_saturation_pct</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>motion.velocity_spike_pct</td><td>0 / 0</td><td>channel_episode</td><td>0 / 0 / 0</td><td>12</td></tr><tr><td>timing.drop_rate</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>timing.dt_jitter_ms</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>timing.effective_hz</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>timing.monotonic_violations</td><td>4 / 4</td><td>stream_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>timing.recorded_drop_estimate</td><td>4 / 4</td><td>stream_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>timing.recorded_dt_spread_ms</td><td>4 / 4</td><td>stream_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>timing.recorded_hz</td><td>4 / 4</td><td>stream_episode</td><td>0 / 0 / 0</td><td>0</td></tr><tr><td>vision.blank_frame_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.bright_frame_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.camera_stream_present</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.camera_sync_skew_ms</td><td>0 / 1</td><td>episode_episode</td><td>1 / 0 / 0</td><td>0</td></tr><tr><td>vision.contrast_score</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.cut_count</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.dark_frame_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.dropped_chunk_count</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.exposure_level</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.exposure_shift_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.frame_count_vs_timebase</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.frozen_frame_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.max_gap_s</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.pts_defect_pct</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.sharpness_score</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.video_control_lag_ms</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr><tr><td>vision.video_format_consistency</td><td>0 / 4</td><td>stream_episode</td><td>4 / 0 / 0</td><td>0</td></tr>
+  </table></details>
+</section>
+<details><summary>Finding groups</summary><p>integrity.flatline_pct · proprio.ee_pose · csv ·  · report_only: 1 findings across 1 episodes. <a href="#finding-571034c352d4d4524c8c87fbd4653c655f21c49f101222d7b74d2f75edba5915">1</a> </p><p>integrity.snr_db · proprio.ee_pose · csv ·  · report_only: 5 findings across 1 episodes. <a href="#finding-81d59d82f4ff469b8493eb413fd767b8bba0768c7d05e81a0f37a81e047752a9">1</a> <a href="#finding-9ab4e39bd88eead50c323d4fb346b0b91fb4033afee23aa1590c3127d6a0c24b">2</a> <a href="#finding-756a4d45eca405b08c45cced2bad22c7c9cdbabe2f56b26e97eed819d3e2a402">3</a> <a href="#finding-4418939302f488f7be221542a2d3c129bc982d43215d10f3703f84859dffbad2">4</a> <a href="#finding-f6f814d37d2ef1ff4c2f1e208553c1521c38e71aa0ccfd7fc8bdb059c8e05ec1">5</a> </p></details>
+<section class="findings-section">
+  <h2 class="eyebrow">FINDINGS</h2>
+  
+  <table class="findings">
+    <thead>
+      <tr><th>severity</th><th>metric</th><th>location</th><th>value</th><th>points</th></tr>
+    </thead>
+    <tbody>
+    
+    <tr class="sev-warning" id="finding-81d59d82f4ff469b8493eb413fd767b8bba0768c7d05e81a0f37a81e047752a9" style="--i: 0">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.snr_db</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armC &middot; tcp_pose_z_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>whole_episode</details></td>
+  <td class="mono">16.09 dB</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 7.241611785159279%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">7</span></td>
+</tr>
+    
+    <tr class="sev-warning" id="finding-9ab4e39bd88eead50c323d4fb346b0b91fb4033afee23aa1590c3127d6a0c24b" style="--i: 1">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.snr_db</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armC &middot; tcp_pose_y_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>whole_episode</details></td>
+  <td class="mono">22 dB</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 46.64428174633191%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">47</span></td>
+</tr>
+    
+    <tr class="sev-warning" id="finding-571034c352d4d4524c8c87fbd4653c655f21c49f101222d7b74d2f75edba5915" style="--i: 2">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.flatline_pct</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armB &middot; tcp_pose_z_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>intervals<br>[2, 3)<br>[6, 7)<br>[9, 10)<br>[14, 15)<br>[18, 19)<br>[22, 23)<br>[26, 27)<br>[29, 30)<br>[34, 35)<br>[37, 38)<br>[42, 43)<br>[46, 47)<br>[50, 51)<br>[54, 55)<br>[58, 59)<br>[61, 62)<br>[66, 67)<br>[69, 70)<br>[74, 75)<br>[77, 78)<br>[81, 82)<br>[85, 86)<br>[87, 88)<br>[90, 91)<br>[94, 95)<br>[97, 98)<br>[100, 101)<br>[104, 105)<br>[108, 109)<br>[113, 114)<br>[117, 118)<br>[120, 121)<br>[125, 126)<br>[129, 130)<br>[132, 133)<br>[137, 138)<br>[140, 141)<br>[144, 145)<br>[148, 149)<br>[153, 154)<br>[156, 157)<br>[160, 161)<br>[165, 166)<br>[168, 169)<br>[173, 174)<br>[176, 177)<br>[180, 181)<br>[184, 185)<br>[189, 190)<br>[193, 194)</details></td>
+  <td class="mono">100 %</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 50.0%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">50</span></td>
+</tr>
+    
+    <tr class="sev-warning" id="finding-756a4d45eca405b08c45cced2bad22c7c9cdbabe2f56b26e97eed819d3e2a402" style="--i: 3">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.snr_db</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armA &middot; tcp_pose_z_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>whole_episode</details></td>
+  <td class="mono">23.59 dB</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 57.2635497620561%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">57</span></td>
+</tr>
+    
+    <tr class="sev-warning" id="finding-4418939302f488f7be221542a2d3c129bc982d43215d10f3703f84859dffbad2" style="--i: 4">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.snr_db</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armD &middot; tcp_pose_z_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>whole_episode</details></td>
+  <td class="mono">23.59 dB</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 57.27423406279563%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">57</span></td>
+</tr>
+    
+    <tr class="sev-warning" id="finding-f6f814d37d2ef1ff4c2f1e208553c1521c38e71aa0ccfd7fc8bdb059c8e05ec1" style="--i: 5">
+  <td>warning / report_only</td>
+  <td class="mono">integrity.snr_db</td>
+  <td class="mono">arm_multi_device.csv &middot; proprio.ee_pose &middot; armC &middot; tcp_pose_x_mm<details><summary>Evidence location</summary>tcp_pose data/arm_multi_device.csv<br>whole_episode</details></td>
+  <td class="mono">27.4 dB</td>
+  <td class="points"><span class="rail rail-sm" style="--fill: 82.68190605367232%" aria-hidden="true"><span class="rail-fill"></span></span><span class="mono">83</span></td>
+</tr>
+    
+    </tbody>
+  </table>
+  
+  
+</section>
+
+<section class="recordings-section">
+  <div class="toolbar">
+    <h2 class="eyebrow">RECORDINGS</h2>
+    <div class="toolbar-buttons">
+      <button type="button" id="expand-all">Expand all</button>
+      <button type="button" id="collapse-all">Collapse all</button>
+    </div>
+  </div>
+
+  
+  <details class="node" data-node
+      data-level="episode" data-name="arm_multi_device.csv" data-score="61.44832235703186"
+      open>
+    <summary class="row" style="--i: 0">
+      <span class="chip grade-d">D</span>
+      <span class="name">
+        <span class="name-main"><span class="marker" aria-hidden="true"></span>arm_multi_device.csv</span>
+        <span class="name-sub mono">data/arm_multi_device.csv</span>
+      </span>
+      <span class="rail" style="--fill: 61.44832235703186%" aria-hidden="true"><span class="rail-fill grade-d"></span></span>
+      <span class="score">D 61.4</span>
+    </summary>
+    <div class="node-body">
+      
+      <div class="stream-metrics episode-metrics">
+        
+        <span class="metric status-not_applicable" data-status="not_applicable">task_instruction_missing: —</span>
+        
+        <span class="metric status-not_applicable" data-status="not_applicable">camera_sync_skew_ms: —</span>
+        
+        <span class="metric status-not_applicable" data-status="not_applicable">energy_proxy: —</span>
+        
+      </div>
+      
+      
+      <details class="node" data-node
+          data-level="stream" data-name="proprio.ee_pose"
+          data-instance="armA" data-attribution="keyed"
+          data-score="97.15090331747041"
+          open>
+        <summary class="row" style="--i: 0">
+          <span class="chip grade-a">A</span>
+          <span class="name">
+            <span class="name-main mono"><span class="marker" aria-hidden="true"></span>proprio.ee_pose &middot; armA</span>
+            <span class="name-sub">3 channels</span>
+          </span>
+          <span class="rail" style="--fill: 97.15090331747041%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+          <span class="score">A 97.2</span>
+        </summary>
+        <div class="node-body">
+          
+          <div class="stream-metrics">
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">sharpness_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_shift_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_level: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">blank_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">contrast_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dark_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">bright_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frame_count_vs_timebase: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">pts_defect_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_gap_s: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">camera_stream_present: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_format_consistency: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frozen_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">cut_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dropped_chunk_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_control_lag_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dead_taxel_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">hysteresis: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">mean_jerk_norm: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_abs_jerk: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">action_chatter: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">still_drift: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">effective_hz: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dt_jitter_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">drop_rate: —</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_hz: 100 Hz</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_dt_spread_ms: 0 ms</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_drop_estimate: 0 fraction</span>
+            
+            <span class="metric status-report_only" data-status="report_only">monotonic_violations: 0 count</span>
+            
+          </div>
+          
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_x_mm" data-score="100.0" style="--i: 0">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_x_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 4.082 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: 2290 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_y_mm" data-score="100.0" style="--i: 1">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_y_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -72.03 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_z_mm" data-score="91.45270995241121" style="--i: 2">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_z_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: 228.1 unit/min</span>
+                
+                <span class="metric status-warning" data-status="warning">snr_db: 23.59 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 91.45270995241121%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 91.5</span>
+          </div>
+          
+        </div>
+      </details>
+      
+      <details class="node" data-node
+          data-level="stream" data-name="proprio.ee_pose"
+          data-instance="armB" data-attribution="keyed"
+          data-score="91.66666666666667"
+          open>
+        <summary class="row" style="--i: 1">
+          <span class="chip grade-a">A</span>
+          <span class="name">
+            <span class="name-main mono"><span class="marker" aria-hidden="true"></span>proprio.ee_pose &middot; armB</span>
+            <span class="name-sub">3 channels</span>
+          </span>
+          <span class="rail" style="--fill: 91.66666666666667%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+          <span class="score">A 91.7</span>
+        </summary>
+        <div class="node-body">
+          
+          <div class="stream-metrics">
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">sharpness_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_shift_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_level: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">blank_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">contrast_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dark_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">bright_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frame_count_vs_timebase: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">pts_defect_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_gap_s: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">camera_stream_present: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_format_consistency: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frozen_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">cut_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dropped_chunk_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_control_lag_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dead_taxel_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">hysteresis: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">mean_jerk_norm: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_abs_jerk: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">action_chatter: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">still_drift: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">effective_hz: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dt_jitter_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">drop_rate: —</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_hz: 100 Hz</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_dt_spread_ms: 0 ms</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_drop_estimate: 0 fraction</span>
+            
+            <span class="metric status-report_only" data-status="report_only">monotonic_violations: 0 count</span>
+            
+          </div>
+          
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_x_mm" data-score="100.0" style="--i: 0">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_x_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -115.2 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_y_mm" data-score="100.0" style="--i: 1">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_y_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 4.082 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -1374 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_z_mm" data-score="75.0" style="--i: 2">
+            <span class="chip grade-c">C</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_z_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-warning" data-status="warning">flatline_pct: 100 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">drift: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">snr_db: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 75.0%" aria-hidden="true"><span class="rail-fill grade-c"></span></span>
+            <span class="score">C 75.0</span>
+          </div>
+          
+        </div>
+      </details>
+      
+      <details class="node" data-node
+          data-level="stream" data-name="proprio.ee_pose"
+          data-instance="armC" data-attribution="keyed"
+          data-score="89.10451997234422"
+          open>
+        <summary class="row" style="--i: 2">
+          <span class="chip grade-b">B</span>
+          <span class="name">
+            <span class="name-main mono"><span class="marker" aria-hidden="true"></span>proprio.ee_pose &middot; armC</span>
+            <span class="name-sub">3 channels</span>
+          </span>
+          <span class="rail" style="--fill: 89.10451997234422%" aria-hidden="true"><span class="rail-fill grade-b"></span></span>
+          <span class="score">B 89.1</span>
+        </summary>
+        <div class="node-body">
+          
+          <div class="stream-metrics">
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">sharpness_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_shift_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_level: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">blank_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">contrast_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dark_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">bright_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frame_count_vs_timebase: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">pts_defect_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_gap_s: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">camera_stream_present: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_format_consistency: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frozen_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">cut_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dropped_chunk_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_control_lag_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dead_taxel_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">hysteresis: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">mean_jerk_norm: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_abs_jerk: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">action_chatter: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">still_drift: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">effective_hz: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dt_jitter_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">drop_rate: —</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_hz: 100 Hz</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_dt_spread_ms: 7.538 ms</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_drop_estimate: 0.1 fraction</span>
+            
+            <span class="metric status-report_only" data-status="report_only">monotonic_violations: 0 count</span>
+            
+          </div>
+          
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_x_mm" data-score="96.53638121073446" style="--i: 0">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_x_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: 129.4 unit/min</span>
+                
+                <span class="metric status-warning" data-status="warning">snr_db: 27.4 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 96.53638121073446%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 96.5</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_y_mm" data-score="89.32885634926636" style="--i: 1">
+            <span class="chip grade-b">B</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_y_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 4.545 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: 792.3 unit/min</span>
+                
+                <span class="metric status-warning" data-status="warning">snr_db: 22 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 89.32885634926636%" aria-hidden="true"><span class="rail-fill grade-b"></span></span>
+            <span class="score">B 89.3</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_z_mm" data-score="81.44832235703186" style="--i: 2">
+            <span class="chip grade-b">B</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_z_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -120.7 unit/min</span>
+                
+                <span class="metric status-warning" data-status="warning">snr_db: 16.09 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 81.44832235703186%" aria-hidden="true"><span class="rail-fill grade-b"></span></span>
+            <span class="score">B 81.4</span>
+          </div>
+          
+        </div>
+      </details>
+      
+      <details class="node" data-node
+          data-level="stream" data-name="proprio.ee_pose"
+          data-instance="armD" data-attribution="keyed"
+          data-score="97.15161560418638"
+          open>
+        <summary class="row" style="--i: 3">
+          <span class="chip grade-a">A</span>
+          <span class="name">
+            <span class="name-main mono"><span class="marker" aria-hidden="true"></span>proprio.ee_pose &middot; armD</span>
+            <span class="name-sub">3 channels</span>
+          </span>
+          <span class="rail" style="--fill: 97.15161560418638%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+          <span class="score">A 97.2</span>
+        </summary>
+        <div class="node-body">
+          
+          <div class="stream-metrics">
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">sharpness_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_shift_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">exposure_level: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">blank_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">contrast_score: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dark_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">bright_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frame_count_vs_timebase: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">pts_defect_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_gap_s: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">camera_stream_present: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_format_consistency: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">frozen_frame_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">cut_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dropped_chunk_count: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">video_control_lag_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dead_taxel_pct: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">hysteresis: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">mean_jerk_norm: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">max_abs_jerk: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">action_chatter: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">still_drift: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">effective_hz: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">dt_jitter_ms: —</span>
+            
+            <span class="metric status-not_applicable" data-status="not_applicable">drop_rate: —</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_hz: 100 Hz</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_dt_spread_ms: 4.067 ms</span>
+            
+            <span class="metric status-report_only" data-status="report_only">recorded_drop_estimate: 0 fraction</span>
+            
+            <span class="metric status-report_only" data-status="report_only">monotonic_violations: 0 count</span>
+            
+          </div>
+          
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_x_mm" data-score="100.0" style="--i: 0">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_x_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: 902.9 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_y_mm" data-score="100.0" style="--i: 1">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_y_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 0 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -686.9 unit/min</span>
+                
+                <span class="metric status-good" data-status="good">snr_db: 35.93 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 100.0%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 100.0</span>
+          </div>
+          
+          <div class="row" data-level="channel" data-name="tcp_pose_z_mm" data-score="91.45484681255913" style="--i: 2">
+            <span class="chip grade-a">A</span>
+            <span class="name">
+              <span class="name-main mono">tcp_pose_z_mm</span>
+              
+              <span class="metric-list">
+                
+                <span class="metric status-good" data-status="good">missing_pct: 0 %</span>
+                
+                <span class="metric status-good" data-status="good">flatline_pct: 4.082 %</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">spike_pct: —</span>
+                
+                <span class="metric status-report_only" data-status="report_only">drift: -21.75 unit/min</span>
+                
+                <span class="metric status-warning" data-status="warning">snr_db: 23.59 dB</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">velocity_spike_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">log_dimensionless_jerk: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">vel_saturation_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">limit_proximity_pct: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">hf_vibration_ratio: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">p99_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">max_torque: —</span>
+                
+                <span class="metric status-not_applicable" data-status="not_applicable">mean_torque: —</span>
+                
+              </span>
+              
+            </span>
+            <span class="rail" style="--fill: 91.45484681255913%" aria-hidden="true"><span class="rail-fill grade-a"></span></span>
+            <span class="score">A 91.5</span>
+          </div>
+          
+        </div>
+      </details>
+      
+    </div>
+  </details>
+  
+</section>
+
+
+
+
+
+
+
+</div>
+
+<script>
+const nodes = document.querySelectorAll("details[data-node]");
+document.getElementById("expand-all").addEventListener("click", () => nodes.forEach(n => n.open = true));
+document.getElementById("collapse-all").addEventListener("click", () => nodes.forEach(n => n.open = false));
+</script>
+
+</body>
+</html>
