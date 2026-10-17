@@ -2,7 +2,7 @@
 
 Audit robot recordings before selecting data for training. Kalanos reports technical quality findings at episode, stream and channel level, shows which checks ran, and assigns each episode a decision under a named evaluation scope. Use the HTML report to investigate problems and the JSON report to automate review.
 
-![Kalanos report summary for the CSV fixture: readiness 61.4, one eligible recording and six findings](assets/arm-audit-overall.png)
+![Kalanos report summary for the CSV fixture: readiness 61.4, one eligible recording and six findings](docs/assets/arm-audit-overall.png)
 
 *User-provided screenshot of the generated report: readiness 61.4 and 1/1 eligible under `numeric-core-v1`. Sufficiency is separately reported as unknown; eligibility does not establish that this dataset is sufficient for training.*
 
@@ -46,9 +46,9 @@ The sample is a **synthetic test fixture**, not a real-world evaluation dataset.
 
 ## See the result
 
-The included [actual HTML report](reports/arm-audit.html) and [JSON report](reports/arm-audit.json) were generated with a clean base installation of 0.8.0 on macOS ARM64, Python 3.14.7. The macOS run is tested; Linux and Windows command variants have not been executed in this review.
+The included [actual HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON report](docs/examples/arm-audit/reports/arm-audit.json) were generated with a clean base installation of 0.8.0 on macOS ARM64, Python 3.14.7. The macOS run is tested; Linux and Windows command variants have not been executed in this review.
 
-Observed output, shortened from [the captured stdout](provenance/html-stdout.txt):
+Observed output, shortened:
 
 ```text
 Assessment  Ready
@@ -63,7 +63,7 @@ Flagged channels
 
 Both report commands exited **0**. JSON records readiness `61.44832235703186`, complete inventory and one `pass` episode. The terminal labels that passing count “eligible.” The flatlined `armB` z channel and five low signal-to-noise channels are **report-only** findings under this scope. Inspect them before selecting data: a passing episode can still have quality problems. All four streams have unknown clock provenance; this result does not certify capture timing or claim that every planted defect blocks training.
 
-![Expanded CSV recording showing score 61.4 and the armA pose stream with score 97.2 and recorded timing metrics](assets/arm-audit-detail.png)
+![Expanded CSV recording showing score 61.4 and the armA pose stream with score 97.2 and recorded timing metrics](docs/assets/arm-audit-detail.png)
 
 *User-provided detail view: the recording scores 61.4 while the expanded `armA` stream scores 97.2. Recorded cadence is shown as 100 Hz; the unknown clock provenance still prevents treating this as capture-timing certification. Dashes are not passing results—inspect applicability and evidence in the full report.*
 
@@ -122,4 +122,4 @@ Kalanos checks technical recording quality within the evidence and scope availab
 
 [Source](https://github.com/KalanosAI/kalanos) · [PyPI 0.8.0](https://pypi.org/project/kalanos/0.8.0/) · [Report schema](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/SCHEMA.md) · [Contributing](https://github.com/KalanosAI/kalanos/blob/v0.8.0/CONTRIBUTING.md) · [Issues](https://github.com/KalanosAI/kalanos/issues) · [Apache-2.0 license](https://github.com/KalanosAI/kalanos/blob/v0.8.0/LICENSE)
 
-Review evidence: [run metadata and exit codes](provenance/run.json), [resolved dependencies](provenance/requirements-resolved.txt), and [verification notes](provenance/verification.txt).
+Review evidence: [run metadata and exit codes](docs/examples/arm-audit/provenance/run.json), [resolved dependencies](docs/examples/arm-audit/provenance/requirements-resolved.txt), and [verification notes](docs/examples/arm-audit/provenance/verification.txt).
