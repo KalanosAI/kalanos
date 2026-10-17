@@ -1,54 +1,61 @@
 # Kalanos
 
-Audit robot recordings before selecting data for training. Kalanos reports technical quality findings at episode, stream and channel level, shows which checks ran, and assigns each episode a decision under a named evaluation scope. Use the HTML report to investigate problems and the JSON report to automate review.
+[![PyPI](https://img.shields.io/pypi/v/kalanos)](https://pypi.org/project/kalanos/)
+[![Python](https://img.shields.io/pypi/pyversions/kalanos)](https://pypi.org/project/kalanos/)
+[![CI](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml/badge.svg)](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml)
+[![License](https://img.shields.io/github/license/KalanosAI/kalanos)](LICENSE)
 
-![Kalanos report summary for the CSV fixture: readiness 61.4, one eligible recording and six findings](docs/assets/arm-audit-overall.png)
+Kalanos audits robot recordings for technical quality problems — dropped samples, flatlined sensors, clock jitter, missing evidence — before you commit them to a training set. It reports findings at episode, stream and channel level, shows which checks ran, and gives every episode a decision under a named evaluation scope. Use the HTML report to investigate and the JSON report to automate.
 
-*User-provided screenshot of the generated report: readiness 61.4 and 1/1 eligible under `numeric-core-v1`. Sufficiency is separately reported as unknown; eligibility does not establish that this dataset is sufficient for training.*
+```bash
+pip install kalanos
+kalanos grade my_recordings/ --report report.html
+```
 
-## Try a small audit
+Everything runs on your machine. Nothing is uploaded unless you choose to publish.
 
-Requires Python 3.10+. This example uses the released **Kalanos 0.8.0** package and a small official CSV fixture. It needs no repository clone, account, API key or model service.
+**Reads out of the box:** CSV, JSON, JSONL, delimited text, LeRobot directories.
+**With extras:** HDF5, MCAP / ROS 2, Hugging Face datasets, sampled video checks. See [Install extras](#install-extras).
 
-Create and activate a virtual environment on macOS or Linux:
+![Kalanos report summary for the sample fixture: readiness 61.4, one eligible recording and six findings](docs/assets/arm-audit-overall.png)
+
+*Report summary for the sample fixture: readiness 61.4, 1 of 1 episodes eligible under `numeric-core-v1`. Sufficiency is reported separately as unknown — eligibility does not mean the dataset is sufficient for training.*
+
+## Quickstart
+
+Requires Python 3.10+. This walkthrough uses the released **0.8.0** package and a small official sample. No clone, account, API key or model service is needed.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+
+python -m pip install "kalanos==0.8.0"
+python -m pip show kalanos
+
+python -c "from urllib.request import urlretrieve; urlretrieve('https://raw.githubusercontent.com/KalanosAI/kalanos/v0.8.0/tests/fixtures/arm_multi_device.csv', 'arm_multi_device.csv')"
+
+kalanos grade arm_multi_device.csv --report report.html
+kalanos grade arm_multi_device.csv --report report.json
+kalanos inspect report.json
 ```
 
-On Windows PowerShell, use these commands instead (no activation-policy change needed):
+Open `report.html` in your browser. `kalanos inspect` prints a terminal summary of a saved JSON report.
+
+<details>
+<summary>Windows (PowerShell)</summary>
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` instead of `python` and `.\.venv\Scripts\kalanos.exe` instead of `kalanos` below.
+If PowerShell blocks activation, call `.\.venv\Scripts\python.exe` and `.\.venv\Scripts\kalanos.exe` directly instead of `python` and `kalanos`. The remaining commands are the same.
 
-Install the pinned release, download the pinned sample, and write both reports:
+</details>
 
-```bash
-python -m pip install "kalanos==0.8.0"
-python -c "from importlib.metadata import version; print(version('kalanos'))"
-python -c "from urllib.request import urlretrieve; urlretrieve('https://raw.githubusercontent.com/KalanosAI/kalanos/1ff101067a54357146e140387d7d95d1c190a547/tests/fixtures/arm_multi_device.csv', 'arm_multi_device.csv')"
-kalanos grade arm_multi_device.csv --report report.html --no-color
-kalanos grade arm_multi_device.csv --report report.json --no-color
-```
+The sample is a **synthetic test fixture**: four interleaved arm streams with a flatlined channel, dropped samples and clock jitter, treated as one episode. It demonstrates parsing and findings, not detection accuracy or training performance. See the [fixture description](tests/fixtures/README.md).
 
-Open `report.html` in your browser from your file manager. For a terminal summary of the saved JSON:
-
-```bash
-kalanos inspect report.json
-```
-
-The sample is a **synthetic test fixture**, not a real-world evaluation dataset. Four interleaved arm streams include a flatlined channel, dropped samples and clock jitter; Kalanos treats this file as **one episode**. The fixture demonstrates parsing and findings, not detection accuracy or training performance. Its source is pinned to the [0.8.0 commit](https://github.com/KalanosAI/kalanos/tree/1ff101067a54357146e140387d7d95d1c190a547); see the [fixture description](https://github.com/KalanosAI/kalanos/blob/1ff101067a54357146e140387d7d95d1c190a547/tests/fixtures/README.md).
-
-## See the result
-
-The included [actual HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON report](docs/examples/arm-audit/reports/arm-audit.json) were generated with a clean base installation of 0.8.0 on macOS ARM64, Python 3.14.7. The macOS run is tested; Linux and Windows command variants have not been executed in this review.
-
-Observed output, shortened:
+### What you should see
 
 ```text
 Assessment  Ready
@@ -61,35 +68,37 @@ Flagged channels
   repeated values      1 of 12 channels  1 episode  Integrity
 ```
 
-Both report commands exited **0**. JSON records readiness `61.44832235703186`, complete inventory and one `pass` episode. The terminal labels that passing count “eligible.” The flatlined `armB` z channel and five low signal-to-noise channels are **report-only** findings under this scope. Inspect them before selecting data: a passing episode can still have quality problems. All four streams have unknown clock provenance; this result does not certify capture timing or claim that every planted defect blocks training.
+Both commands exit `0`. The JSON records readiness `61.44832235703186`, a complete inventory and one `pass` episode. The flatlined `armB` z channel and five low signal-to-noise channels are **report-only** findings under this scope — a passing episode can still have quality problems worth inspecting before selection.
 
-![Expanded CSV recording showing score 61.4 and the armA pose stream with score 97.2 and recorded timing metrics](docs/assets/arm-audit-detail.png)
+![Expanded recording view showing score 61.4 and the armA pose stream at 97.2 with recorded timing metrics](docs/assets/arm-audit-detail.png)
 
-*User-provided detail view: the recording scores 61.4 while the expanded `armA` stream scores 97.2. Recorded cadence is shown as 100 Hz; the unknown clock provenance still prevents treating this as capture-timing certification. Dashes are not passing results—inspect applicability and evidence in the full report.*
+*Detail view: the recording scores 61.4 while the expanded `armA` stream scores 97.2. Cadence is shown as recorded (100 Hz); clock provenance is unknown, so this is not a capture-timing certification. Dashes mean not applicable or no evidence, not a pass.*
 
-## Decide what to do next
+The full [HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON report](docs/examples/arm-audit/reports/arm-audit.json) from this run are included, generated with a clean install of 0.8.0 on macOS ARM64 / Python 3.14.7.
+
+## Reading a decision
 
 | Episode decision | Meaning under the selected scope | Next action |
 |---|---|---|
-| `pass` | Required evidence is sufficient and no blocking or review decision remains | Inspect report-only findings and confirm the scope fits your use |
+| `pass` (shown as **eligible** in terminal output) | Required evidence is sufficient; no blocking or review decision remains | Inspect report-only findings and confirm the scope fits your use |
 | `blocked` | A finding has an authorized blocking consequence | Fix or exclude the episode, then rerun |
 | `review` | A finding needs a decision or supporting validation | Review the evidence and resolve it before selection |
 | `unknown` | Required evidence is missing or unavailable | Supply the needed data, mapping or dependency, then rerun |
 
-Readiness combines passing-episode quality with the passing share; blocked episodes contribute zero. It can be **undefined** when review, unknown decisions or incomplete inventory prevent a supported whole-dataset value. Read the reported reason rather than treating undefined as zero or a pass. See [decision semantics](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/DECISIONS.md).
+**Readiness** combines passing-episode quality with the passing share; blocked episodes contribute zero. It can be **undefined** when review or unknown decisions, or an incomplete inventory, prevent a supported whole-dataset value — read the reported reason rather than treating undefined as zero or as a pass. Full semantics: [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Audit your own recordings
 
 ```bash
 kalanos grade recording.csv --report recording.html
-kalanos grade dataset/ --report dataset.json
-kalanos profiles list
-kalanos adapters
+kalanos grade dataset/ --report dataset.json     # directories are walked recursively
+kalanos profiles list                            # available evaluation scopes
+kalanos adapters                                 # available readers
 ```
 
-A directory is walked recursively. Start with a small local subset, check inventory and skipped files, and choose a scope appropriate to your intended use. Use this workflow to triage a recording batch, investigate a sensor channel, or review a vendor delivery. Compare runs only when scope and recorded identities are compatible.
+Start with a small local subset, check the inventory and skipped files, and pick a scope that matches your intended use. Typical uses: triaging a recording batch, investigating a sensor channel, or reviewing a vendor delivery. Compare runs only when scope and recorded identities are compatible.
 
-The base install reads CSV, JSON, JSONL, delimited text and LeRobot directories. Reader dependencies and optional checks are separate:
+### Install extras
 
 | Need | Install |
 |---|---|
@@ -100,26 +109,42 @@ The base install reads CSV, JSON, JSONL, delimited text and LeRobot directories.
 | Sampled video checks, including LeRobot video | `python -m pip install "kalanos[video]==0.8.0"` |
 | All extras | `python -m pip install "kalanos[all]==0.8.0"` |
 
-Missing reader dependencies can prevent loading a format. A missing optional check is reported as unavailable; if the scope requires its capability, that missing evidence can make the episode unknown. Installing an extra alone does not change the scope's requirements. See [metrics](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/METRICS.md), [profiles](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/PROFILES.md) and [diagnostics](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/DIAGNOSTICS.md).
+A missing reader dependency prevents loading that format. A missing optional check is reported as unavailable; if the scope requires its capability, the missing evidence can make an episode `unknown`. Installing an extra does not change what a scope requires. See [metrics](docs/METRICS.md), [profiles](docs/PROFILES.md), [adapters](docs/ADAPTERS.md) and [diagnostics](docs/DIAGNOSTICS.md).
 
-## Use an explicit CI gate
+## Gate a CI pipeline
 
 ```bash
 kalanos grade dataset/ --report audit.json --fail-on blocked,review,unknown
 ```
 
-Exit `0` means the configured status gate did not fail; `1` means it did; `2` means invalid configuration or an operational failure. Incomplete inventory also fails when `unknown` is included. The default gate is `blocked,unknown`, so add `review` when reviews must be resolved. This gate is not a minimum quality-score threshold: the supplied fixture still exits **0** with `blocked,review,unknown` because its findings are report-only.
+| Exit code | Meaning |
+|---|---|
+| `0` | The configured gate did not fail |
+| `1` | The gate failed |
+| `2` | Invalid configuration or operational failure |
 
-## Local processing and limits
+The default gate is `blocked,unknown`; add `review` when reviews must be resolved before merge. An incomplete inventory also fails when `unknown` is included. This gate is a status gate, not a minimum-score threshold — the sample fixture still exits `0` under `blocked,review,unknown` because its findings are report-only.
 
-The quickstart uses the network to install packages and download the public fixture. Grading that local CSV and writing reports runs locally without a model API. Remote sources require network access; `--max-remote-gb` and `--max-remote-files` bound remote discovery. Start small rather than scanning a large remote dataset for a first audit.
+## Local by default
 
-Uploading is optional: `grade --publish` or the separate `kalanos publish` command sends a report to the authenticated Hub account. Neither is used here. Report publishing needs a Hub API key; local datasets also need a name. Treat report files as data: they can contain source paths, instructions and diagnostic evidence. Review them before sharing. See the [release's publishing documentation](https://github.com/KalanosAI/kalanos/blob/v0.8.0/README.md).
+Grading and report generation run entirely on your machine with no model API. The network is used only to install packages, fetch the public sample, or read remote sources you point Kalanos at; `--max-remote-gb` and `--max-remote-files` bound remote discovery. Start small rather than scanning a large remote dataset on a first run.
 
-Kalanos checks technical recording quality within the evidence and scope available. It does not establish task success, dataset representativeness, robot safety or a training-performance guarantee. Timing interpretation depends on clock provenance, and sampled video checks do not inspect every frame by default. Statistical findings may require review or accepted validation before they can block an episode.
+Publishing is opt-in. `kalanos grade --publish` or `kalanos publish REPORT.json` sends a report to your authenticated account on [hub.kalanos.ai](https://hub.kalanos.ai); it needs a Hub API key, and local datasets need a name. Report files can contain source paths, task instructions and diagnostic evidence — treat them as data and review them before sharing.
 
-## Documentation and contributing
+## What Kalanos does and does not tell you
 
-[Source](https://github.com/KalanosAI/kalanos) · [PyPI 0.8.0](https://pypi.org/project/kalanos/0.8.0/) · [Report schema](https://github.com/KalanosAI/kalanos/blob/v0.8.0/docs/SCHEMA.md) · [Contributing](https://github.com/KalanosAI/kalanos/blob/v0.8.0/CONTRIBUTING.md) · [Issues](https://github.com/KalanosAI/kalanos/issues) · [Apache-2.0 license](https://github.com/KalanosAI/kalanos/blob/v0.8.0/LICENSE)
+Kalanos reports technical recording quality within the evidence and scope available. It does **not** establish task success, dataset representativeness, robot safety, or any training-performance guarantee.
 
-Review evidence: [run metadata and exit codes](docs/examples/arm-audit/provenance/run.json), [resolved dependencies](docs/examples/arm-audit/provenance/requirements-resolved.txt), and [verification notes](docs/examples/arm-audit/provenance/verification.txt).
+- A `pass` means required evidence was sufficient under the scope, not that the recording is free of problems — read report-only findings.
+- Timing interpretation depends on clock provenance. Unknown provenance means recorded cadence is reported, not certified.
+- Sampled video checks do not inspect every frame by default.
+- Statistical findings may require review or accepted validation before they can block an episode.
+- The macOS commands above are tested; Linux and Windows variants follow the same CLI but were not separately verified for this release.
+
+## Documentation and support
+
+[Changelog](CHANGELOG.md) · [PyPI](https://pypi.org/project/kalanos/) · [Report schema](docs/SCHEMA.md) · [Decisions](docs/DECISIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Issues](https://github.com/KalanosAI/kalanos/issues)
+
+Reproducibility: the sample run's [metadata and exit codes](docs/examples/arm-audit/provenance/run.json), [resolved dependencies](docs/examples/arm-audit/provenance/requirements-resolved.txt) and [verification notes](docs/examples/arm-audit/provenance/verification.txt) are included.
+
+Licensed under [Apache-2.0](LICENSE).
