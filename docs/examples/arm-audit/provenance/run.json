@@ -1,0 +1,42 @@
+{
+  "kalanos": "0.8.0",
+  "python": "3.14.7",
+  "platform": "macOS-15.7.4-arm64-arm-64bit-Mach-O",
+  "fixture_commit": "1ff101067a54357146e140387d7d95d1c190a547",
+  "fixture_sha256": "0a680af731129ce64fd01b1e26a382dcf52fb00f89eff2c2b78f8d2db832dfd9",
+  "runs": [
+    {
+      "command": [
+        "../.venv-grader/bin/kalanos",
+        "grade",
+        "data/arm_multi_device.csv",
+        "--report",
+        "reports/arm-audit.html",
+        "--no-color"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "../.venv-grader/bin/kalanos",
+        "grade",
+        "data/arm_multi_device.csv",
+        "--report",
+        "reports/arm-audit.json",
+        "--no-color"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "../.venv-grader/bin/kalanos",
+        "grade",
+        "data/arm_multi_device.csv",
+        "--fail-on",
+        "blocked,review,unknown",
+        "--no-color"
+      ],
+      "exit_code": 0
+    }
+  ]
+}
