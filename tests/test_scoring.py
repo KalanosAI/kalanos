@@ -13,6 +13,7 @@ import pytest
 
 # Internal
 from kalanos.analysis.models.domain import Channel
+from kalanos.analysis.models.errors import ConfigurationError, MixedWeights
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
 from kalanos.analysis.models.report import GradedChannel, GradedEpisode, GradedStream
@@ -878,7 +879,7 @@ def test_mixing_a_decided_weight_with_an_undecided_one_refuses_to_guess():
     }
 
     with pytest.raises(
-        ValueError, match="mixes a decided weight with an undecided one"
+        MixedWeights, match="weights some timing metrics but not dt_jitter_ms"
     ):
         score_metrics(
             results,
@@ -907,7 +908,7 @@ def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess()
     )
     results = {"metric_x": _report_only(2.0), "metric_y": _report_only(2.0)}
 
-    with pytest.raises(ValueError, match=r"\['family_b'\] carry no weight"):
+    with pytest.raises(MixedWeights, match="weights some families but not family_b"):
         score_metrics(
             results,
             level=Level.CHANNEL,
@@ -915,6 +916,13 @@ def test_mixing_a_decided_family_weight_with_an_undecided_one_refuses_to_guess()
             policy=policy,
             location=_LOCATION,
         )
+
+
+def test_mixed_weights_is_a_configuration_error_and_a_value_error():
+    """Verify the CLI reports it, and callers catching `ValueError` still catch it."""
+
+    assert issubclass(MixedWeights, ConfigurationError)
+    assert issubclass(MixedWeights, ValueError)
 
 
 def test_a_negative_weight_is_rejected_when_the_policy_loads():
@@ -1339,6 +1347,26 @@ def test_flatline_pct_stays_report_only_for_a_reward_channel(taxonomy_type: str)
     )
 
     assert resolved.status == MetricStatus.REPORT_ONLY
+
+
+def test_spike_pct_stays_report_only_for_a_frame_reward():
+    """Verify a frame reward's spike_pct is reported but not graded.
+
+    A reward computed from object pose rises and falls in steps, which a
+    6σ local window reads as spikes, so its band is `None`/`None` and the
+    value passes through without points.
+    """
+
+    resolved = resolve_status(
+        _report_only(0.4, unit="%"),
+        metric_name="spike_pct",
+        taxonomy_type="reward.frame_reward",
+        policy=load_default_policy(),
+    )
+
+    assert resolved.status == MetricStatus.REPORT_ONLY
+    assert resolved.value == 0.4
+    assert resolved.points is None
 
 
 def test_drift_stays_report_only_by_policy_design():

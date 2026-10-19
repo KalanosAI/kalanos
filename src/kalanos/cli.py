@@ -397,7 +397,9 @@ def grade(
         or when grading raised a `KalanosError` — `path` does not exist,
         is a remote dataset over a limit, held nothing to report on at all,
         two adapters tied on the same file,
-        or a mapping override was malformed or matched nothing —
+        a mapping override was malformed or matched nothing,
+        or the policy weighted some metrics or families
+        and left another without a weight —
         or when writing `report` failed: an unsupported suffix, a missing directory,
         an unwritable path.
         The reason goes to stderr and nothing is written to stdout.

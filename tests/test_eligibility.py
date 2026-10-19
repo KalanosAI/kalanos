@@ -40,10 +40,10 @@ from kalanos.analysis.scoring.eligibility import (
     sufficiency_of,
 )
 from kalanos.api import grade
-from kalanos.assets.policy import load_policy
 from kalanos.cli import app
 
 # Local
+from helpers import no_gate_policy
 from helpers import write_spiked_arm as _write_arm
 
 
@@ -430,7 +430,7 @@ def test_a_failed_input_beside_passing_episodes_leaves_dataset_train_ready_null(
 def test_all_pass_without_a_letter_gate_is_train_ready(tmp_path):
     path = tmp_path / "clean.hdf5"
     _write_arm(path, 3, glitched=set())
-    report = grade(path, policy=load_policy(Path("legacy_0_5")))
+    report = grade(path, policy=no_gate_policy(tmp_path))
     assert report.gate is None
     assert report.score.train_ready is True
 

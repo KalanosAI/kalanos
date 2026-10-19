@@ -43,7 +43,7 @@ _ANCHOR_PACKAGE = "kalanos.assets"
 _DEFAULT_POLICY_RESOURCE = ("policies", "default.yaml")
 
 # Policies shipped inside the package, loadable by name as well as by path.
-PACKAGED_POLICIES = ("default", "language_conditioned", "legacy_0_5")
+PACKAGED_POLICIES = ("default", "language_conditioned")
 
 # Metric-entry keys an `extends` override keeps from its base unless it sets them.
 _INHERITED_METRIC_KEYS = ("weight", "core")
@@ -166,6 +166,26 @@ def load_default_policy() -> Policy:
     return _parse_policy(raw_yaml, source="the default policy")
 
 
+def packaged_policy_name(path: Path) -> str | None:
+    """Name the packaged policy a policy path stands for, if any.
+
+    Parameters
+    ----------
+    path : Path
+        A user-supplied policy path, such as `Settings.policy_path`.
+
+    Returns
+    -------
+    str or None
+        The packaged policy's name when no file exists at `path` and its
+        text names a packaged policy, `None` otherwise.
+    """
+
+    if not Path(path).exists() and str(path) in PACKAGED_POLICIES:
+        return str(path)
+    return None
+
+
 def load_policy(path: Path | None) -> Policy:
     """Load a policy: a deployment's own file when given, the default otherwise.
 
@@ -184,8 +204,9 @@ def load_policy(path: Path | None) -> Policy:
     if path is None:
         logger.info("using the default policy")
         return load_default_policy()
-    if not Path(path).exists() and str(path) in PACKAGED_POLICIES:
-        logger.info("using the packaged %s policy", path)
-        return _parse_policy(_packaged_yaml(str(path)), source=f"the {path} policy")
+    name = packaged_policy_name(path)
+    if name is not None:
+        logger.info("using the packaged %s policy", name)
+        return _parse_policy(_packaged_yaml(name), source=f"the {name} policy")
     logger.info("using policy override %s", path)
     return _parse_policy(path.read_text(encoding="utf-8"), source=str(path))

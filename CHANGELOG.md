@@ -4,6 +4,24 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.8.1] - 2026-10-19
+
+Report schema 7.1.0.
+Policy errors and policy names are reported correctly, frame rewards no longer grade as spikes, and the packaged `legacy_0_5` policy is removed.
+
+### Changed
+
+- `spike_pct` no longer grades `reward.frame_reward` channels: a computed reward rises and falls in steps that read as spikes. The value is still reported, as `flatline_pct` already does for rewards. ([#45](https://github.com/KalanosAI/kalanos/pull/45))
+
+### Fixed
+
+- `kalanos grade` and `kalanos benchmark` report a policy that weights some metrics or families and leaves another without a weight as one `kalanos:` line naming it, and exit 2 instead of printing a traceback and exiting 1. The Python API raises `MixedWeights`, which is still a `ValueError`. ([#44](https://github.com/KalanosAI/kalanos/pull/44))
+- With `KALANOS_POLICY_PATH` set, the report's `run.policy` and `scope.policy_id` name the policy that graded: a packaged policy by its name, from `builtin`, and a policy file by its file name without the extension, with its path as origin. They named the built-in default before. ([#46](https://github.com/KalanosAI/kalanos/pull/46))
+
+### Removed
+
+- The packaged `legacy_0_5` policy. Its numbers no longer matched 0.5's once the bands changed; `KALANOS_POLICY_PATH=legacy_0_5` now fails like any missing policy file. A policy file with `extends: default` and `gate: null` grades without the dataset gate. ([#50](https://github.com/KalanosAI/kalanos/pull/50))
+
 ## [0.8.0] - 2026-10-15
 
 Report schema 7.1.0.
@@ -200,6 +218,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.8.1]: https://github.com/KalanosAI/kalanos/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/KalanosAI/kalanos/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/KalanosAI/kalanos/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/KalanosAI/kalanos/compare/v0.7.0...v0.7.1

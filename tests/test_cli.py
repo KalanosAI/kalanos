@@ -12,6 +12,7 @@ form is pinned here rather than left to a default.
 
 # Built-in
 import csv
+from importlib import resources
 from pathlib import Path
 
 # External
@@ -87,6 +88,37 @@ def _is_plain(text: str) -> bool:
     """Whether `text` is ASCII with no terminal escape codes."""
 
     return text.isascii() and "\x1b[" not in text
+
+
+def _default_policy_payload() -> dict:
+    """The packaged default policy as a dict, to edit into a full policy."""
+
+    text = (
+        resources.files("kalanos.assets")
+        .joinpath("policies", "default.yaml")
+        .read_text(encoding="utf-8")
+    )
+    return yaml.safe_load(text)
+
+
+def _half_weighted_metric_policy() -> dict:
+    """A policy that leaves `integrity.flatline_pct` unweighted among weighted peers."""
+
+    flatline = _default_policy_payload()["metrics"]["integrity.flatline_pct"]
+    return {
+        "extends": "default",
+        "metrics": {"integrity.flatline_pct": {**flatline, "weight": None}},
+    }
+
+
+def _half_weighted_family_policy() -> dict:
+    """A full policy that moves `flatline_pct` into a family without a family weight."""
+
+    payload = _default_policy_payload()
+    payload["metrics"]["extra.flatline_pct"] = payload["metrics"].pop(
+        "integrity.flatline_pct"
+    )
+    return payload
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -630,6 +662,39 @@ def test_grade_map_that_cannot_apply_exits_two(value):
     assert result.exit_code == 2
     assert result.stderr.startswith("kalanos: ")
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("payload", "names"),
+    [
+        pytest.param(
+            _half_weighted_metric_policy,
+            ("integrity metrics", "flatline_pct"),
+            id="metric",
+        ),
+        pytest.param(_half_weighted_family_policy, ("families", "extra"), id="family"),
+    ],
+)
+def test_grade_with_a_half_weighted_policy_exits_two(
+    payload, names, tmp_path, monkeypatch
+):
+    """Verify a policy weighting some metrics or families but not all exits 2."""
+
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump(payload()), encoding="utf-8")
+    monkeypatch.setenv("KALANOS_POLICY_PATH", str(policy))
+
+    result = runner.invoke(
+        app, ["grade", str(FIXTURES_DIR / "lerobot_v3_tiny"), "--no-sidecar"]
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr.startswith("kalanos: ")
+    assert result.stderr.count("\n") == 1
+    assert "Traceback" not in result.stderr
+    for name in names:
+        assert name in result.stderr
 
 
 def test_profiles_commands_validate_structure_and_resolve_policy(tmp_path):

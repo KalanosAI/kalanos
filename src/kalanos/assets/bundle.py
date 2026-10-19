@@ -15,6 +15,7 @@ rewritten.
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 # External
 import yaml
@@ -52,7 +53,7 @@ from kalanos.assets.mapping import (
     load_mapping_file,
     sidecar_path,
 )
-from kalanos.assets.policy import load_policy
+from kalanos.assets.policy import load_policy, packaged_policy_name
 from kalanos.assets.yaml_strict import safe_load_strict
 from kalanos.core.settings import Settings, get_settings
 
@@ -494,6 +495,7 @@ def prepare_configuration(
     )
     if policy is None and loaded is not None:
         policy = load_bundle_policy(loaded, bundle_path)
+    env_policy_path = settings.policy_path if policy is None else None
     policy = policy or load_policy(settings.policy_path)
     from kalanos.analysis.diagnostics.runner import validate_review_plan
 
@@ -516,6 +518,19 @@ def prepare_configuration(
                 update={"id": "explicit-policy", "origin": "argument"}
             ),
             scope=config.scope.model_copy(update={"policy_id": "explicit-policy"}),
+        )
+    elif env_policy_path is not None:
+        policy_name = packaged_policy_name(env_policy_path)
+        policy_id = (
+            policy_name if policy_name is not None else Path(env_policy_path).stem
+        )
+        origin = "builtin" if policy_name is not None else str(env_policy_path)
+        config = replace(
+            config,
+            policy_id=config.policy_id.model_copy(
+                update={"id": policy_id, "origin": origin}
+            ),
+            scope=config.scope.model_copy(update={"policy_id": policy_id}),
         )
     base_limits = limits or SourceLimits(
         max_bytes=settings.remote_max_bytes, max_files=settings.remote_max_files
