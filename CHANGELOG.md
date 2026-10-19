@@ -15,6 +15,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - `kalanos grade` and `kalanos benchmark` report a policy that weights some metrics or families and leaves another without a weight as one `kalanos:` line naming it, and exit 2 instead of printing a traceback and exiting 1. The Python API raises `MixedWeights`, which is still a `ValueError`.
 - With `KALANOS_POLICY_PATH` set, the report's `run.policy` and `scope.policy_id` name the policy that graded: a packaged policy by its name, from `builtin`, and a policy file by its file name without the extension, with its path as origin. They named the built-in default before.
 
+### Removed
+
+- The packaged `legacy_0_5` policy. Its numbers no longer matched 0.5's once the bands changed; `KALANOS_POLICY_PATH=legacy_0_5` now fails like any missing policy file. A policy file with `extends: default` and `gate: null` grades without the dataset gate.
+
 ## [0.8.0] - 2026-10-15
 
 Report schema 7.1.0.

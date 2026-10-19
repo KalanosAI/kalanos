@@ -1,5 +1,5 @@
 """Verifies the dataset gate: failing episodes, task traits, the cap, pruning,
-coverage, and the packaged policies that switch it on, off, or extend it.
+coverage, and the policies that switch it off or extend it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -22,9 +22,14 @@ from kalanos.analysis.models.policy import GatePolicy
 from kalanos.analysis.models.scoring import Grade
 from kalanos.analysis.scoring.gate import cap_for, dataset_traits, task_traits, worse
 from kalanos.api import grade
-from kalanos.assets.policy import load_default_policy, load_policy
+from kalanos.assets.policy import (
+    load_default_policy,
+    load_policy,
+    packaged_policy_name,
+)
 
 # Local
+from helpers import no_gate_policy
 from helpers import write_arm as _write_arm
 
 
@@ -168,13 +173,13 @@ def test_a_clean_dataset_is_not_capped_and_says_what_it_rests_on(tmp_path):
     assert "Graded on" in report.gate.summary
 
 
-def test_the_legacy_policy_grades_by_the_mean_alone(tmp_path):
-    """legacy_0_5 reproduces 0.5 grades: no gate, the mean's own letter."""
+def test_a_policy_without_a_gate_grades_by_the_mean_alone(tmp_path):
+    """With no gate, the dataset's letter is its mean's own."""
 
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2, 7, 11, 16})
 
-    report = grade(path, policy=load_policy(Path("legacy_0_5")))
+    report = grade(path, policy=no_gate_policy(tmp_path))
 
     assert report.gate is None
     assert report.score.grade != Grade.C
@@ -207,6 +212,16 @@ def test_an_unknown_base_policy_is_refused(tmp_path):
 
     with pytest.raises(ValueError, match="packaged policies are"):
         load_policy(path)
+
+
+def test_legacy_0_5_is_no_longer_a_packaged_policy(tmp_path, monkeypatch):
+    """`legacy_0_5` resolves like any missing policy file."""
+
+    monkeypatch.chdir(tmp_path)
+
+    assert packaged_policy_name(Path("legacy_0_5")) is None
+    with pytest.raises(FileNotFoundError):
+        load_policy(Path("legacy_0_5"))
 
 
 def test_a_finding_on_every_episode_is_a_dataset_trait_not_a_failure():
@@ -381,7 +396,7 @@ def test_a_clean_dataset_reads_as_its_mean(tmp_path):
 
 
 def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
-    """legacy_0_5 has no gate; eligibility, counts and readiness exist regardless.
+    """A policy with no gate still has eligibility, counts and readiness.
 
     The gate only caps a compatibility letter. The decision lives on each
     episode, so a policy without a gate still decides and still reports.
@@ -390,7 +405,7 @@ def test_readiness_derives_from_eligibility_not_from_the_gate(tmp_path):
     path = tmp_path / "arm.hdf5"
     _write_arm(path, 20, glitched={2})
 
-    report = grade_with_test_calibration(path, policy=load_policy(Path("legacy_0_5")))
+    report = grade_with_test_calibration(path, policy=no_gate_policy(tmp_path))
 
     assert report.gate is None
     assert report.eligibility_counts is not None

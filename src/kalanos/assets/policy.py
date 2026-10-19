@@ -43,7 +43,7 @@ _ANCHOR_PACKAGE = "kalanos.assets"
 _DEFAULT_POLICY_RESOURCE = ("policies", "default.yaml")
 
 # Policies shipped inside the package, loadable by name as well as by path.
-PACKAGED_POLICIES = ("default", "language_conditioned", "legacy_0_5")
+PACKAGED_POLICIES = ("default", "language_conditioned")
 
 # Metric-entry keys an `extends` override keeps from its base unless it sets them.
 _INHERITED_METRIC_KEYS = ("weight", "core")
