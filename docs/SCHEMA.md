@@ -14,6 +14,8 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `VideoFormat.width`, `VideoFormat.height` | `int` or `null` | The frame size in pixels. `null` where the source states none. |
 | `VideoFormat.fps` | `float` or `null` | The frame rate. `null` where the source states none. |
 | `VideoFormat.pix_fmt` | `str` or `null` | The pixel format, as FFmpeg names it (`yuv420p`). `null` where the source states none. |
+| `GradedEpisode.split` | `str` or `null` | The dataset split the source assigns the episode, such as `train`. Read from a LeRobot `info.json`'s `splits` ranges; `null` when the source assigns none, or when the episode falls in no range or in more than one. |
+| `Channel.source_dtype` | `str` or `null` | The dtype the source format declares for the channel's values: a LeRobot feature's `dtype`, an HDF5 dataset's dtype, or an MCAP message field's ROS type. `null` for CSV, delimited, JSON, JSONL and tabular sources, whose types are inferred, and wherever the format states none. Under `streams[].channels[].channel` and `streams[].declared_channels`. |
 
 A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current version, and refuse a newer one.
 

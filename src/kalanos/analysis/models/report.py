@@ -348,6 +348,9 @@ class GradedEpisode(BaseModel):
     tasks : list[str] or None
         The episode's task instructions as the source stored them — mirrors
         `domain.Episode.tasks`, so a reader sees what each episode was told.
+    split : str or None
+        The dataset split the source assigns this episode — mirrors
+        `domain.Episode.split`. `None` when the source assigns none.
     eligibility : EpisodeEligibility or None
         The authoritative decision. `None` only while the episode is being
         assembled; a finished Report refuses an episode without one.
@@ -363,6 +366,7 @@ class GradedEpisode(BaseModel):
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     streams: list[GradedStream] = Field(default_factory=list)
     tasks: list[str] | None = None
+    split: str | None = None
     eligibility: EpisodeEligibility | None = None
     coverage: AnalysisCoverage | None = None
     diagnostics: list[DiagnosticResult] = Field(default_factory=list)

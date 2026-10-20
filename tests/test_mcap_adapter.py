@@ -16,7 +16,7 @@ from mcap_ros2.writer import Writer as Ros2Writer
 from upath import UPath
 
 # Internal
-from kalanos.analysis.adapters.mcap import McapAdapter
+from kalanos.analysis.adapters.mcap import McapAdapter, _field_dtypes
 from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import Clock, Kind, Stream
 from kalanos.testing import check_adapter
@@ -303,3 +303,53 @@ def test_describe_does_not_decode_a_message(monkeypatch):
     info = McapAdapter().describe(MCAP_FIXTURE)
 
     assert info.episode_count == 1
+
+
+def test_channels_carry_the_message_field_types():
+    """Verify each channel carries the ROS type of the field it was flattened from."""
+
+    streams = _episode_streams()
+
+    assert {c.source_dtype for c in streams["/cmd_vel"].channels} == {"float64"}
+    position = next(
+        c for c in streams["/joint_states"].channels if c.name == "position_0"
+    )
+    assert position.source_dtype == "float64"
+
+
+def test_field_dtypes_follow_the_flattened_column_names():
+    """Verify nested, array, constant and header fields map as `_flatten` names them."""
+
+    schema = "\n".join(
+        [
+            "# a comment",
+            "std_msgs/Header header",
+            "int32 MODE_IDLE=0",
+            "uint8 mode",
+            "float32[3] gains  # trailing comment",
+            "Pose pose",
+            "string label",
+            "================================================================",
+            "MSG: demo_msgs/Pose",
+            "float64 x",
+            "geometry_msgs/msg/Vector3 offset",
+            "================================================================",
+            "MSG: geometry_msgs/Vector3",
+            "int16 z",
+            "================================================================",
+            "MSG: std_msgs/Header",
+            "builtin_interfaces/Time stamp",
+            "string frame_id",
+            "================================================================",
+            "MSG: builtin_interfaces/Time",
+            "int32 sec",
+            "uint32 nanosec",
+        ]
+    )
+
+    assert _field_dtypes("demo_msgs/msg/Sample", schema) == {
+        "mode": "uint8",
+        "gains": "float32",
+        "pose.x": "float64",
+        "pose.offset.z": "int16",
+    }

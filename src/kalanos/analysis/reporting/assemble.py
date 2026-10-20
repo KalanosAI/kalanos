@@ -459,6 +459,7 @@ def grade_episode(
             metrics=episode_metrics,
             streams=graded_streams,
             tasks=episode.tasks,
+            split=episode.split,
         ),
         findings,
     )

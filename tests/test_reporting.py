@@ -1412,3 +1412,12 @@ def test_the_metadata_tier_reports_no_container_format(monkeypatch):
         "fps": None,
         "pix_fmt": None,
     }
+
+
+def test_a_graded_episode_carries_its_split():
+    """Verify the graded report keeps each episode's split, and reloads it."""
+
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny")
+
+    reloaded = Report.model_validate_json(report.model_dump_json())
+    assert [e.split for e in reloaded.episodes] == ["train", "train"]
