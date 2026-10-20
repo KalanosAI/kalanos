@@ -13,7 +13,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Changed
 
-- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused.
+- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.7.x, 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused.
 
 ## [0.8.1] - 2026-10-19
 
