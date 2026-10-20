@@ -28,7 +28,12 @@ from kalanos.analysis.metrics.registry import (
     run_episode_metrics,
     run_stream_metrics,
 )
-from kalanos.analysis.metrics.vision import camera_frames, is_camera_footage, thumbnail
+from kalanos.analysis.metrics.vision import (
+    camera_format,
+    camera_frames,
+    is_camera_footage,
+    thumbnail,
+)
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
     SAMPLED_VIDEO_QUALITY_CAPABILITY,
@@ -316,6 +321,7 @@ def grade_stream(
     stream_score = rollup(
         Level.STREAM, [*(gc.score for gc in graded_channels), own_score], policy=policy
     )
+    is_camera = is_camera_footage(stream.kind.value, stream.taxonomy_type)
     return (
         GradedStream(
             taxonomy_type=stream.taxonomy_type,
@@ -336,8 +342,11 @@ def grade_stream(
             clock_info=stream.clock_info,
             source_order=stream.source_order,
             evaluation=evaluation,
-            frames=camera_frames(stream_ctx)
-            if is_camera_footage(stream.kind.value, stream.taxonomy_type)
+            frames=camera_frames(stream_ctx) if is_camera else None,
+            video_format=camera_format(
+                stream, reads_payloads=tier != ExecutionTier.METADATA
+            )
+            if is_camera
             else None,
         ),
         findings,

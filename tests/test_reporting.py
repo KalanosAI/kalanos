@@ -17,6 +17,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters.csv import CsvAdapter
+from kalanos.analysis.adapters.video import VideoPayload
 from kalanos.analysis.models.discovery import SkippedSource, SkipReason
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -34,6 +35,7 @@ from kalanos.analysis.models.metrics import (
     MetricStatus,
 )
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     CURRENT_SCHEMA_VERSION,
     AnalysedEpisode,
@@ -1366,3 +1368,47 @@ def test_a_level_with_no_score_renders_no_rail():
 
     assert "not graded" in html
     assert 'class="rail"' not in html
+
+
+def _source_stream(report: Report, source_field: str) -> GradedStream:
+    """Return the first episode's stream read from `source_field`."""
+
+    return next(s for s in report.episodes[0].streams if s.source_field == source_field)
+
+
+def test_a_camera_stream_reports_its_declared_and_container_format():
+    """Verify a camera carries both formats even where they agree, and they reload."""
+
+    pytest.importorskip("av")
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny")
+
+    reloaded = Report.model_validate_json(report.model_dump_json())
+    for graded in (report, reloaded):
+        camera = _source_stream(graded, "observation.images.up")
+        assert camera.video_format is not None
+        declared, found = camera.video_format.declared, camera.video_format.found
+        assert declared.fps == 30.0
+        assert declared.width is None and declared.height is None
+        assert (found.width, found.height, found.fps) == (32, 32, 30.0)
+    assert _source_stream(report, "observation.state").video_format is None
+
+
+def test_the_metadata_tier_reports_no_container_format(monkeypatch):
+    """Verify the metadata tier states the declared format and opens no container."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: pytest.fail("metadata tier read the header"),
+    )
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny", tier=ExecutionTier.METADATA)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    assert camera.video_format.declared.fps == 30.0
+    assert camera.video_format.found.model_dump() == {
+        "width": None,
+        "height": None,
+        "fps": None,
+        "pix_fmt": None,
+    }

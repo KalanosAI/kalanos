@@ -94,6 +94,9 @@ def test_a_current_report_is_not_legacy(tmp_path):
 
 def test_a_7_1_report_loads_through_load_any(tmp_path):
     payload = grade(TINY_V3).model_dump(mode="json")
+    for episode in payload["episodes"]:
+        for stream in episode["streams"]:
+            del stream["video_format"]
     payload["schema_version"] = "7.1.0"
     out = tmp_path / "r.json"
     out.write_text(json.dumps(payload))

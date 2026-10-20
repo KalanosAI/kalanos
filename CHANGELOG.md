@@ -6,6 +6,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Added
+
+- The report records each camera's width, height, frame rate and pixel format, both as the dataset declares it and as the video file's container states it, whether or not they agree, in `streams[].video_format` (report schema 7.2.0). A value the source does not state is null, and the metadata tier, which opens no media, leaves the container's side null.
+
 ### Changed
 
 - `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused.

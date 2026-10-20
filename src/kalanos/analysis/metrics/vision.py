@@ -51,6 +51,7 @@ import polars as pl
 # Internal
 from kalanos.analysis.adapters.video import (
     ContainerHeader,
+    DeclaredFormat,
     DecodeFailed,
     DecodeLimitReached,
     DecoderUnavailable,
@@ -66,7 +67,7 @@ from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.dictionary import Modality
-from kalanos.analysis.models.domain import ClockInfo, Kind, Payload
+from kalanos.analysis.models.domain import ClockInfo, Kind, Payload, Stream
 from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
@@ -75,7 +76,12 @@ from kalanos.analysis.models.metrics import (
     MetricStatus,
     StreamContext,
 )
-from kalanos.analysis.models.report import CameraFrame, CameraFrames
+from kalanos.analysis.models.report import (
+    CameraFormat,
+    CameraFrame,
+    CameraFrames,
+    VideoFormat,
+)
 from kalanos.analysis.optional import load_numpy
 from kalanos.assets.dictionary import load_dictionary
 
@@ -1838,6 +1844,60 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
         },
         support=support_for(
             list(range(n)), [(index, index + run) for index, run in counted]
+        ),
+    )
+
+
+def camera_format(stream: Stream, *, reads_payloads: bool) -> CameraFormat | None:
+    """Publish the camera's declared and container format, whether or not they agree.
+
+    The container header read is shared with, and cached for, the vision metrics.
+    The declared format comes from the adapter and reads no media,
+    so the metadata tier states it too.
+
+    Parameters
+    ----------
+    stream : Stream
+        The camera stream to describe, with the payload its adapter built.
+    reads_payloads : bool
+        Whether the execution tier lets the container be opened.
+
+    Returns
+    -------
+    CameraFormat or None
+        Both formats, with `found` all `None` when `reads_payloads` is false,
+        without PyAV, or when the header cannot be read.
+        `None` when the stream's frames do not come from a video file.
+    """
+
+    payload = stream.payload
+    if not isinstance(payload, VideoPayload):
+        return None
+    header: ContainerHeader | DecodeFailed | None = None
+    if reads_payloads:
+        # Publishing evidence must not abort the grade, whatever the read raised.
+        try:
+            header = _header(payload)
+        except DecoderUnavailable:
+            pass
+        except Exception:
+            logger.warning(
+                "format read of %s failed", stream.source_path, exc_info=True
+            )
+            return None
+    declared = payload.declared or DeclaredFormat()
+    found = header if isinstance(header, ContainerHeader) else None
+    return CameraFormat(
+        declared=VideoFormat(
+            width=declared.width,
+            height=declared.height,
+            fps=declared.fps,
+            pix_fmt=declared.pix_fmt,
+        ),
+        found=VideoFormat()
+        if found is None
+        else VideoFormat(
+            width=found.width, height=found.height, fps=found.fps, pix_fmt=found.pix_fmt
         ),
     )
 

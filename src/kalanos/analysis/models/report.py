@@ -221,6 +221,48 @@ class CameraFrames(BaseModel):
     reason: str | None = None
 
 
+class VideoFormat(BaseModel):
+    """One statement of a camera's video format.
+
+    A field is `None` where the source states nothing.
+
+    Attributes
+    ----------
+    width : int or None
+        The frame width in pixels.
+    height : int or None
+        The frame height in pixels.
+    fps : float or None
+        The frame rate.
+    pix_fmt : str or None
+        The pixel format, as FFmpeg names it (`yuv420p`).
+    """
+
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    pix_fmt: str | None = None
+
+
+class CameraFormat(BaseModel):
+    """A camera's video format as the dataset declares it and as its file states it.
+
+    Both are reported whether or not they agree.
+
+    Attributes
+    ----------
+    declared : VideoFormat
+        What the dataset's own metadata declares; all `None` when it declares nothing.
+    found : VideoFormat
+        What the video file's container header states for its first video stream.
+        All `None` when the container was not opened, as at the metadata tier,
+        or could not be read.
+    """
+
+    declared: VideoFormat
+    found: VideoFormat
+
+
 class GradedStream(BaseModel):
     """One Stream with its own rolled-up score.
 
@@ -249,6 +291,9 @@ class GradedStream(BaseModel):
     frames : CameraFrames or None
         The camera's shared read: the rows examined and their per-frame evidence.
         `None` when the stream was not read as camera footage.
+    video_format : CameraFormat or None
+        The camera's declared and container format.
+        `None` when the stream is not camera footage backed by a video file.
     """
 
     taxonomy_type: str
@@ -270,6 +315,7 @@ class GradedStream(BaseModel):
     source_order: SourceOrder = Field(default_factory=SourceOrder)
     evaluation: StreamEvaluation = Field(default_factory=StreamEvaluation)
     frames: CameraFrames | None = None
+    video_format: CameraFormat | None = None
 
 
 class GradedEpisode(BaseModel):
