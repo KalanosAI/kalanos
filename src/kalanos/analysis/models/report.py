@@ -225,6 +225,11 @@ class VideoFormat(BaseModel):
     """One statement of a camera's video format.
 
     A field is `None` where the source states nothing.
+    Some fields only one side can state, and stay `None` on the other:
+    a dataset declares `channels`, `is_depth_map` and `has_audio`;
+    a container states the profile, bitrate, length, colour and tags.
+    The container's `bit_rate`, `frame_count` and `duration_s` describe the whole file,
+    which in a LeRobot v3.0 dataset holds several episodes.
 
     Attributes
     ----------
@@ -236,12 +241,57 @@ class VideoFormat(BaseModel):
         The frame rate.
     pix_fmt : str or None
         The pixel format, as FFmpeg names it (`yuv420p`).
+    codec : str or None
+        The video codec (`h264`).
+    profile : str or None
+        The codec profile (`High`). Container only.
+    bit_rate : int or None
+        The bitrate in bits per second. Container only.
+    frame_count : int or None
+        How many frames the video file holds. Container only.
+    duration_s : float or None
+        The video file's duration in seconds. Container only.
+    color_range : str or None
+        The colour range, as FFmpeg names it (`tv`). Container only.
+    color_primaries : str or None
+        The colour primaries, as FFmpeg names them (`bt709`). Container only.
+    color_transfer : str or None
+        The transfer characteristic, as FFmpeg names it (`bt709`). Container only.
+    color_space : str or None
+        The colour space, as FFmpeg names it (`bt709`). Container only.
+    channels : int or None
+        How many channels each frame holds. Declared only.
+    is_depth_map : bool or None
+        Whether the camera records depth rather than colour. Declared only.
+    has_audio : bool or None
+        Whether the video files carry an audio track. Declared only.
+    camera_make : str or None
+        The camera maker a container tag names. Container only.
+    camera_model : str or None
+        The camera model a container tag names. Container only.
+    encoder : str or None
+        The software that wrote the file, as its `encoder` tag names it. Container only.
     """
 
     width: int | None = None
     height: int | None = None
     fps: float | None = None
     pix_fmt: str | None = None
+    codec: str | None = None
+    profile: str | None = None
+    bit_rate: int | None = None
+    frame_count: int | None = None
+    duration_s: float | None = None
+    color_range: str | None = None
+    color_primaries: str | None = None
+    color_transfer: str | None = None
+    color_space: str | None = None
+    channels: int | None = None
+    is_depth_map: bool | None = None
+    has_audio: bool | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    encoder: str | None = None
 
 
 class CameraFormat(BaseModel):
@@ -254,7 +304,8 @@ class CameraFormat(BaseModel):
     declared : VideoFormat
         What the dataset's own metadata declares; all `None` when it declares nothing.
     found : VideoFormat
-        What the video file's container header states for its first video stream.
+        What the video file's container header and tags state
+        for its first video stream, covering the whole file.
         All `None` when the container was not opened, as at the metadata tier,
         or could not be read.
     """

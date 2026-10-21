@@ -42,7 +42,7 @@ import hashlib
 import logging
 from collections import OrderedDict
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 # External
@@ -1887,18 +1887,11 @@ def camera_format(stream: Stream, *, reads_payloads: bool) -> CameraFormat | Non
             return None
     declared = payload.declared or DeclaredFormat()
     found = header if isinstance(header, ContainerHeader) else None
+    # Copying every field keeps one added to the dataclasses from being dropped here;
+    # their field names must match VideoFormat's.
     return CameraFormat(
-        declared=VideoFormat(
-            width=declared.width,
-            height=declared.height,
-            fps=declared.fps,
-            pix_fmt=declared.pix_fmt,
-        ),
-        found=VideoFormat()
-        if found is None
-        else VideoFormat(
-            width=found.width, height=found.height, fps=found.fps, pix_fmt=found.pix_fmt
-        ),
+        declared=VideoFormat(**asdict(declared)),
+        found=VideoFormat() if found is None else VideoFormat(**asdict(found)),
     )
 
 

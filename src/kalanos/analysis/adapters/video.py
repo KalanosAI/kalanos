@@ -61,6 +61,67 @@ _REMOTE_HANDLES: "OrderedDict[str, Any]" = OrderedDict()
 # A shared handle has one read position, so only one container may use it at a time.
 _REMOTE_LOCK = threading.Lock()
 
+# FFmpeg's names for its colour codes, as libavutil/pixdesc.c gives them.
+# Unspecified and reserved codes are left out, so they read as unstated.
+_COLOR_RANGES = {1: "tv", 2: "pc"}
+_COLOR_PRIMARIES = {
+    1: "bt709",
+    4: "bt470m",
+    5: "bt470bg",
+    6: "smpte170m",
+    7: "smpte240m",
+    8: "film",
+    9: "bt2020",
+    10: "smpte428",
+    11: "smpte431",
+    12: "smpte432",
+    22: "ebu3213",
+    256: "vgamut",
+}
+_COLOR_TRANSFERS = {
+    1: "bt709",
+    4: "bt470m",
+    5: "bt470bg",
+    6: "smpte170m",
+    7: "smpte240m",
+    8: "linear",
+    9: "log100",
+    10: "log316",
+    11: "iec61966-2-4",
+    12: "bt1361e",
+    13: "iec61966-2-1",
+    14: "bt2020-10",
+    15: "bt2020-12",
+    16: "smpte2084",
+    17: "smpte428",
+    18: "arib-std-b67",
+    256: "vlog",
+}
+_COLOR_SPACES = {
+    0: "gbr",
+    1: "bt709",
+    4: "fcc",
+    5: "bt470bg",
+    6: "smpte170m",
+    7: "smpte240m",
+    8: "ycgco",
+    9: "bt2020nc",
+    10: "bt2020c",
+    11: "smpte2085",
+    12: "chroma-derived-nc",
+    13: "chroma-derived-c",
+    14: "ictcp",
+    15: "ipt-c2",
+    16: "ycgco-re",
+    17: "ycgco-ro",
+}
+
+# The container tags read, by allowlist: location and other personal tags,
+# which phones and cameras also write, are never read.
+_MAKE_TAGS = ("com.apple.quicktime.make", "make", "com.android.manufacturer")
+_MODEL_TAGS = ("com.apple.quicktime.model", "model", "com.android.model")
+_ENCODER_TAGS = ("encoder",)
+
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
 # ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
@@ -212,17 +273,32 @@ class DeclaredFormat:
         The frame rate.
     pix_fmt : str or None
         The pixel format, as FFmpeg names it (`yuv420p`).
+    codec : str or None
+        The video codec, as the dataset names it (`av1`).
+    channels : int or None
+        How many channels each frame holds.
+    is_depth_map : bool or None
+        Whether the camera records depth rather than colour.
+    has_audio : bool or None
+        Whether the video files carry an audio track.
     """
 
     width: int | None = None
     height: int | None = None
     fps: float | None = None
     pix_fmt: str | None = None
+    codec: str | None = None
+    channels: int | None = None
+    is_depth_map: bool | None = None
+    has_audio: bool | None = None
 
 
 @dataclass(frozen=True)
 class ContainerHeader:
     """The format a video file's container states for its first video stream.
+
+    It describes the whole file, which in a LeRobot v3.0 dataset holds several episodes.
+    Each field after `pix_fmt` is `None` where the container states nothing.
 
     Attributes
     ----------
@@ -234,12 +310,48 @@ class ContainerHeader:
         The container's average frame rate, `None` when it states none.
     pix_fmt : str or None
         The pixel format, `None` when the codec parameters state none.
+    codec : str or None
+        The codec, as FFmpeg names it (`h264`).
+    profile : str or None
+        The codec profile (`High`).
+    bit_rate : int or None
+        The stream's bitrate in bits per second.
+    frame_count : int or None
+        How many frames the stream holds.
+    duration_s : float or None
+        The stream's duration in seconds.
+    color_range : str or None
+        The colour range, as FFmpeg names it (`tv`).
+    color_primaries : str or None
+        The colour primaries, as FFmpeg names them (`bt709`).
+    color_transfer : str or None
+        The transfer characteristic, as FFmpeg names it (`bt709`).
+    color_space : str or None
+        The colour space, as FFmpeg names it (`bt709`).
+    camera_make : str or None
+        The camera maker a container tag names.
+    camera_model : str or None
+        The camera model a container tag names.
+    encoder : str or None
+        The software that wrote the file, as its `encoder` tag names it.
     """
 
     width: int
     height: int
     fps: float | None
     pix_fmt: str | None
+    codec: str | None = None
+    profile: str | None = None
+    bit_rate: int | None = None
+    frame_count: int | None = None
+    duration_s: float | None = None
+    color_range: str | None = None
+    color_primaries: str | None = None
+    color_transfer: str | None = None
+    color_space: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    encoder: str | None = None
 
 
 @dataclass(frozen=True)
@@ -520,7 +632,9 @@ class VideoPayload:
         Returns
         -------
         ContainerHeader
-            The stream's frame size, average rate and pixel format.
+            The stream's frame size, rate, pixel format, codec, bitrate,
+            length and colour, and the camera and encoder its tags name,
+            all for the whole file.
 
         Raises
         ------
@@ -542,11 +656,32 @@ class VideoPayload:
                 # PyAV 17 segfaults reading codec.pix_fmt on a stream with none set;
                 # codec.format is None there instead.
                 pixel_format = codec.format
+                bit_rate = codec.bit_rate or stream.bit_rate
+                duration = stream.duration
+                time_base = stream.time_base
                 return ContainerHeader(
                     width=int(codec.width),
                     height=int(codec.height),
                     fps=float(rate) if rate else None,
                     pix_fmt=pixel_format.name if pixel_format is not None else None,
+                    # codec.name is the decoder FFmpeg picked, libdav1d for AV1.
+                    codec=codec.codec.canonical_name or None,
+                    profile=codec.profile or None,
+                    # An unset count, length or bitrate reads as 0, not as missing.
+                    bit_rate=int(bit_rate) if bit_rate else None,
+                    frame_count=int(stream.frames) if stream.frames else None,
+                    duration_s=float(duration * time_base)
+                    if duration and time_base
+                    else None,
+                    color_range=_color_name(codec, "color_range", _COLOR_RANGES),
+                    color_primaries=_color_name(
+                        codec, "color_primaries", _COLOR_PRIMARIES
+                    ),
+                    color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),
+                    color_space=_color_name(codec, "colorspace", _COLOR_SPACES),
+                    camera_make=_tag(container, stream, _MAKE_TAGS),
+                    camera_model=_tag(container, stream, _MODEL_TAGS),
+                    encoder=_tag(container, stream, _ENCODER_TAGS),
                 )
         # A remote open fails with OSError from fsspec, not with an FFmpegError.
         except (av.error.FFmpegError, OSError) as exc:
@@ -656,6 +791,61 @@ class VideoPayload:
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _color_name(codec: Any, attribute: str, names: dict[int, str]) -> str | None:
+    """Name the colour code a codec context holds, as FFmpeg names it.
+
+    Parameters
+    ----------
+    codec : Any
+        The stream's PyAV codec context.
+    attribute : str
+        The codec context attribute holding the code, such as `color_trc`.
+    names : dict
+        FFmpeg's name for each code.
+
+    Returns
+    -------
+    str or None
+        The code's name, `None` when the attribute is missing,
+        or the code is unspecified, reserved or unknown.
+    """
+
+    # Older PyAV releases within the supported range lack some of these attributes.
+    code = getattr(codec, attribute, None)
+    if code is None:
+        return None
+    try:
+        return names.get(int(code))
+    except (TypeError, ValueError):
+        return None
+
+
+def _tag(container: Any, stream: Any, keys: Sequence[str]) -> str | None:
+    """Read the first of `keys` that the container's tags, then the stream's, hold.
+
+    Parameters
+    ----------
+    container : Any
+        The open PyAV container.
+    stream : Any
+        Its first video stream.
+    keys : Sequence of str
+        The tag names to look up, in order of preference.
+
+    Returns
+    -------
+    str or None
+        The first non-blank string value, `None` when no key holds one.
+    """
+
+    for tags in (container.metadata, stream.metadata):
+        for key in keys:
+            value = tags.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
 
 
 def _remote_handle(path: UPath) -> Any:

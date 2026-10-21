@@ -9,6 +9,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Added
 
 - The report records each camera's width, height, frame rate and pixel format, both as the dataset declares it and as the video file's container states it, whether or not they agree, in `streams[].video_format` (report schema 7.2.0). A value the source does not state is null, and the metadata tier, which opens no media, leaves the container's side null.
+- The report records each camera's codec, profile, bitrate, frame count, duration and colour range, primaries, transfer and space as the video file's container states them, the codec, channel count and depth-map and audio flags a LeRobot feature declares, and the camera make, model and encoder the container's tags name, in `streams[].video_format` (report schema 7.2.0). The container's bitrate, frame count and duration describe the whole file, which in a LeRobot v3.0 dataset holds several episodes. Only those three tags are read, so no location is recorded. A value the source does not state is null.
 - The report records each episode's split, read from a LeRobot dataset's `info.json`, in `episodes[].split`, and each channel's dtype as a LeRobot feature, an HDF5 dataset or an MCAP message field declares it, in `source_dtype` (report schema 7.2.0). Both are null where the source states none; a CSV, JSON or tabular column's inferred type is not recorded.
 
 ### Changed

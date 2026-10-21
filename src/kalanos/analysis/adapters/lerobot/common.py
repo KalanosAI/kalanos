@@ -218,11 +218,14 @@ def split_of(info: dict[str, Any], episode_index: int) -> str | None:
 def declared_format(spec: dict[str, Any]) -> DeclaredFormat | None:
     """Read the video format one video feature declares.
 
-    The rate and pixel format come from the feature's `info`,
-    which LeRobot v3.0 datasets spell `video_info`.
+    The rate, pixel format, codec and channel count come from the feature's `info`,
+    which LeRobot v3.0 datasets spell `video_info`,
+    as `video.fps`, `video.pix_fmt`, `video.codec` and `video.channels`,
+    along with the `video.is_depth_map` and `has_audio` flags.
     The frame size comes from there as `video.height`/`video.width` when present,
     and otherwise from `shape`, only when `names` labels its `height` and `width`.
-    A value that does not convert to its field's type counts as undeclared.
+    A value that does not convert to its field's type counts as undeclared,
+    and so does a flag that is not a JSON boolean.
 
     Parameters
     ----------
@@ -253,11 +256,19 @@ def declared_format(spec: dict[str, Any]) -> DeclaredFormat | None:
             height = shape[names.index("height")]
         if width is None and names.index("width") < len(shape):
             width = shape[names.index("width")]
+    channels = info.get("video.channels")
+    is_depth_map = info.get("video.is_depth_map")
+    has_audio = info.get("has_audio")
     declared = DeclaredFormat(
         width=_coerced(width, int),
         height=_coerced(height, int),
         fps=_coerced(info.get("video.fps"), float),
         pix_fmt=_coerced(info.get("video.pix_fmt"), str),
+        codec=_coerced(info.get("video.codec"), str),
+        # bool is an int subclass, and bool("false") is True: neither may pass.
+        channels=None if isinstance(channels, bool) else _coerced(channels, int),
+        is_depth_map=is_depth_map if isinstance(is_depth_map, bool) else None,
+        has_audio=has_audio if isinstance(has_audio, bool) else None,
     )
     return None if declared == DeclaredFormat() else declared
 

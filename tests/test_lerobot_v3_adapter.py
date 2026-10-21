@@ -205,8 +205,39 @@ def test_a_video_stream_carries_frames_it_has_not_read(monkeypatch):
             {"info": {"video.fps": "fast", "video.height": 48}},
             video.DeclaredFormat(height=48),
         ),
+        (
+            {
+                "video_info": {
+                    "video.codec": "av1",
+                    "video.channels": 3,
+                    "video.is_depth_map": True,
+                    "has_audio": False,
+                }
+            },
+            video.DeclaredFormat(
+                codec="av1", channels=3, is_depth_map=True, has_audio=False
+            ),
+        ),
+        (
+            {
+                "info": {
+                    "video.channels": True,
+                    "video.is_depth_map": "false",
+                    "has_audio": 0,
+                    "video.fps": 30,
+                }
+            },
+            video.DeclaredFormat(fps=30.0),
+        ),
     ],
-    ids=["v3_video_info", "info_size", "nothing", "uncoercible"],
+    ids=[
+        "v3_video_info",
+        "info_size",
+        "nothing",
+        "uncoercible",
+        "codec_and_flags",
+        "flags_not_booleans",
+    ],
 )
 def test_declared_format_reads_only_what_the_feature_states(spec, expected):
     """Verify the frame size comes from labelled axes or `info`, and bad values drop."""
