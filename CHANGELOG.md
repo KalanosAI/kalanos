@@ -4,17 +4,20 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
-## [Unreleased]
+## [0.8.2] - 2026-10-21
+
+Report schema 7.2.0.
+The report records each camera's format, codec and source metadata, each episode's split and each channel's source dtype.
 
 ### Added
 
-- The report records each camera's width, height, frame rate and pixel format, both as the dataset declares it and as the video file's container states it, whether or not they agree, in `streams[].video_format` (report schema 7.2.0). A value the source does not state is null, and the metadata tier, which opens no media, leaves the container's side null.
-- The report records each camera's codec, profile, bitrate, frame count, duration and colour range, primaries, transfer and space as the video file's container states them, the codec, channel count and depth-map and audio flags a LeRobot feature declares, and the camera make, model and encoder the container's tags name, in `streams[].video_format` (report schema 7.2.0). The container's bitrate, frame count and duration describe the whole file, which in a LeRobot v3.0 dataset holds several episodes. Only those three tags are read, so no location is recorded. A value the source does not state is null.
-- The report records each episode's split, read from a LeRobot dataset's `info.json`, in `episodes[].split`, and each channel's dtype as a LeRobot feature, an HDF5 dataset or an MCAP message field declares it, in `source_dtype` (report schema 7.2.0). Both are null where the source states none; a CSV, JSON or tabular column's inferred type is not recorded.
+- The report records each camera's width, height, frame rate and pixel format, both as the dataset declares it and as the video file's container states it, whether or not they agree, in `streams[].video_format` (report schema 7.2.0). A value the source does not state is null, and the metadata tier, which opens no media, leaves the container's side null. ([#53](https://github.com/KalanosAI/kalanos/pull/53))
+- The report records each camera's codec, profile, bitrate, frame count, duration and colour range, primaries, transfer and space as the video file's container states them, the codec, channel count and depth-map and audio flags a LeRobot feature declares, and the camera make, model and encoder the container's tags name, in `streams[].video_format` (report schema 7.2.0). The container's bitrate, frame count and duration describe the whole file, which in a LeRobot v3.0 dataset holds several episodes. Only those three tags are read, so no location is recorded. A value the source does not state is null. ([#54](https://github.com/KalanosAI/kalanos/pull/54))
+- The report records each episode's split, read from a LeRobot dataset's `info.json`, in `episodes[].split`, and each channel's dtype as a LeRobot feature, an HDF5 dataset or an MCAP message field declares it, in `source_dtype` (report schema 7.2.0). Both are null where the source states none; a CSV, JSON or tabular column's inferred type is not recorded. ([#53](https://github.com/KalanosAI/kalanos/pull/53))
 
 ### Changed
 
-- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.7.x, 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused.
+- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.7.x, 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused. ([#53](https://github.com/KalanosAI/kalanos/pull/53))
 
 ## [0.8.1] - 2026-10-19
 
@@ -230,6 +233,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.8.2]: https://github.com/KalanosAI/kalanos/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/KalanosAI/kalanos/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/KalanosAI/kalanos/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/KalanosAI/kalanos/compare/v0.7.1...v0.7.2
