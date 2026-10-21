@@ -1,8 +1,23 @@
-# Report schema 7.1.0
+# Report schema 7.2.0
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 and 7.2.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 7.2.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `GradedStream.video_format` | `CameraFormat` or `null` | The camera's declared and container format, stated whether or not they agree. `null` when the stream is not camera footage backed by a video file. |
+| `CameraFormat.declared` | `VideoFormat` | What the dataset's own metadata declares for the camera. |
+| `CameraFormat.found` | `VideoFormat` | What the video file's container header states for its first video stream. Every field `null` at the metadata tier, which opens no media, or when the header cannot be read. |
+| `VideoFormat.width`, `VideoFormat.height` | `int` or `null` | The frame size in pixels. `null` where the source states none. |
+| `VideoFormat.fps` | `float` or `null` | The frame rate. `null` where the source states none. |
+| `VideoFormat.pix_fmt` | `str` or `null` | The pixel format, as FFmpeg names it (`yuv420p`). `null` where the source states none. |
+| `GradedEpisode.split` | `str` or `null` | The dataset split the source assigns the episode, such as `train`. Read from a LeRobot `info.json`'s `splits` ranges; `null` when the source assigns none, or when the episode falls in no range or in more than one. |
+| `Channel.source_dtype` | `str` or `null` | The dtype the source format declares for the channel's values: a LeRobot feature's `dtype`, an HDF5 dataset's dtype, or an MCAP message field's ROS type. `null` for CSV, delimited, JSON, JSONL and tabular sources, whose types are inferred, and wherever the format states none. Under `streams[].channels[].channel` and `streams[].declared_channels`. |
+
+A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current version, and refuse a newer one.
 
 ## Added in 7.1.0
 

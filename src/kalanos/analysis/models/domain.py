@@ -336,6 +336,10 @@ class Channel(BaseModel):
         `inference.roles` resolved it, or `None` when it carried neither.
         Orders channels within a stream and tells an axes-shaped stream
         which member is which.
+    source_dtype : str or None
+        The dtype the source format declares for this channel's values,
+        `None` when the format states none.
+        A dtype inferred from the values is never recorded here.
     """
 
     name: str
@@ -343,6 +347,7 @@ class Channel(BaseModel):
     source_index: int | None = Field(default=None, ge=0)
     declared_name: str | None = None
     binding: ChannelBinding | None = None
+    source_dtype: str | None = None
 
 
 class Stream(BaseModel):
@@ -617,11 +622,15 @@ class Episode(BaseModel):
         as the source stores them, blank strings included. `None` when the dataset
         carries no instruction for any episode, so an absent one is not a defect;
         an empty list when the dataset carries them but this episode has none.
+    split : str or None
+        The dataset split the source assigns this episode, such as `train`,
+        `None` when it assigns none.
     """
 
     id: str
     streams: list[Stream] = Field(default_factory=list)
     tasks: list[str] | None = None
+    split: str | None = None
 
     @property
     def source_paths(self) -> list[UPath]:

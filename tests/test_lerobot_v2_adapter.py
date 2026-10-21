@@ -15,6 +15,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.lerobot.common import split_of
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
 from kalanos.analysis.models.domain import Clock, Kind, TimestampDtype
 from kalanos.testing import check_adapter
@@ -162,3 +163,32 @@ def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock(fixture)
         for stream in episode.streams:
             assert stream.timestamp_dtype is TimestampDtype.FLOAT32
             assert stream.clock is Clock.RECONSTRUCTED
+
+
+def test_episodes_carry_their_split():
+    """Verify each episode carries the split `info.json` assigns its index."""
+
+    assert [e.split for e in _episodes(LEROBOT_V2_0_FIXTURE)] == ["train", "train"]
+
+
+def test_split_of_reads_ranges_and_refuses_ambiguity():
+    """Verify a split is named only when exactly one well-formed range holds it."""
+
+    two = {"splits": {"train": "0:2", "val": "2:3"}}
+    assert split_of(two, 0) == "train"
+    assert split_of(two, 2) == "val"
+    assert split_of(two, 5) is None
+    assert split_of({"splits": {"a": "0:2", "b": "1:3"}}, 1) is None
+    assert split_of({"splits": {"a": "x:2"}}, 0) is None
+    assert split_of({"splits": {"a": [0, 2]}}, 0) is None
+    assert split_of({}, 0) is None
+
+
+def test_channels_carry_the_declared_dtype():
+    """Verify each series channel carries the dtype its feature declares."""
+
+    [first, _] = _episodes(LEROBOT_V2_0_FIXTURE)
+    state = next(s for s in first.streams if s.source_field == "observation.state")
+
+    assert state.channels
+    assert {c.source_dtype for c in state.channels} == {"float32"}

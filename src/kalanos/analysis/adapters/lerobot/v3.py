@@ -31,6 +31,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     read_info,
     sampling_is_regular,
     series_streams,
+    split_of,
     timestamp_dtype_of,
     with_episode_clock,
 )
@@ -385,4 +386,5 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 tasks=None
                 if task_map is None
                 else task_map.get(row["episode_index"], []),
+                split=split_of(info, row["episode_index"]),
             )

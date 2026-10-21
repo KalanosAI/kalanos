@@ -179,6 +179,42 @@ def _coerced(value: Any, kind: type) -> Any:
         return None
 
 
+def split_of(info: dict[str, Any], episode_index: int) -> str | None:
+    """Name the split `info.json` assigns an episode.
+
+    `splits` maps each name to a `"start:end"` range of episode indices,
+    end exclusive. A range in any other form is skipped rather than guessed at.
+
+    Parameters
+    ----------
+    info : dict
+        The parsed `info.json`.
+    episode_index : int
+        The episode's index in the dataset.
+
+    Returns
+    -------
+    str or None
+        The one split whose range holds `episode_index`,
+        `None` when none does or more than one does.
+    """
+
+    splits = info.get("splits")
+    if not isinstance(splits, dict):
+        return None
+    found: list[str] = []
+    for name, bounds in splits.items():
+        if not isinstance(bounds, str):
+            continue
+        try:
+            start, end = (int(part) for part in bounds.split(":"))
+        except ValueError:
+            continue
+        if start <= episode_index < end:
+            found.append(str(name))
+    return found[0] if len(found) == 1 else None
+
+
 def declared_format(spec: dict[str, Any]) -> DeclaredFormat | None:
     """Read the video format one video feature declares.
 
@@ -320,6 +356,7 @@ def channels_for(
         One Channel per member. Named from `names` when its length matches
         the feature's width, indexed otherwise. A scalar feature yields
         exactly one channel, named after the feature itself.
+        Each carries the feature's declared `dtype`, `None` when it declares none.
     """
 
     names: list[str] = declared_names(spec)
@@ -333,6 +370,7 @@ def channels_for(
     else:
         channel_names = [f"{feature}_{i}" for i in range(width)]
 
+    dtype = spec.get("dtype")
     axis_by_name = {role.column: role.axis for role in roles(channel_names, dictionary)}
     return [
         Channel(
@@ -340,6 +378,7 @@ def channels_for(
             axis=axis_by_name[name],
             source_index=i,
             declared_name=names[i] if len(names) == width else None,
+            source_dtype=dtype if isinstance(dtype, str) else None,
         )
         for i, name in enumerate(channel_names)
     ]

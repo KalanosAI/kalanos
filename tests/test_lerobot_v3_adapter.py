@@ -325,3 +325,12 @@ def test_a_skipped_frame_does_not_erase_inferred_generation():
     assert episode_clock(whole, 30.0, dtype) is Clock.RECONSTRUCTED
     assert episode_clock(skipped, 30.0, dtype) is Clock.RECONSTRUCTED
     assert episode_clock(whole, None, dtype) is Clock.UNKNOWN
+
+
+def test_an_episode_carries_no_split_when_info_declares_none():
+    """Verify a dataset whose `info.json` has no `splits` assigns none."""
+
+    episodes = _episodes()
+
+    assert episodes
+    assert all(e.split is None for e in episodes)

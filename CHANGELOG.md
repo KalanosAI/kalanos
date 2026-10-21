@@ -4,6 +4,17 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Added
+
+- The report records each camera's width, height, frame rate and pixel format, both as the dataset declares it and as the video file's container states it, whether or not they agree, in `streams[].video_format` (report schema 7.2.0). A value the source does not state is null, and the metadata tier, which opens no media, leaves the container's side null.
+- The report records each episode's split, read from a LeRobot dataset's `info.json`, in `episodes[].split`, and each channel's dtype as a LeRobot feature, an HDF5 dataset or an MCAP message field declares it, in `source_dtype` (report schema 7.2.0). Both are null where the source states none; a CSV, JSON or tabular column's inferred type is not recorded.
+
+### Changed
+
+- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.2.0, so a report saved by 0.7.x, 0.8.0 or 0.8.1 still loads. A report of a newer schema is refused.
+
 ## [0.8.1] - 2026-10-19
 
 Report schema 7.1.0.

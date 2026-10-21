@@ -19,6 +19,7 @@ import yaml
 # Internal
 import kalanos
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
+from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION
 from kalanos.assets.policy import load_default_policy, load_policy
 
 # Local
@@ -177,7 +178,7 @@ def test_a_graded_report_records_its_source():
     assert report.source is not None
     assert report.source.protocol == "file"
     assert report.source.file_count > 0
-    assert report.schema_version == "7.1.0"
+    assert report.schema_version == CURRENT_SCHEMA_VERSION
 
 
 def test_the_full_tier_reads_every_camera_frame():
