@@ -1442,9 +1442,9 @@ def test_every_adapter_format_field_reaches_the_report():
 def _copy_v2_fixture(tmp_path) -> UPath:
     """Copy `lerobot_v2_0_tiny` to `tmp_path`, so a test may change it."""
 
-    root = UPath(tmp_path) / "dataset"
-    shutil.copytree(FIXTURES_DIR / "lerobot_v2_0_tiny", root)
-    return root
+    root = tmp_path / "dataset"
+    shutil.copytree(str(FIXTURES_DIR / "lerobot_v2_0_tiny"), root)
+    return UPath(root)
 
 
 def test_a_camera_stream_reports_what_its_feature_declares(tmp_path):
