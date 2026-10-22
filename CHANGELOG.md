@@ -4,6 +4,14 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Changed
+
+- A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 7.3.0).
+- Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 7.3.0).
+- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.3.0. A 7.2.0 report's per-episode diagnostics are ignored on load.
+
 ## [0.8.2] - 2026-10-21
 
 Report schema 7.2.0.

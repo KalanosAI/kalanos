@@ -1820,9 +1820,9 @@ def test_a_critical_vision_result_carries_its_worst_frame():
     ]
 
     assert results[0].status == MetricStatus.CRITICAL
-    assert results[0].evidence["thumbnail_png_base64"]
+    assert "worst_index" in results[0].evidence
+    assert "thumbnail_png_base64" not in results[0].evidence
     assert results[1].status == MetricStatus.GOOD
-    assert "thumbnail_png_base64" not in results[1].evidence
 
 
 def test_a_payload_that_raises_still_grades_its_stream(monkeypatch):

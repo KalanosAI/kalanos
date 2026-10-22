@@ -1,8 +1,15 @@
-# Report schema 7.2.0
+# Report schema 7.3.0
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 and 7.2.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 7.3.0 changes below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Changed in 7.3.0
+
+- `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.
+- `thumbnail_png_base64` is no longer written, neither in a vision diagnostic's `evidence.frames[]` nor in a metric's `evidence`. A vision result embeds one WebP preview of its blurriest sampled frame, in that frame's `thumbnail_webp_base64`, and names the frame in `measurements.preview_row` (`null` with `preview_frames: 0` or when the frame cannot be encoded). Each frame keeps its `source_row` and `presentation_time_s`, and the video file is the result's `subject.source_path`.
+
+A 7.2.0 report still loads: its `episodes[].diagnostics` is ignored, and any `thumbnail_png_base64` stays in `evidence` as it was written.
 
 ## Added in 7.2.0
 
@@ -160,11 +167,11 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 - Finding `id`, `source_path`, `source_field`, `source_index`, `subject_level`, `evidence_strength` and `calibration` make subjects and promotion decisions inspectable. IDs identify a metric at a source subject; they are not waveform hashes.
 - `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
 - `producer.metrics` and `producer.adapters` identify built-in code and numerical runtime. Third-party implementation identity remains unknown and cannot authorize statistical promotion.
-- Additive fields stay under the ongoing schema-7 development version. Historical files are not rewritten.
+- Additive fields stay under the ongoing schema-7 development version, and 7.3.0 also removes fields. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` still read every 7.x report up to 7.3.0. Historical files are not rewritten.
 
 
 ## Optional deeper diagnostics in 0.7.0
 
-`Report.diagnostics` is an optional version-1 diagnostic envelope with the plan, plan digest, implementation digest and addressed results. Each episode also retains its results in `episodes[].diagnostics`; validation requires agreement. Each result identifies its kind, configured id, episode/source subject, availability, measurements, evidence, support and report-only/review consequence. Window and visual counts reconcile; partial work is not silently complete. Existing schema-7 reports without these fields remain readable.
+`Report.diagnostics` is an optional version-1 diagnostic envelope with the plan, plan digest, implementation digest and addressed results. Each result identifies its kind, configured id, episode/source subject, availability, measurements, evidence, support and report-only/review consequence. Window and visual counts reconcile; partial work is not silently complete. Existing schema-7 reports without these fields remain readable.
 
 The optional plan is part of execution identity; diagnostic review thresholds are part of policy identity. `Stream.source_identity` and its graded counterpart carry the adapter source scope even for cameras with no scalar channel bindings. `requirements.min_pass_windows` adds named dataset minimums. Diagnostic comparison changes appear separately in `Comparison.diagnostic_changes`.
