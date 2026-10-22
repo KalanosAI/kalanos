@@ -5,8 +5,10 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import dataclasses
 import json
 import logging
+import shutil
 
 # External
 import polars as pl
@@ -17,6 +19,11 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters.csv import CsvAdapter
+from kalanos.analysis.adapters.video import (
+    ContainerHeader,
+    DeclaredFormat,
+    VideoPayload,
+)
 from kalanos.analysis.models.discovery import SkippedSource, SkipReason
 from kalanos.analysis.models.domain import (
     Attribution,
@@ -34,6 +41,7 @@ from kalanos.analysis.models.metrics import (
     MetricStatus,
 )
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     CURRENT_SCHEMA_VERSION,
     AnalysedEpisode,
@@ -41,6 +49,7 @@ from kalanos.analysis.models.report import (
     GradedEpisode,
     GradedStream,
     Report,
+    VideoFormat,
 )
 from kalanos.analysis.models.schema import SourceSchema, UnresolvedSource
 from kalanos.analysis.models.scoring import (
@@ -1366,3 +1375,170 @@ def test_a_level_with_no_score_renders_no_rail():
 
     assert "not graded" in html
     assert 'class="rail"' not in html
+
+
+def _source_stream(report: Report, source_field: str) -> GradedStream:
+    """Return the first episode's stream read from `source_field`."""
+
+    return next(s for s in report.episodes[0].streams if s.source_field == source_field)
+
+
+def test_a_camera_stream_reports_its_declared_and_container_format():
+    """Verify a camera carries both formats even where they agree, and they reload."""
+
+    pytest.importorskip("av")
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny")
+
+    reloaded = Report.model_validate_json(report.model_dump_json())
+    for graded in (report, reloaded):
+        camera = _source_stream(graded, "observation.images.up")
+        assert camera.video_format is not None
+        declared, found = camera.video_format.declared, camera.video_format.found
+        assert declared.fps == 30.0
+        assert declared.width is None and declared.height is None
+        assert (found.width, found.height, found.fps) == (32, 32, 30.0)
+        assert (found.codec, found.profile) == ("h264", "High")
+        assert (found.bit_rate, found.frame_count) == (26910, 8)
+        assert found.duration_s == pytest.approx(4096 / 15360)
+        # The fixture's colour codes are all unspecified.
+        assert found.color_range is None and found.color_primaries is None
+        assert found.color_transfer is None and found.color_space is None
+        assert found.encoder == "Lavf62.12.102"
+        assert found.camera_make is None and found.camera_model is None
+        assert declared.codec is None and declared.channels is None
+        assert declared.is_depth_map is None and declared.has_audio is None
+    assert _source_stream(report, "observation.state").video_format is None
+
+
+def test_the_metadata_tier_reports_no_container_format(monkeypatch):
+    """Verify the metadata tier states the declared format and opens no container."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: pytest.fail("metadata tier read the header"),
+    )
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny", tier=ExecutionTier.METADATA)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    assert camera.video_format.declared.fps == 30.0
+    found = camera.video_format.found.model_dump()
+    assert found and all(value is None for value in found.values())
+
+
+def test_every_adapter_format_field_reaches_the_report():
+    """Verify `VideoFormat` has a field for each the dataclasses carry, by name.
+
+    `camera_format` builds it from their fields by keyword,
+    and Pydantic ignores a keyword it has no field for.
+    """
+
+    fields = set(VideoFormat.model_fields)
+    assert {f.name for f in dataclasses.fields(DeclaredFormat)} <= fields
+    assert {f.name for f in dataclasses.fields(ContainerHeader)} <= fields
+
+
+def _copy_v2_fixture(tmp_path) -> UPath:
+    """Copy `lerobot_v2_0_tiny` to `tmp_path`, so a test may change it."""
+
+    root = tmp_path / "dataset"
+    shutil.copytree(str(FIXTURES_DIR / "lerobot_v2_0_tiny"), root)
+    return UPath(root)
+
+
+def test_a_camera_stream_reports_what_its_feature_declares(tmp_path):
+    """Verify the codec, channels and depth-map and audio flags `info` declares."""
+
+    root = _copy_v2_fixture(tmp_path)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.images.up"]["info"].update(
+        {
+            "video.codec": "av1",
+            "video.channels": 3,
+            "video.is_depth_map": False,
+            "has_audio": False,
+        }
+    )
+    info_path.write_text(json.dumps(info))
+
+    report = grade(root, tier=ExecutionTier.METADATA)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    declared = camera.video_format.declared
+    assert (declared.codec, declared.channels) == ("av1", 3)
+    assert declared.is_depth_map is False and declared.has_audio is False
+
+
+def test_a_camera_stream_reports_its_tags_and_colour_but_no_location(tmp_path):
+    """Verify make, model and colour reach the report, and a location tag does not."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+    root = _copy_v2_fixture(tmp_path)
+    location = "+48.8577+002.2950+035.000/"
+    path = root / "videos/chunk-000/observation.images.up/episode_000000.mp4"
+    container = av.open(str(path), "w", options={"movflags": "use_metadata_tags"})
+    container.metadata.update(
+        {
+            "com.apple.quicktime.make": "Acme",
+            "com.apple.quicktime.model": "Cam One",
+            "com.apple.quicktime.location.ISO6709": location,
+            "location": location,
+        }
+    )
+    stream = container.add_stream("libx264", rate=30)
+    stream.width = stream.height = 32
+    stream.pix_fmt = "yuv420p"
+    codec = stream.codec_context
+    codec.color_range = codec.color_primaries = codec.color_trc = 1
+    codec.colorspace = 1
+    for _ in range(8):
+        pixels = numpy.full((32, 32, 3), 128, dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+    with av.open(str(path)) as written:
+        assert location in written.metadata.values()
+
+    report = grade(root)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    found = camera.video_format.found
+    assert (found.camera_make, found.camera_model) == ("Acme", "Cam One")
+    assert (
+        found.color_range,
+        found.color_primaries,
+        found.color_transfer,
+        found.color_space,
+    ) == ("tv", "bt709", "bt709", "bt709")
+    assert location not in report.model_dump_json()
+
+
+def test_every_episode_in_a_shared_file_reports_the_whole_file():
+    """Verify both episodes of one v3 mp4 report the file's frame count."""
+
+    pytest.importorskip("av")
+    report = grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    counts = [
+        stream.video_format.found.frame_count
+        for episode in report.episodes
+        for stream in episode.streams
+        if stream.video_format is not None
+    ]
+    assert counts == [14, 14]
+
+
+def test_a_graded_episode_carries_its_split():
+    """Verify the graded report keeps each episode's split, and reloads it."""
+
+    report = grade(FIXTURES_DIR / "lerobot_v2_0_tiny")
+
+    reloaded = Report.model_validate_json(report.model_dump_json())
+    assert [e.split for e in reloaded.episodes] == ["train", "train"]

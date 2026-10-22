@@ -630,3 +630,13 @@ def test_a_hand_written_indexed_group_keeps_its_indices_even_when_dictionary_cla
     [stream] = episode.streams
     assert stream.taxonomy_type == "extero.imu"
     assert [channel.axis for channel in stream.channels] == ["0", "1", "2"]
+
+
+def test_channels_carry_no_source_dtype():
+    """Verify a CSV column's inferred dtype is not reported as a declared one."""
+
+    episode = next(CsvAdapter().episodes(CSV_FIXTURE))
+
+    channels = [c for s in episode.streams for c in s.channels]
+    assert channels
+    assert all(c.source_dtype is None for c in channels)

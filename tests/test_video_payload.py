@@ -494,3 +494,30 @@ def test_a_remote_read_that_fails_drops_its_handle(remote_video):
         payload.packet_times()
 
     assert str(remote_video) not in video._REMOTE_HANDLES
+
+
+def test_the_header_names_the_codec_rather_than_its_decoder(tmp_path):
+    """Verify an AV1 file's codec reads as `av1`, whichever decoder opens it."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+    path = UPath(tmp_path) / "av1.mp4"
+    container = av.open(str(path), "w")
+    try:
+        stream = container.add_stream("libsvtav1", rate=30)
+    except av.codec.codec.UnknownCodecError:
+        container.close()
+        pytest.skip("this PyAV build has no AV1 encoder")
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    for _ in range(4):
+        pixels = numpy.zeros((64, 64, 3), dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+    payload = VideoPayload(path=path, frame_count=4, start_s=0.0, end_s=4 / 30)
+
+    assert payload.header().codec == "av1"

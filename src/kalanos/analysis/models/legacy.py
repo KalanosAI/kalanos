@@ -145,6 +145,34 @@ def _unknown(data: dict[str, Any]) -> list[str]:
     return missing
 
 
+def _reads_as_current(version: str) -> bool:
+    """Whether a file declaring `version` validates as the current `Report`.
+
+    Minor and patch bumps inside a major only add fields with defaults,
+    so an older file of the current major still validates.
+    A newer one would validate too, dropping the fields this build does not know,
+    so it is refused.
+
+    Parameters
+    ----------
+    version : str
+        The file's `schema_version`.
+
+    Returns
+    -------
+    bool
+        True when `version` is three integers, its major is the current major,
+        and it is not newer than `CURRENT_SCHEMA_VERSION`.
+    """
+
+    current = tuple(int(part) for part in CURRENT_SCHEMA_VERSION.split("."))
+    try:
+        found = tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return False
+    return len(found) == 3 and found[0] == current[0] and found <= current
+
+
 def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
     """Load a schema-6 report from a path, bytes, or an already-parsed dict.
 
@@ -171,7 +199,7 @@ def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
         raw = source if isinstance(source, bytes) else UPath(source).read_bytes()
         data = json.loads(raw)
     version = str(data.get("schema_version", ""))
-    if version == CURRENT_SCHEMA_VERSION:
+    if _reads_as_current(version):
         raise UnsupportedSchema(
             f"schema {version} is current; read it as a Report, not a legacy file"
         )
@@ -210,7 +238,8 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
     Returns
     -------
     Report or LegacyReport
-        A `Report` when the file declares the current schema,
+        A `Report` when the file declares the current schema major,
+        up to the current version,
         otherwise the file loaded as a `LegacyReport`.
 
     Raises
@@ -219,14 +248,15 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
         If `source` cannot be read.
     ValueError
         If the file is not JSON,
-        or a current-schema file does not validate as a `Report`.
+        or a file of the current schema major does not validate as a `Report`.
     UnsupportedSchema
-        If the file declares neither the current schema nor one of `LEGACY_SCHEMAS`.
+        If the file declares neither the current schema major,
+        up to the current version, nor one of `LEGACY_SCHEMAS`.
     """
 
     raw = UPath(source).read_bytes()
     version = str(json.loads(raw).get("schema_version", ""))
-    if version == CURRENT_SCHEMA_VERSION:
+    if _reads_as_current(version):
         return Report.model_validate_json(raw)
     return load_legacy(raw)
 

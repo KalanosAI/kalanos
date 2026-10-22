@@ -247,12 +247,17 @@ def _is_channel_shaped(dataset: h5py.Dataset) -> bool:
     )
 
 
-def _channels_for(key: str, width: int, dictionary: Dictionary) -> list[Channel]:
+def _channels_for(
+    key: str, width: int, dictionary: Dictionary, source_dtype: str | None
+) -> list[Channel]:
     """Resolve one dataset's channels, named after the key and indexed by column."""
 
     names = [key] if width == 1 else [f"{key}_{index}" for index in range(width)]
     axis_by_name = {role.column: role.axis for role in roles(names, dictionary)}
-    return [Channel(name=name, axis=axis_by_name[name]) for name in names]
+    return [
+        Channel(name=name, axis=axis_by_name[name], source_dtype=source_dtype)
+        for name in names
+    ]
 
 
 def _taxonomy_type(key: str, dictionary: Dictionary) -> str:
@@ -299,7 +304,7 @@ def _series_stream(
 
     values = dataset[()]
     width = 1 if values.ndim == 1 else values.shape[1]
-    channels = _channels_for(key, width, dictionary)
+    channels = _channels_for(key, width, dictionary, str(dataset.dtype))
 
     if values.ndim == 1:
         payload_frame = pl.DataFrame({channels[0].name: values}).cast(pl.Float64)

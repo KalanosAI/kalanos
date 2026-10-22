@@ -1,8 +1,35 @@
-# Report schema 7.1.0
+# Report schema 7.2.0
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, and the 7.1.0 and 7.2.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 7.2.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `GradedStream.video_format` | `CameraFormat` or `null` | The camera's declared and container format, stated whether or not they agree. `null` when the stream is not camera footage backed by a video file. |
+| `CameraFormat.declared` | `VideoFormat` | What the dataset's own metadata declares for the camera. |
+| `CameraFormat.found` | `VideoFormat` | What the video file's container header and tags state for its first video stream, covering the whole file. Every field `null` at the metadata tier, which opens no media, or when the header cannot be read. |
+| `VideoFormat.width`, `VideoFormat.height` | `int` or `null` | The frame size in pixels. `null` where the source states none. |
+| `VideoFormat.fps` | `float` or `null` | The frame rate. `null` where the source states none. |
+| `VideoFormat.pix_fmt` | `str` or `null` | The pixel format, as FFmpeg names it (`yuv420p`). `null` where the source states none. |
+| `VideoFormat.codec` | `str` or `null` | The video codec: FFmpeg's name on `found` (`h264`), a LeRobot feature's `video.codec` on `declared`. `null` where the source states none. |
+| `VideoFormat.profile` | `str` or `null` | The codec profile (`High`). `found` only. |
+| `VideoFormat.bit_rate` | `int` or `null` | The video stream's bitrate in bits per second. `found` only. |
+| `VideoFormat.frame_count` | `int` or `null` | How many frames the video stream holds. `found` only. |
+| `VideoFormat.duration_s` | `float` or `null` | The video stream's duration in seconds. `found` only. |
+| `VideoFormat.color_range`, `VideoFormat.color_primaries`, `VideoFormat.color_transfer`, `VideoFormat.color_space` | `str` or `null` | The colour range, primaries, transfer characteristic and colour space, as FFmpeg names them (`tv`, `bt709`). `null` when the container leaves a code unspecified. `found` only. |
+| `VideoFormat.channels` | `int` or `null` | How many channels each frame holds, from a LeRobot feature's `video.channels`. `declared` only. |
+| `VideoFormat.is_depth_map`, `VideoFormat.has_audio` | `bool` or `null` | Whether the camera records depth, and whether its files carry audio, from a LeRobot feature's `video.is_depth_map` and `has_audio`. `null` unless the feature states a JSON boolean. `declared` only. |
+| `VideoFormat.camera_make`, `VideoFormat.camera_model` | `str` or `null` | The camera maker and model a container tag names, such as `com.apple.quicktime.make` or `com.android.model`. `found` only. |
+| `VideoFormat.encoder` | `str` or `null` | The software that wrote the file, from its `encoder` tag (`Lavf62.12.102`). `found` only. |
+| `GradedEpisode.split` | `str` or `null` | The dataset split the source assigns the episode, such as `train`. Read from a LeRobot `info.json`'s `splits` ranges; `null` when the source assigns none, or when the episode falls in no range or in more than one. |
+| `Channel.source_dtype` | `str` or `null` | The dtype the source format declares for the channel's values: a LeRobot feature's `dtype`, an HDF5 dataset's dtype, or an MCAP message field's ROS type. `null` for CSV, delimited, JSON, JSONL and tabular sources, whose types are inferred, and wherever the format states none. Under `streams[].channels[].channel` and `streams[].declared_channels`. |
+
+`found`'s `bit_rate`, `frame_count` and `duration_s` describe the whole video file. A LeRobot v3.0 dataset stores several episodes in one file, so each of those episodes reports the same values. Of the container's tags, only the camera make, model and encoder are read, and no location is recorded. A field one side can never state stays `null` on that side.
+
+A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null, and a `video_format` that lacks the codec, encoding and source fields loads with them null. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current version, and refuse a newer one.
 
 ## Added in 7.1.0
 

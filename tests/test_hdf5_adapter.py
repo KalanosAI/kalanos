@@ -456,3 +456,17 @@ def test_smooth_joint_motion_raises_no_motion_finding(tmp_path):
     assert not [f for f in findings if f.family == "motion"]
     assert not [f for f in findings if f.metric_id == "integrity.flatline_pct"]
     assert report.score.grade == "A"
+
+
+def test_channels_carry_the_dataset_dtype():
+    """Verify each channel carries the dtype of the dataset it was read from."""
+
+    [first, _] = list(Hdf5Adapter().episodes(HDF5_FIXTURE))
+    actions = next(s for s in first.streams if s.source_field == "actions")
+    with h5py.File(str(HDF5_FIXTURE)) as handle:
+        dataset = handle["runs/session_a/actions"]
+        assert isinstance(dataset, h5py.Dataset)
+        expected = str(dataset.dtype)
+
+    assert actions.channels
+    assert {c.source_dtype for c in actions.channels} == {expected}
