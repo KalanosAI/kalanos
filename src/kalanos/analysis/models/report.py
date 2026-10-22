@@ -551,6 +551,56 @@ class DuplicateEpisodes(BaseModel):
     cameras: list[str] = Field(default_factory=list)
 
 
+class NearDuplicateSummary(BaseModel):
+    """How many episode pairs the near-duplicate search found, over the whole dataset.
+
+    Copies that hash identically are compared once, through the earliest of them,
+    so the episode and pair counts are over those representatives.
+
+    Attributes
+    ----------
+    limit : float
+        The largest normalized RMSE at which a pair counts as near.
+    max_partners : int
+        The most near partners a finding lists.
+        Each episode also keeps only this many in `Report.duplicates`
+        when `pairs_listed` is less than `pairs_near`.
+    episodes_compared : int
+        The representatives the near search compared.
+    pairs_compared : int
+        The pairs among them, summed over the groups of episodes
+        that hold the same streams and channels.
+    pairs_near : int
+        Of those, the pairs within `limit` whose row counts also agree.
+    pairs_listed : int
+        The near pairs in `Report.duplicates`: every one of `pairs_near`,
+        or, when there are too many to list, those among the nearest
+        `max_partners` of either episode.
+    episodes_with_partner : int
+        The episodes, copies included, with at least one near partner.
+    median_nearest_nrmse : float or None
+        The median, over representatives with a near partner,
+        of the distance to their nearest one.
+        `None` when `pairs_near` is 0.
+    saturated : bool
+        Whether more than half the compared pairs are near,
+        and there are more near pairs than compared episodes.
+        The limit then does not separate copies from re-runs in this dataset,
+        so no near-duplicate finding is emitted;
+        the exact tier still applies, and `Report.duplicates` keeps the nearest pairs.
+    """
+
+    limit: float
+    max_partners: int
+    episodes_compared: int
+    pairs_compared: int
+    pairs_near: int
+    pairs_listed: int
+    episodes_with_partner: int
+    median_nearest_nrmse: float | None
+    saturated: bool
+
+
 class NotObservable(BaseModel):
     """A metric that could not grade this dataset, and why.
 
@@ -702,6 +752,15 @@ class Report(BaseModel):
         Each pair of episodes whose numeric payloads are identical or nearly so.
         Identical episodes pair only with the first of them,
         which also stands for them in a near pair.
+        Every near pair is listed, unless there are too many:
+        `near_duplicates.pairs_listed` then falls short of `pairs_near`.
+    near_duplicates : NearDuplicateSummary or None
+        How many pairs the near-duplicate search found, and whether that many
+        leaves the near tier uninformative for this dataset.
+        `None` when the search did not run: numpy is missing,
+        or no group of comparable episodes holds two
+        that differ in their payloads and could be resampled
+        (every value finite, at least 2 rows).
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
@@ -736,6 +795,7 @@ class Report(BaseModel):
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
+    near_duplicates: NearDuplicateSummary | None = None
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":

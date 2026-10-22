@@ -10,6 +10,11 @@ so this pass compares the numeric payloads of every pair of episodes after gradi
 - a near duplicate lies within `_NEAR_RMSE` once each trajectory is resampled
   and normalized, and is only reported.
 
+A near finding lists at most its episode's `_MAX_PARTNERS` nearest partners,
+`Report.duplicates` lists every near pair up to `_MAX_LISTED_PAIRS`,
+and when most pairs are near, the report says so once, in `Report.near_duplicates`,
+in place of a near finding on every episode.
+
 Camera footage takes no part in the comparison.
 A pair that also repeats its footage exactly, as `scoring.cameras` finds it, says so.
 It reads payloads the channel metrics already fetched, so it decodes no video.
@@ -25,8 +30,9 @@ so it is not found (docs/METRICS.md, "Duplicate episodes").
 import hashlib
 import json
 import math
+import statistics
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
 # External
@@ -41,6 +47,7 @@ from kalanos.analysis.models.report import (
     CameraSummary,
     DuplicateEpisodes,
     GradedEpisode,
+    NearDuplicateSummary,
 )
 from kalanos.analysis.models.scoring import Finding, Severity
 from kalanos.analysis.optional import load_numpy
@@ -62,6 +69,16 @@ _NEAR_RMSE = 0.02
 # The most a near pair's streams may each differ in row count,
 # as a share of the longer one.
 _DURATION_TOLERANCE = 0.1
+# Near partners a finding lists, and that each episode keeps past `_MAX_LISTED_PAIRS`.
+_MAX_PARTNERS = 5
+# The most near pairs `Report.duplicates` lists in full.
+# Past it, each episode keeps only its `_MAX_PARTNERS` nearest,
+# so the list stops growing with the square of the episode count
+# (docs/METRICS.md, "Duplicate episodes").
+_MAX_LISTED_PAIRS = 1_500_000
+# Above this share of compared pairs the near tier is saturated
+# (docs/METRICS.md, "Duplicate episodes").
+_SATURATED_SHARE = 0.5
 # The most entries in one block of the pairwise distance matrix,
 # which bounds its memory.
 _CHUNK = 2_000_000
@@ -82,6 +99,8 @@ _UNCALIBRATED = {
 # Where a stream sits in its episode: taxonomy type, instance, source field,
 # and which of the streams sharing those three it is.
 StreamKey = tuple[str, str | None, str | None, int]
+# Receives a block of confirmed pairs: row indices `i < j` and their distances.
+Emit = Callable[["np.ndarray", "np.ndarray", "np.ndarray"], None]
 
 
 # ░█▄█░█▀█░█▀▄░█▀▀░█░░░█▀▀
@@ -315,9 +334,13 @@ def _vectors(
 
 
 def _confirm(
-    vectors: "np.ndarray", left: "np.ndarray", right: "np.ndarray", limit: float
-) -> list[tuple[int, int, float]]:
-    """The candidate pairs `(left[k], right[k])` within `limit` normalized RMSE.
+    vectors: "np.ndarray",
+    left: "np.ndarray",
+    right: "np.ndarray",
+    limit: float,
+    emit: Emit,
+) -> None:
+    """Pass on the candidate pairs `(left[k], right[k])` within `limit` normalized RMSE.
 
     Every search path ends here, so they agree on a pair that sits on the limit.
 
@@ -329,18 +352,15 @@ def _confirm(
         Row indices of the candidate pairs, `left[k] < right[k]`.
     limit : float
         The largest normalized RMSE kept.
-
-    Returns
-    -------
-    list of tuple of (int, int, float)
-        `(i, j, distance)` for each candidate within `limit`, in candidate order.
+    emit : Emit
+        Called once per block of candidates that holds a pair within `limit`,
+        with those pairs' int64 rows and float64 distances, in candidate order.
     """
 
     numpy = load_numpy()
     assert numpy is not None
 
     dim = vectors.shape[1]
-    found: list[tuple[int, int, float]] = []
     step = max(1, _CHUNK // dim)
     for start in range(0, len(left), step):
         i, j = left[start : start + step], right[start : start + step]
@@ -349,18 +369,16 @@ def _confirm(
             numpy.einsum("ij,ij->i", difference, difference, dtype=numpy.float64) / dim
         )
         keep = numpy.nonzero(distance <= limit)[0]
-        found.extend(
-            zip(
-                i[keep].tolist(), j[keep].tolist(), distance[keep].tolist(), strict=True
+        if len(keep):
+            emit(
+                i[keep].astype(numpy.int64),
+                j[keep].astype(numpy.int64),
+                distance[keep],
             )
-        )
-    return found
 
 
-def _all_close_pairs(
-    vectors: "np.ndarray", limit: float
-) -> list[tuple[int, int, float]]:
-    """`close_pairs` by comparing every pair, a block of rows at a time.
+def _all_close_pairs(vectors: "np.ndarray", limit: float, emit: Emit) -> None:
+    """`_search` by comparing every pair, a block of rows at a time.
 
     Parameters
     ----------
@@ -368,11 +386,8 @@ def _all_close_pairs(
         One row per episode, from `_vectors`.
     limit : float
         The largest normalized RMSE kept.
-
-    Returns
-    -------
-    list of tuple of (int, int, float)
-        `(i, j, distance)` with `i < j`, ordered by `i` then `j`.
+    emit : Emit
+        Receives the pairs within `limit`, a block at a time, from `_confirm`.
     """
 
     numpy = load_numpy()
@@ -389,7 +404,6 @@ def _all_close_pairs(
     # at most `dim` units of rounding on the squared lengths.
     tolerance = 2 * (dim + 1) * float(numpy.finfo(vectors.dtype).eps)
     rows = max(1, _CHUNK // max(1, n))
-    left, right = [], []
     for start in range(0, n, rows):
         stop = min(start + rows, n)
         # Only columns after the block's first row can hold a pair above the diagonal.
@@ -398,15 +412,47 @@ def _all_close_pairs(
         block -= 2 * vectors[start:stop] @ vectors[start:].T
         rows_i, cols = numpy.nonzero(block <= cut)
         above = start + cols > start + rows_i
-        left.append(start + rows_i[above])
-        right.append(start + cols[above])
-    if not left:
-        return []
-    return _confirm(vectors, numpy.concatenate(left), numpy.concatenate(right), limit)
+        _confirm(vectors, start + rows_i[above], start + cols[above], limit, emit)
 
 
 def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, float]]:
     """Every pair of rows of `vectors` whose normalized RMSE is at most `limit`.
+
+    Parameters
+    ----------
+    vectors : numpy.ndarray
+        One row per episode, from `_vectors`.
+    limit : float
+        The largest normalized RMSE kept.
+
+    Returns
+    -------
+    list of tuple of (int, int, float)
+        `(i, j, distance)` with `i < j`, ordered by `i` then `j`.
+    """
+
+    found: list[tuple[int, int, float]] = []
+
+    def collect(i: "np.ndarray", j: "np.ndarray", distance: "np.ndarray") -> None:
+        """Keep a block of pairs as tuples.
+
+        Parameters
+        ----------
+        i, j : numpy.ndarray
+            The pairs' rows, `i < j`.
+        distance : numpy.ndarray
+            Their normalized RMSE.
+        """
+
+        found.extend(zip(i.tolist(), j.tolist(), distance.tolist(), strict=True))
+
+    _search(vectors, limit, collect)
+    found.sort()
+    return found
+
+
+def _search(vectors: "np.ndarray", limit: float, emit: Emit) -> None:
+    """Pass on every pair of rows of `vectors` whose normalized RMSE is at most `limit`.
 
     Comparing every pair grows with the square of the episode count,
     while a near duplicate lies far closer than distinct episodes do.
@@ -424,11 +470,9 @@ def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, flo
         One row per episode, from `_vectors`.
     limit : float
         The largest normalized RMSE kept.
-
-    Returns
-    -------
-    list of tuple of (int, int, float)
-        `(i, j, distance)` with `i < j`, ordered by `i` then `j`.
+    emit : Emit
+        Receives the pairs within `limit`, a block at a time, from `_confirm`,
+        each pair once and in no set order.
     """
 
     numpy = load_numpy()
@@ -436,7 +480,8 @@ def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, flo
 
     n, dim = vectors.shape
     if n < _PRUNE_FROM:
-        return _all_close_pairs(vectors, limit)
+        _all_close_pairs(vectors, limit, emit)
+        return
 
     # Step 1: the main directions, from evenly spaced rows, and every row's projection.
     sample = vectors[numpy.linspace(0, n - 1, min(n, _PRUNE_SAMPLE)).astype(int)]
@@ -454,11 +499,11 @@ def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, flo
     ends = numpy.searchsorted(first, first + radius, side="right")
     counts = ends - numpy.arange(n) - 1
     if counts.sum() > _PRUNE_GIVE_UP * n * (n - 1) / 2:
-        return _all_close_pairs(vectors, limit)
+        _all_close_pairs(vectors, limit, emit)
+        return
 
     # Step 3: the window's pairs, kept where every other projection is close too,
     # a slice of rows at a time so the candidate arrays stay bounded.
-    found: list[tuple[int, int, float]] = []
     position = 0
     while position < n:
         stop = position + 1
@@ -477,10 +522,240 @@ def close_pairs(vectors: "np.ndarray", limit: float) -> list[tuple[int, int, flo
         a, b = a[near], b[near]
         swap = a > b
         a[swap], b[swap] = b[swap], a[swap]
-        found.extend(_confirm(vectors, a, b, limit))
+        _confirm(vectors, a, b, limit, emit)
         position = stop
-    found.sort()
-    return found
+
+
+class _Nearest:
+    """Each row's near partner count and nearest partners, kept as pairs stream in,
+    so the full list of near pairs is never held.
+
+    Attributes
+    ----------
+    counts : numpy.ndarray
+        How many near partners each row has, as int64.
+    weighted : numpy.ndarray
+        The same, each partner counting the exact copies it stands for, as float64.
+    partner : numpy.ndarray
+        An `(n, _MAX_PARTNERS)` int64 array of each row's nearest partners,
+        nearest first, ties broken on the lower row; -1 past the last one.
+    distance : numpy.ndarray
+        An `(n, _MAX_PARTNERS)` float64 array of their distances,
+        `inf` past the last one.
+    total : int
+        How many pairs were added.
+    """
+
+    def __init__(self, n: int, weights: "Sequence[int] | np.ndarray") -> None:
+        """Start with no pair.
+
+        Parameters
+        ----------
+        n : int
+            How many rows the pairs index.
+        weights : sequence of int or numpy.ndarray
+            How many exact copies each row stands for, itself included.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        self._weights = numpy.asarray(weights, dtype=numpy.float64)
+        self.counts = numpy.zeros(n, dtype=numpy.int64)
+        self.weighted = numpy.zeros(n, dtype=numpy.float64)
+        self.partner = numpy.full((n, _MAX_PARTNERS), -1, dtype=numpy.int64)
+        self.distance = numpy.full((n, _MAX_PARTNERS), numpy.inf)
+        self.total = 0
+
+    def add(self, i: "np.ndarray", j: "np.ndarray", distance: "np.ndarray") -> None:
+        """Count a block of pairs on both their rows, and keep the nearest.
+
+        Parameters
+        ----------
+        i, j : numpy.ndarray
+            The pairs' rows, `i < j`, each pair added once.
+        distance : numpy.ndarray
+            Their normalized RMSE.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        if not len(i):
+            return
+        n, k = self.partner.shape
+        self.total += len(i)
+        rows = numpy.concatenate([i, j])
+        others = numpy.concatenate([j, i])
+        distances = numpy.concatenate([distance, distance])
+        self.counts += numpy.bincount(rows, minlength=n)
+        self.weighted += numpy.bincount(
+            rows, weights=self._weights[others], minlength=n
+        )
+
+        # Step 1: each row's k nearest in this block.
+        order = numpy.lexsort((others, distances, rows))
+        rows, others, distances = rows[order], others[order], distances[order]
+        starts = numpy.flatnonzero(numpy.r_[True, rows[1:] != rows[:-1]])
+        rank = numpy.arange(len(rows)) - numpy.repeat(
+            starts, numpy.diff(numpy.r_[starts, len(rows)])
+        )
+        keep = rank < k
+        touched = rows[starts]
+        slot = numpy.searchsorted(touched, rows[keep])
+
+        # Step 2: merged with the k each touched row already holds.
+        partner = numpy.full((len(touched), 2 * k), -1, dtype=numpy.int64)
+        merged = numpy.full((len(touched), 2 * k), numpy.inf)
+        partner[:, :k] = self.partner[touched]
+        merged[:, :k] = self.distance[touched]
+        partner[slot, k + rank[keep]] = others[keep]
+        merged[slot, k + rank[keep]] = distances[keep]
+        best = numpy.lexsort((partner, merged))[:, :k]
+        self.partner[touched] = numpy.take_along_axis(partner, best, axis=1)
+        self.distance[touched] = numpy.take_along_axis(merged, best, axis=1)
+
+    def pairs(self) -> list[tuple[int, int, float]]:
+        """The pairs among the nearest of either of their rows.
+
+        Returns
+        -------
+        list of tuple of (int, int, float)
+            `(i, j, distance)` with `i < j`, each pair once, ordered by `i` then `j`.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        n, k = self.partner.shape
+        rows = numpy.repeat(numpy.arange(n), k)
+        others = self.partner.ravel()
+        valid = others >= 0
+        a = numpy.minimum(rows, others)[valid]
+        b = numpy.maximum(rows, others)[valid]
+        distance = self.distance.ravel()[valid]
+        _keys, first = numpy.unique(a * n + b, return_index=True)
+        return list(
+            zip(
+                a[first].tolist(),
+                b[first].tolist(),
+                distance[first].tolist(),
+                strict=True,
+            )
+        )
+
+
+class _Listed:
+    """Every near pair streamed in, until there are more than `_MAX_LISTED_PAIRS`.
+
+    Attributes
+    ----------
+    blocks : list of tuple or None
+        Each block's group index, rows `i < j` and distances, in the order added.
+        `None` once the pairs added outnumber `_MAX_LISTED_PAIRS`,
+        and the blocks are dropped.
+    group : int
+        The group index the next blocks are recorded under.
+    total : int
+        How many pairs were added.
+    """
+
+    def __init__(self) -> None:
+        """Start with no pair."""
+
+        self.blocks: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]] | None = []
+        self.group = 0
+        self.total = 0
+
+    def add(self, i: "np.ndarray", j: "np.ndarray", distance: "np.ndarray") -> None:
+        """Keep a block of pairs, or drop every block once there are too many.
+
+        Parameters
+        ----------
+        i, j : numpy.ndarray
+            The pairs' rows, `i < j`.
+        distance : numpy.ndarray
+            Their normalized RMSE.
+        """
+
+        self.total += len(i)
+        if self.blocks is None:
+            return
+        if self.total > _MAX_LISTED_PAIRS:
+            self.blocks = None
+            return
+        if len(i):
+            self.blocks.append((self.group, i, j, distance))
+
+
+def _fan_out(*emits: Emit) -> Emit:
+    """Pass each block of pairs to every one of `emits`.
+
+    Parameters
+    ----------
+    *emits : Emit
+        The receivers, called in order.
+
+    Returns
+    -------
+    Emit
+        The combined emit.
+    """
+
+    def emit(i: "np.ndarray", j: "np.ndarray", distance: "np.ndarray") -> None:
+        """Pass the block on.
+
+        Parameters
+        ----------
+        i, j : numpy.ndarray
+            The pairs' rows, `i < j`.
+        distance : numpy.ndarray
+            Their normalized RMSE.
+        """
+
+        for receiver in emits:
+            receiver(i, j, distance)
+
+    return emit
+
+
+def _within_duration(n_rows: "np.ndarray", emit: Emit) -> Emit:
+    """Wrap `emit` so it receives only the pairs whose row counts agree.
+
+    Parameters
+    ----------
+    n_rows : numpy.ndarray
+        An `(n, n_keys)` array of each row's row count on every stream key.
+    emit : Emit
+        Receives the pairs whose streams each differ in row count
+        by at most `_DURATION_TOLERANCE` of the longer one.
+
+    Returns
+    -------
+    Emit
+        The filtering emit.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    def filtered(i: "np.ndarray", j: "np.ndarray", distance: "np.ndarray") -> None:
+        """Pass on the block's pairs whose row counts agree.
+
+        Parameters
+        ----------
+        i, j : numpy.ndarray
+            The pairs' rows, `i < j`.
+        distance : numpy.ndarray
+            Their normalized RMSE.
+        """
+
+        left, right = n_rows[i], n_rows[j]
+        mismatch = (numpy.abs(left - right) / numpy.maximum(left, right)).max(axis=1)
+        keep = mismatch <= _DURATION_TOLERANCE
+        emit(i[keep], j[keep], distance[keep])
+
+    return filtered
 
 
 def _finding(
@@ -502,7 +777,8 @@ def _finding(
         Each partner's episode id and normalized RMSE.
     count : int
         How many episodes `episode_id` duplicates, counting the exact copies
-        a partner stands for.
+        a partner stands for and, on a near finding,
+        every partner past the nearest `_MAX_PARTNERS`.
     footage : dict of str to dict of str to int
         Each episode's repeat groups, from `_footage`.
 
@@ -527,6 +803,7 @@ def _finding(
     if not exact:
         evidence["nrmse"] = [distance for _p, distance in partners]
         evidence["max_nrmse"] = _NEAR_RMSE
+        evidence["partners_omitted"] = count - len(partners)
     return Finding(
         id=content_digest({"metric": metric_id, "episode": episode_id}),
         metric_id=metric_id,
@@ -549,7 +826,7 @@ def find_duplicate_episodes(
     episodes: Sequence[GradedEpisode],
     fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
     cameras: Sequence[CameraSummary] = (),
-) -> tuple[list[DuplicateEpisodes], list[Finding]]:
+) -> tuple[list[DuplicateEpisodes], list[Finding], NearDuplicateSummary | None]:
     """Pair the episodes whose numeric payloads are identical or nearly so.
 
     Only episodes whose fingerprinted streams sit at the same keys
@@ -565,6 +842,11 @@ def find_duplicate_episodes(
       and every copy in either group is near the other group's earliest episode.
 
     Every copy still carries each finding the pair implies.
+    A near finding lists only the episode's `_MAX_PARTNERS` nearest partners.
+    Every near pair is kept while there are at most `_MAX_LISTED_PAIRS`;
+    past that, a near pair is kept only when it is among the `_MAX_PARTNERS` nearest
+    of either episode.
+    When the near tier is saturated, no near finding is made.
 
     Parameters
     ----------
@@ -577,9 +859,10 @@ def find_duplicate_episodes(
 
     Returns
     -------
-    tuple of (list of DuplicateEpisodes, list of Finding)
-        Every pair in episode order, and one finding per episode and tier
-        with at least one partner.
+    tuple of (list of DuplicateEpisodes, list of Finding, NearDuplicateSummary or None)
+        Every kept pair in episode order, one finding per episode and tier
+        with at least one partner, and the near search's counts over the dataset,
+        `None` when no group reached the near search.
     """
 
     # Step 1: each taking part episode's fingerprints, grouped by what they hold.
@@ -596,6 +879,14 @@ def find_duplicate_episodes(
     pairs: list[DuplicateEpisodes] = []
     # Each group's episodes by its earliest one, which comes first.
     copies: dict[str, list[str]] = {}
+    # Each representative's nearest partners with their distances,
+    # and how many episodes it is near, copies included.
+    near: dict[str, tuple[list[tuple[str, float]], int]] = {}
+    # Each searched group's representatives and their nearest partners.
+    searched: list[tuple[list[str], _Nearest]] = []
+    listed = _Listed()
+    episodes_compared = pairs_compared = pairs_near = 0
+    nearest_distances: list[float] = []
     for signature, members in groups.items():
         if len(members) < 2:
             continue
@@ -624,7 +915,8 @@ def find_duplicate_episodes(
         # Step 3: near pairs, among the earliest episodes of the groups
         # resampled on every key. Copies resample to the same points,
         # so the other copies would only repeat their earliest one's pairs.
-        if load_numpy() is None:
+        numpy = load_numpy()
+        if numpy is None:
             continue
         resampled = [
             (episode_id, prints)
@@ -644,27 +936,82 @@ def find_duplicate_episodes(
             continue
         if len(firsts) < len(resampled):
             vectors = vectors[firsts]
-        for i, j, distance in close_pairs(vectors, _NEAR_RMSE):
-            (a, left), (b, right) = resampled[firsts[i]], resampled[firsts[j]]
-            mismatch = max(
-                abs(left[k].n_rows - right[k].n_rows)
-                / max(left[k].n_rows, right[k].n_rows)
-                for k in keys
-            )
-            if mismatch > _DURATION_TOLERANCE:
-                continue
-            shared = _shared_footage(footage, a, b)
-            pairs.append(
-                DuplicateEpisodes(
-                    episodes=[a, b],
-                    tier="near",
-                    nrmse=distance,
-                    footage_identical=bool(shared),
-                    cameras=shared,
-                )
-            )
+        ids = [resampled[index][0] for index in firsts]
+        n_rows = numpy.array(
+            [[resampled[index][1][k].n_rows for k in keys] for index in firsts],
+            dtype=numpy.float64,
+        )
+        nearest = _Nearest(len(ids), [len(copies[episode_id]) for episode_id in ids])
+        listed.group = len(searched)
+        _search(
+            vectors,
+            _NEAR_RMSE,
+            _within_duration(n_rows, _fan_out(nearest.add, listed.add)),
+        )
 
-    # Step 4: pairs in episode order, then one finding per episode and tier.
+        searched.append((ids, nearest))
+        episodes_compared += len(ids)
+        pairs_compared += len(ids) * (len(ids) - 1) // 2
+        pairs_near += nearest.total
+        for row in numpy.flatnonzero(nearest.counts).tolist():
+            kept = [
+                (ids[partner], distance)
+                for partner, distance in zip(
+                    nearest.partner[row].tolist(),
+                    nearest.distance[row].tolist(),
+                    strict=True,
+                )
+                if partner >= 0
+            ]
+            near[ids[row]] = (kept, round(float(nearest.weighted[row])))
+            nearest_distances.append(kept[0][1])
+
+    # Step 4: every near pair while they fit, else each episode's nearest.
+    if listed.blocks is not None:
+        found = [
+            (searched[group][0], i, j, d)
+            for group, rows_i, rows_j, distances in listed.blocks
+            for i, j, d in zip(
+                rows_i.tolist(), rows_j.tolist(), distances.tolist(), strict=True
+            )
+        ]
+    else:
+        found = [
+            (ids, i, j, d) for ids, nearest in searched for i, j, d in nearest.pairs()
+        ]
+    for ids, i, j, distance in found:
+        a, b = ids[i], ids[j]
+        shared = _shared_footage(footage, a, b)
+        pairs.append(
+            DuplicateEpisodes(
+                episodes=[a, b],
+                tier="near",
+                nrmse=distance,
+                footage_identical=bool(shared),
+                cameras=shared,
+            )
+        )
+
+    summary = None
+    if searched:
+        summary = NearDuplicateSummary(
+            limit=_NEAR_RMSE,
+            max_partners=_MAX_PARTNERS,
+            episodes_compared=episodes_compared,
+            pairs_compared=pairs_compared,
+            pairs_near=pairs_near,
+            pairs_listed=len(found),
+            episodes_with_partner=sum(len(copies[rep]) for rep in near),
+            median_nearest_nrmse=(
+                statistics.median(nearest_distances) if nearest_distances else None
+            ),
+            saturated=(
+                pairs_near > _SATURATED_SHARE * pairs_compared
+                and pairs_near > episodes_compared
+            ),
+        )
+
+    # Step 5: pairs in episode order, then one finding per episode and tier.
     pairs = [
         pair.model_copy(
             update={"episodes": sorted(pair.episodes, key=order.__getitem__)}
@@ -675,22 +1022,22 @@ def find_duplicate_episodes(
     partners: dict[tuple[str, Literal["exact", "near"]], list[tuple[str, float]]] = {}
     counts: dict[tuple[str, Literal["exact", "near"]], int] = {}
     for pair in pairs:
-        a, b = pair.episodes
-        if pair.tier == "exact":
-            # `a` is the group's earliest episode, and lists every other copy.
-            partners.setdefault((a, "exact"), []).append((b, 0.0))
-            partners[(b, "exact")] = [(a, 0.0)]
-            counts[(a, "exact")] = counts[(b, "exact")] = len(copies[a]) - 1
+        if pair.tier != "exact":
             continue
-        for episode_id, partner in ((a, b), (b, a)):
-            for copy in copies[episode_id]:
-                key = (copy, "near")
-                partners.setdefault(key, []).append((partner, pair.nrmse))
-                counts[key] = counts.get(key, 0) + len(copies[partner])
+        # `a` is the group's earliest episode, and lists every other copy.
+        a, b = pair.episodes
+        partners.setdefault((a, "exact"), []).append((b, 0.0))
+        partners[(b, "exact")] = [(a, 0.0)]
+        counts[(a, "exact")] = counts[(b, "exact")] = len(copies[a]) - 1
+    if summary is not None and not summary.saturated:
+        for rep, (kept, count) in near.items():
+            for copy in copies[rep]:
+                partners[(copy, "near")] = kept
+                counts[(copy, "near")] = count
     findings = [
         _finding(episode_id, tier, found, counts[(episode_id, tier)], footage)
         for (episode_id, tier), found in sorted(
             partners.items(), key=lambda item: (order[item[0][0]], item[0][1])
         )
     ]
-    return pairs, findings
+    return pairs, findings, summary

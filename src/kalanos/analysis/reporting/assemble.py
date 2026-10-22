@@ -598,7 +598,7 @@ def assemble_report(
         graded_episodes, grades_vision=grades_vision(requirements)
     )
     findings.extend(camera_findings)
-    duplicates, duplicate_findings = find_duplicate_episodes(
+    duplicates, duplicate_findings, near_duplicates = find_duplicate_episodes(
         graded_episodes, fingerprints, cameras
     )
     findings.extend(duplicate_findings)
@@ -723,4 +723,5 @@ def assemble_report(
         binding_conflicts=list(binding_conflicts),
         cameras=cameras,
         duplicates=duplicates,
+        near_duplicates=near_duplicates,
     )
