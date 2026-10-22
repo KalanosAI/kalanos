@@ -19,7 +19,6 @@ from typing import cast
 from upath import UPath
 
 # Internal
-from kalanos.analysis.adapters.video import SampledFrames
 from kalanos.analysis.calibration import apply_calibration
 from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
 from kalanos.analysis.identities import adapter_versions, detector_versions
@@ -32,7 +31,6 @@ from kalanos.analysis.metrics.vision import (
     camera_format,
     camera_frames,
     is_camera_footage,
-    thumbnail,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
@@ -53,8 +51,6 @@ from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
     Level,
-    MetricResult,
-    MetricStatus,
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
@@ -108,44 +104,10 @@ from kalanos.assets.dictionary import load_default_dictionary
 
 logger = logging.getLogger(__name__)
 
-# The vision metrics that point at a worst frame, and the evidence key that names it.
-_THUMBNAIL_INDEX = {
-    "sharpness_score": "worst_index",
-    "exposure_shift_pct": "worst_index",
-    "frozen_frame_pct": "first_run_index",
-}
-
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
-
-
-def _attach_thumbnails(
-    stream_metrics: dict[str, MetricResult], stream_ctx: StreamContext
-) -> dict[str, MetricResult]:
-    """Add the worst frame's thumbnail to each vision result graded warning or worse."""
-
-    payload = stream_ctx.payload
-    if not isinstance(payload, SampledFrames):
-        return stream_metrics
-    attached = dict(stream_metrics)
-    for name, key in _THUMBNAIL_INDEX.items():
-        result = attached.get(name)
-        if result is None or result.status not in (
-            MetricStatus.WARNING,
-            MetricStatus.CRITICAL,
-        ):
-            continue
-        index = result.evidence.get(key)
-        if index is None:
-            continue
-        image = thumbnail(payload, index, stream_ctx.vision.preview_size)
-        if image is not None:
-            attached[name] = result.model_copy(
-                update={"evidence": {**result.evidence, "thumbnail_png_base64": image}}
-            )
-    return attached
 
 
 def grade_stream(
@@ -231,7 +193,6 @@ def grade_stream(
         location=location,
     )
     findings.extend(stream_findings)
-    stream_metrics = _attach_thumbnails(stream_metrics, stream_ctx)
 
     # Step 2: fetch the payload only when there is a channel to grade with it,
     # and only when the execution tier reads payloads at all. Whatever
@@ -633,10 +594,6 @@ def assemble_report(
         findings.extend(
             review_findings([r for rs in diagnostic_results.values() for r in rs])
         )
-        graded_episodes = [
-            e.model_copy(update={"diagnostics": diagnostic_results[e.id]})
-            for e in graded_episodes
-        ]
     cameras, camera_findings = compare_cameras(
         graded_episodes, grades_vision=grades_vision(requirements)
     )
@@ -646,7 +603,13 @@ def assemble_report(
     )
     findings.extend(duplicate_findings)
     graded_episodes = [
-        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
+        e.model_copy(
+            update={
+                "coverage": episode_coverage(
+                    e, requirements, diagnostic_results.get(e.id, [])
+                )
+            }
+        )
         for e in graded_episodes
     ]
     decisions = decide_all(

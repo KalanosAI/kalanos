@@ -177,9 +177,9 @@ This is a purpose-built cohort runner; general third-party dataset-metric plugin
 
 ## Review and validation evidence
 
-Visual evidence can include bounded embedded PNG previews (`preview_frames`, `preview_size`; set `preview_frames: 0` to omit images). HTML shows these previews and a bounded expected/observed command-response plot with source references. These are inspection aids, not interactive synchronized playback.
+A vision result embeds one preview: its blurriest sampled frame, as a WebP image at most `preview_size` pixels on its longest side, in that frame's `thumbnail_webp_base64`. `measurements.preview_row` names the frame; set `preview_frames: 0` for no image. Any other frame is found by opening the result's `subject.source_path` at its `presentation_time_s` from `evidence.frames`. HTML shows the preview with its row and presentation time, and shows a bounded expected/observed command-response plot with source references. These are inspection aids, not interactive synchronized playback.
 
-JSON/YAML retain the complete identified diagnostic report and per-episode results. HTML contains expandable evidence; terminal output summarizes states; `inspect` prints the selected diagnostic records. Comparison includes diagnostic differences and rejects changed/missing plan or implementation identities.
+JSON/YAML retain the complete identified diagnostic report. HTML contains expandable evidence; terminal output summarizes states; `inspect` prints the selected diagnostic records. Comparison includes diagnostic differences and rejects changed/missing plan or implementation identities.
 
 ```bash
 kalanos diagnostics summarize-study labelled-outcomes.json > study-draft.json

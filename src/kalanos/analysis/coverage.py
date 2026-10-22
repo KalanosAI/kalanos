@@ -7,7 +7,7 @@
 # Built-in
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 # Internal
 from kalanos.analysis.metrics.registry import registered_metrics
@@ -18,6 +18,7 @@ from kalanos.analysis.models.binding import (
     RequirementsSection,
 )
 from kalanos.analysis.models.coverage import Availability, Coverage, CoverageRow
+from kalanos.analysis.models.diagnostics import DiagnosticResult
 from kalanos.analysis.models.domain import Stream
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import Inventory
@@ -264,8 +265,28 @@ def vision_metric_frames(streams: list[GradedStream]) -> tuple[int, int] | None:
 
 
 def episode_coverage(
-    episode: GradedEpisode, requirements: RequirementsSection
+    episode: GradedEpisode,
+    requirements: RequirementsSection,
+    diagnostics: Sequence[DiagnosticResult] = (),
 ) -> Coverage:
+    """Build the coverage ledger of one graded episode.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        The graded episode.
+    requirements : RequirementsSection
+        The requirements that decide which rows are eligible.
+    diagnostics : sequence of DiagnosticResult
+        The episode's diagnostic results, as stored in `Report.diagnostics.results`.
+        Empty when the run has no diagnostic plan.
+
+    Returns
+    -------
+    Coverage
+        The episode's metric, capability and dimension rows.
+    """
+
     metrics = merge_rows(
         [r for s in episode.streams for r in s.coverage]
         + metric_rows(Level.EPISODE, [("episode", episode.metrics)])
@@ -293,13 +314,12 @@ def episode_coverage(
         )
         for s in episode.streams
     )
-    diagnostic_results = episode.diagnostics
     metrics += [
         row(f"diagnostics.{r.kind}.{r.id}", "episode", [(r.availability, r.reason)])
-        for r in diagnostic_results
+        for r in diagnostics
     ]
     by_kind = {
-        kind: [r for r in diagnostic_results if r.kind == kind]
+        kind: [r for r in diagnostics if r.kind == kind]
         for kind in ("timing", "tracking", "motion", "vision", "windows")
     }
 

@@ -129,6 +129,9 @@ class VisionSpec(StrictModel):
     """How camera footage is read.
 
     Sample size, full scan, decode caps, previews and exposure levels.
+    The vision diagnostic previews its blurriest sampled frame as one WebP image
+    unless `preview_frames` is 0; any other value gives that one image.
+    `preview_size` is the image's longest side, in pixels, at most.
     """
 
     sample_frames: int = Field(default=10, ge=1, le=10000)

@@ -60,7 +60,6 @@ from kalanos.analysis.adapters.video import (
     SegmentPackets,
     VideoPayload,
 )
-from kalanos.analysis.diagnostics.previews import png_thumbnail
 from kalanos.analysis.execution import reads_numeric_payloads
 from kalanos.analysis.localization import support_for
 from kalanos.analysis.metrics.registry import metric
@@ -1971,14 +1970,3 @@ def camera_frames(ctx: StreamContext) -> CameraFrames | None:
         availability=availability,
         reason=reason,
     )
-
-
-def thumbnail(payload: SampledFrames, index: int, size: int) -> str | None:
-    """A base64 PNG preview of one frame, or `None` when it cannot be decoded."""
-
-    # A preview is decoration: no failure to produce one may abort the grade.
-    try:
-        return png_thumbnail(payload.rgb_frame(index), size)
-    except Exception:
-        logger.warning("no preview of frame %d", index, exc_info=True)
-        return None

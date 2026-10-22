@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from upath import UPath
 
 # Internal
+from kalanos.analysis.models.diagnostics import DiagnosticPlan
 from kalanos.analysis.models.legacy import (
     LegacyReport,
     UnsupportedSchema,
@@ -23,6 +24,7 @@ from kalanos.analysis.models.legacy import (
 )
 from kalanos.analysis.models.report import Report
 from kalanos.api import compare, grade, load_report
+from kalanos.assets.bundle import Bundle
 from kalanos.cli import app
 
 
@@ -112,7 +114,25 @@ def test_an_older_7_report_loads_through_load_any(tmp_path, version):
         load_legacy(out.read_bytes())
 
 
-@pytest.mark.parametrize("version", ["7.3.0", "8.0.0", "7.x.0"])
+def test_a_7_2_report_with_episode_diagnostics_and_thumbnails_loads(tmp_path):
+    report = grade(TINY_V3, bundle=Bundle(diagnostics=DiagnosticPlan(vision=True)))
+    assert report.diagnostics is not None
+    payload = report.model_dump(mode="json")
+    results = payload["diagnostics"]["results"]
+    results[0]["evidence"]["frames"][0]["thumbnail_png_base64"] = "iVBORw0KGgo="
+    for e in payload["episodes"]:
+        e["diagnostics"] = [r for r in results if r["episode_id"] == e["id"]]
+    payload["schema_version"] = "7.2.0"
+    out = tmp_path / "r.json"
+    out.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(out))
+    assert isinstance(loaded, Report)
+    assert loaded.diagnostics is not None
+    assert loaded.diagnostics.model_dump(mode="json")["results"] == results
+
+
+@pytest.mark.parametrize("version", ["7.4.0", "8.0.0", "7.x.0"])
 def test_a_newer_or_malformed_7_report_is_refused(tmp_path, version):
     payload = grade(TINY_V3).model_dump(mode="json")
     payload["schema_version"] = version

@@ -35,7 +35,7 @@ from kalanos.analysis.models.coverage import Availability, CoverageRow
 from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
 
 # Internal
-from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
+from kalanos.analysis.models.diagnostics import DiagnosticsReport
 from kalanos.analysis.models.dictionary import CategoryGroup
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
@@ -69,7 +69,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "7.2.0"
+CURRENT_SCHEMA_VERSION = "7.3.0"
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -420,7 +420,6 @@ class GradedEpisode(BaseModel):
     split: str | None = None
     eligibility: EpisodeEligibility | None = None
     coverage: AnalysisCoverage | None = None
-    diagnostics: list[DiagnosticResult] = Field(default_factory=list)
 
 
 class FailingEpisode(BaseModel):
@@ -766,16 +765,14 @@ class Report(BaseModel):
                 raise ValueError(
                     "diagnostic plan digest disagrees with its configuration"
                 )
-            recorded = [r for r in self.diagnostics.results if r.episode_id is not None]
-            if recorded != [r for e in self.episodes for r in e.diagnostics]:
-                raise ValueError("diagnostic report does not reconcile with episodes")
+            if any(
+                r.episode_id is not None and r.episode_id not in episode_ids
+                for r in self.diagnostics.results
+            ):
+                raise ValueError("diagnostic result names an episode not in the report")
             keys = [(r.episode_id, r.kind, r.id) for r in self.diagnostics.results]
             if len(keys) != len(set(keys)):
                 raise ValueError("duplicate diagnostic result addresses")
-        elif any(e.diagnostics for e in self.episodes):
-            raise ValueError(
-                "episode diagnostics require an identified diagnostic report"
-            )
         ids = [f.id for f in self.findings if f.id is not None]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate finding ids")

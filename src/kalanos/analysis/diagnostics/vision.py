@@ -1,6 +1,7 @@
 """Publish a camera stream's shared read as a sampled image diagnostic.
 
-The frames come from the vision metrics' read; nothing here decodes beyond previews.
+The frames come from the vision metrics' read;
+only the one preview frame is decoded again.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -8,6 +9,7 @@ The frames come from the vision metrics' read; nothing here decodes beyond previ
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import logging
 import math
 from types import SimpleNamespace
 from typing import cast
@@ -15,17 +17,54 @@ from typing import cast
 # Internal
 from kalanos.analysis.adapters.video import SampledFrames
 from kalanos.analysis.diagnostics.common import Unavailable, result
+from kalanos.analysis.diagnostics.previews import webp_thumbnail
 from kalanos.analysis.localization import support_for
-from kalanos.analysis.metrics.vision import thumbnail
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticReviewPolicy
 from kalanos.analysis.models.domain import Episode, Stream
-from kalanos.analysis.models.report import CameraFrames
+from kalanos.analysis.models.report import CameraFrame, CameraFrames
+
+
+logger = logging.getLogger(__name__)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _preview(
+    stream: Stream, frames: list[CameraFrame], size: int
+) -> tuple[int, str] | None:
+    """Encode the blurriest sampled frame of a camera as a WebP preview.
+
+    Parameters
+    ----------
+    stream : Stream
+        The camera stream, whose payload the frames were read from.
+    frames : list of CameraFrame
+        The sampled frames.
+    size : int
+        The preview's longest side, in pixels, at most.
+
+    Returns
+    -------
+    tuple of (int, str) or None
+        The frame's source row and the base64 WebP image,
+        `None` when there is no frame or it cannot be encoded.
+    """
+
+    if not frames:
+        return None
+    worst = min(frames, key=lambda f: (math.isnan(f.blur_score), f.blur_score))
+    # A preview is decoration: no failure to produce one may abort the grade.
+    try:
+        # Vision metrics read only SampledFrames; sampled frames imply one.
+        image = cast(SampledFrames, stream.payload).rgb_frame(worst.source_row)
+        return worst.source_row, webp_thumbnail(image, size)
+    except Exception:
+        logger.warning("no preview of frame %d", worst.source_row, exc_info=True)
+        return None
 
 
 def vision(
@@ -91,15 +130,6 @@ def vision(
             "shape": frame.shape,
             "luma_sha256": frame.luma_sha256,
         }
-        if len(observations) < parameters["preview_frames"]:
-            # Vision metrics read only SampledFrames; a non-None frames implies one.
-            preview = thumbnail(
-                cast(SampledFrames, stream.payload),
-                frame.source_row,
-                parameters["preview_size"],
-            )
-            if preview is not None:
-                item["thumbnail_png_base64"] = preview
         if (
             review.vision_min_blur_score is not None
             and frame.blur_score < review.vision_min_blur_score
@@ -109,6 +139,16 @@ def vision(
         ):
             bad.append((frame.source_row, frame.source_row + 1))
         observations.append(item)
+    preview = (
+        _preview(stream, frames.frames, parameters["preview_size"])
+        if parameters["preview_frames"]
+        else None
+    )
+    if preview is not None:
+        row, image = preview
+        next(x for x in observations if x["source_row"] == row)[
+            "thumbnail_webp_base64"
+        ] = image
     missing = frames.missing_rows
     interval_errors = []
     for left, right in zip(observations, observations[1:], strict=False):
@@ -151,6 +191,7 @@ def vision(
             "adjacent_pairs_examined": frames.adjacent_pairs_examined,
             "identical_adjacent_pairs": frames.identical_adjacent_pairs,
             "distinct_image_shapes": len(shapes),
+            "preview_row": preview[0] if preview else None,
         },
         evidence={
             "frames": observations,
