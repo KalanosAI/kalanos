@@ -493,21 +493,29 @@ def test_alike_episodes_saturate_the_near_tier():
     assert summary.pairs_near == summary.pairs_compared == 435
     assert summary.episodes_compared == summary.episodes_with_partner == 30
     assert _ids(findings, "integrity.near_duplicate_episode") == []
-    assert 0 < sum(p.tier == "near" for p in pairs) <= _MAX_PARTNERS * 30
+    assert summary.pairs_listed == sum(p.tier == "near" for p in pairs) == 435
 
 
-def test_near_output_grows_linearly():
-    """The near pairs listed stay within a fixed number per episode,
-    however many pairs are near."""
+def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
+    """Every near pair is listed up to the limit;
+    past it, the pairs listed stay within a fixed number per episode."""
 
     pytest.importorskip("numpy")
 
+    monkeypatch.setattr(duplicates, "_MAX_LISTED_PAIRS", 190)
+    pairs, _findings, summary = _run(*_alike(20))
+
+    assert summary is not None
+    assert summary.pairs_listed == sum(p.tier == "near" for p in pairs) == 190
+
+    monkeypatch.setattr(duplicates, "_MAX_LISTED_PAIRS", 189)
     for n, near in ((20, 190), (60, 1_770)):
         pairs, _findings, summary = _run(*_alike(n))
 
         assert summary is not None
         assert summary.pairs_near == near
-        assert sum(p.tier == "near" for p in pairs) <= _MAX_PARTNERS * n
+        assert summary.pairs_listed == sum(p.tier == "near" for p in pairs)
+        assert summary.pairs_listed <= _MAX_PARTNERS * n
 
 
 def test_a_cluster_lists_its_five_nearest_partners():

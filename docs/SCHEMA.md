@@ -8,7 +8,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 
 - `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.
 - `thumbnail_png_base64` is no longer written, neither in a vision diagnostic's `evidence.frames[]` nor in a metric's `evidence`. A vision result embeds one WebP preview of its blurriest sampled frame, in that frame's `thumbnail_webp_base64`, and names the frame in `measurements.preview_row` (`null` with `preview_frames: 0` or when the frame cannot be encoded). Each frame keeps its `source_row` and `presentation_time_s`, and the video file is the result's `subject.source_path`.
-- `duplicates` keeps a near pair only when it is among the 5 nearest of either episode, so it no longer lists every near pair.
+- `duplicates` lists every near pair up to 1.5 million. Past that, it keeps a near pair only when it is among the 5 nearest of either episode, and `near_duplicates.pairs_listed` falls short of `pairs_near`.
 - An `integrity.near_duplicate_episode` finding lists at most the episode's 5 nearest partners in `evidence.partners`, nearest first (they were in episode order), and gives the partners left out in a new `evidence.partners_omitted`, its `value` less the partners listed. `value` still counts every episode it is near.
 - When the near tier is saturated (see `NearDuplicateSummary.saturated`), no `integrity.near_duplicate_episode` finding is written.
 
@@ -16,10 +16,11 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 |---|---|---|
 | `near_duplicates` | `NearDuplicateSummary` or `null` | How many pairs the near-duplicate search found, over the whole dataset. `null` when the search did not run: numpy is missing, or no group of comparable episodes holds two that differ in their payloads and could be resampled (every value finite, at least 2 rows). |
 | `NearDuplicateSummary.limit` | `float` | The largest normalized RMSE at which a pair counts as near. |
-| `NearDuplicateSummary.max_partners` | `int` | The most near partners listed per episode, in findings and in `duplicates`. |
+| `NearDuplicateSummary.max_partners` | `int` | The most near partners a finding lists. Each episode also keeps only this many in `duplicates` when `pairs_listed` is less than `pairs_near`. |
 | `NearDuplicateSummary.episodes_compared` | `int` | The episodes the near search compared: the first of each group of exact copies. |
 | `NearDuplicateSummary.pairs_compared` | `int` | The pairs among them, summed over the groups of episodes that hold the same streams and channels. |
 | `NearDuplicateSummary.pairs_near` | `int` | Of those, the pairs within `limit` whose row counts also agree. |
+| `NearDuplicateSummary.pairs_listed` | `int` | The near pairs in `duplicates`: every one of `pairs_near`, or, when there are too many to list, those among the nearest `max_partners` of either episode. |
 | `NearDuplicateSummary.episodes_with_partner` | `int` | The episodes, exact copies included, with at least one near partner. |
 | `NearDuplicateSummary.median_nearest_nrmse` | `float` or `null` | The median, over compared episodes with a near partner, of the distance to their nearest one. `null` when `pairs_near` is 0. |
 | `NearDuplicateSummary.saturated` | `bool` | Whether more than half the compared pairs are near and there are more near pairs than compared episodes. The near tier then does not separate copies from re-runs in this dataset; the exact tier still applies. |

@@ -562,8 +562,9 @@ class NearDuplicateSummary(BaseModel):
     limit : float
         The largest normalized RMSE at which a pair counts as near.
     max_partners : int
-        The most near partners listed per episode,
-        in findings and in `Report.duplicates`.
+        The most near partners a finding lists.
+        Each episode also keeps only this many in `Report.duplicates`
+        when `pairs_listed` is less than `pairs_near`.
     episodes_compared : int
         The representatives the near search compared.
     pairs_compared : int
@@ -571,6 +572,10 @@ class NearDuplicateSummary(BaseModel):
         that hold the same streams and channels.
     pairs_near : int
         Of those, the pairs within `limit` whose row counts also agree.
+    pairs_listed : int
+        The near pairs in `Report.duplicates`: every one of `pairs_near`,
+        or, when there are too many to list, those among the nearest
+        `max_partners` of either episode.
     episodes_with_partner : int
         The episodes, copies included, with at least one near partner.
     median_nearest_nrmse : float or None
@@ -590,6 +595,7 @@ class NearDuplicateSummary(BaseModel):
     episodes_compared: int
     pairs_compared: int
     pairs_near: int
+    pairs_listed: int
     episodes_with_partner: int
     median_nearest_nrmse: float | None
     saturated: bool
@@ -746,8 +752,8 @@ class Report(BaseModel):
         Each pair of episodes whose numeric payloads are identical or nearly so.
         Identical episodes pair only with the first of them,
         which also stands for them in a near pair.
-        A near pair is listed when it is among the nearest
-        `near_duplicates.max_partners` of either episode.
+        Every near pair is listed, unless there are too many:
+        `near_duplicates.pairs_listed` then falls short of `pairs_near`.
     near_duplicates : NearDuplicateSummary or None
         How many pairs the near-duplicate search found, and whether that many
         leaves the near tier uninformative for this dataset.
