@@ -290,10 +290,13 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
     assert {e.eligibility.status.value for e in report.episodes if e.eligibility} == {
         "review"
     }
-    assert (
-        Report.model_validate_json(report.model_dump_json()).duplicates
-        == report.duplicates
-    )
+    loaded = Report.model_validate_json(report.model_dump_json())
+    assert loaded.duplicates == report.duplicates
+    assert loaded.near_duplicates == report.near_duplicates
+    # A 7.2.0 report has no near-duplicate summary, and still loads.
+    older = report.model_dump(mode="json", exclude={"near_duplicates"})
+    older["schema_version"] = "7.2.0"
+    assert Report.model_validate(older).near_duplicates is None
 
 
 def test_the_graded_episode_names_the_adapter_that_read_it(single_file_report):

@@ -10,6 +10,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 7.3.0).
 - Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 7.3.0).
+- Near-duplicate detection lists at most an episode's 5 nearest partners, nearest first, in `duplicates` and in a near finding's `evidence.partners`, and counts the rest in `evidence.partners_omitted`. When most episode pairs are near, the new `near_duplicates` summary says so once and no near finding is written. Exact duplicates are unchanged (report schema 7.3.0).
 - `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.3.0. A 7.2.0 report's per-episode diagnostics are ignored on load.
 
 ## [0.8.2] - 2026-10-21
