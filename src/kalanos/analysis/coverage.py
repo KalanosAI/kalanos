@@ -158,6 +158,26 @@ def merge_rows(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
     return merged
 
 
+def rows_that_ran(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
+    """Keep the rows where some subject was computed, skipped or errored.
+
+    A stream records only the metrics that ran on it.
+    The episode ledger, merged from every row, still counts the rest.
+
+    Parameters
+    ----------
+    rows : iterable of CoverageRow
+        A stream's coverage rows.
+
+    Returns
+    -------
+    list of CoverageRow
+        The rows with a computed, skipped or errored subject, in input order.
+    """
+
+    return [r for r in rows if r.computed + r.skipped + r.error > 0]
+
+
 def _sampled(stream):
     """A camera stream's `CORE_METRICS` results when all computed, else `None`.
 

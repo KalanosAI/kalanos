@@ -20,7 +20,12 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.calibration import apply_calibration
-from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
+from kalanos.analysis.coverage import (
+    episode_coverage,
+    report_coverage,
+    rows_that_ran,
+    stream_rows,
+)
 from kalanos.analysis.identities import adapter_versions, detector_versions
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -607,7 +612,12 @@ def assemble_report(
             update={
                 "coverage": episode_coverage(
                     e, requirements, diagnostic_results.get(e.id, [])
-                )
+                ),
+                # Trim after episode_coverage, which merges the full rows.
+                "streams": [
+                    s.model_copy(update={"coverage": rows_that_ran(s.coverage)})
+                    for s in e.streams
+                ],
             }
         )
         for e in graded_episodes
