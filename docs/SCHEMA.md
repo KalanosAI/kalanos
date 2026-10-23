@@ -9,6 +9,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - `reason_codes`, the report's first key, lists each distinct reason text once.
 - Every value under a key named `reason`, `reasons` or `detail`, at any depth, holds an index into `reason_codes`: a string becomes an integer, a list of strings a list of integers, and the keys of a `reasons` map (the coverage rows) become integers written as strings. `null` stays `null`.
 - Codes are per report. The same text can have a different code in another report.
+- A field whose value is `null`, `[]` or `{}` is left out when its default is that same value. This includes top-level lists such as `findings`, `skipped` and `unresolved`. A field that is nullable but has no default is still written as `null`, and a value inside a free-form `evidence` or `calibration` object is written as it is.
 
 ## Changed in 7.3.0
 
@@ -174,6 +175,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 4. To read a 6.x file, use `kalanos.analysis.models.legacy.load_any`; it returns a `LegacyReport` with the original data, its SHA-256, contradictions and the fields it cannot supply. Do not convert legacy values into schema-7 decisions.
 5. Keep showing `scope`, `eligibility_counts`, `readiness`, `sufficiency` and `coverage` together wherever readiness appears: a `readiness.score` of `null` means undefined.
 6. Decode every `reason`, `reasons` and `detail` value through `reason_codes` before showing or comparing it.
+7. Read a missing key as `null`, or as an empty list or map when the field is a list or map.
 
 ## Fixtures
 
