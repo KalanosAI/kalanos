@@ -1,8 +1,14 @@
-# Report schema 7.3.0
+# Report schema
 
 This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 7.3.0 changes below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Changed in 8.0.0
+
+- `reason_codes`, the report's first key, lists each distinct reason text once.
+- Every value under a key named `reason`, `reasons` or `detail`, at any depth, holds an index into `reason_codes`: a string becomes an integer, a list of strings a list of integers, and the keys of a `reasons` map (the coverage rows) become integers written as strings. `null` stays `null`.
+- Codes are per report. The same text can have a different code in another report.
 
 ## Changed in 7.3.0
 
@@ -167,6 +173,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 3. Show `scope.requirements_id` beside any number: a readiness is meaningless without its scope.
 4. To read a 6.x file, use `kalanos.analysis.models.legacy.load_any`; it returns a `LegacyReport` with the original data, its SHA-256, contradictions and the fields it cannot supply. Do not convert legacy values into schema-7 decisions.
 5. Keep showing `scope`, `eligibility_counts`, `readiness`, `sufficiency` and `coverage` together wherever readiness appears: a `readiness.score` of `null` means undefined.
+6. Decode every `reason`, `reasons` and `detail` value through `reason_codes` before showing or comparing it.
 
 ## Fixtures
 
