@@ -1,0 +1,7 @@
+# Grade options for the report-size benchmark: vision diagnostics with previews.
+schema_version: 1
+diagnostics:
+  vision: true
+vision:
+  preview_frames: 8
+  preview_size: 192
