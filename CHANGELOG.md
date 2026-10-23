@@ -12,6 +12,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 7.3.0).
 - A near finding lists at most its episode's 5 nearest partners, nearest first, in `evidence.partners`, and counts the rest in `evidence.partners_omitted`. `duplicates` lists every near pair up to 1.5 million, and past that each episode's 5 nearest, as `near_duplicates.pairs_listed` reports. When most episode pairs are near, the new `near_duplicates` summary says so once and no near finding is written. Exact duplicates are unchanged (report schema 7.3.0).
 - `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.3.0. A 7.2.0 report's per-episode diagnostics are ignored on load.
+- A written report leaves out a field whose value is null, an empty list or an empty map when that is the field's default, and loading the report restores it. This affects `--json`, `--report` and the publish payload; `Report.model_dump` is unchanged (report schema 8.0.0).
 
 ## [0.8.2] - 2026-10-21
 

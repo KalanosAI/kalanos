@@ -64,6 +64,7 @@ from kalanos.analysis.reporting.assemble import (
     grade_stream,
 )
 from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
+from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
 from kalanos.analysis.reporting.write import write_report
@@ -951,23 +952,27 @@ def test_report_round_trips_through_json():
     assert Report.model_validate_json(render_json(report)) == report
 
 
-def test_compact_json_preserves_all_fields_and_evidence():
-    """Layout removal must preserve nulls, numeric precision and string content."""
+def test_compact_json_keeps_evidence_and_omits_only_empty_defaults():
+    """Compact JSON keeps evidence nulls, numeric precision and string content."""
 
     report = _sample_report()
-    report.findings[0].evidence = {
+    evidence = {
         "instruction": 'Grasp  the towel — 左手\nHold\t"still"',
         "samples": [None, 0, False, 0.12345678901234567, 1e-20],
         "empty": {},
     }
+    report.findings[0].evidence = evidence
     before = report.model_dump(mode="json")
     pretty = report.model_dump_json(indent=2)
 
     compact = render_json(report)
+    parsed = json.loads(compact)
 
     assert "\n" not in compact
     assert len(compact.encode("utf-8")) < len(pretty.encode("utf-8"))
-    assert json.loads(compact) == json.loads(pretty) == before
+    assert parsed == omit_empty_defaults(report, before)
+    # Compared as text so False and 0, or a float's last digit, can't pass as equal.
+    assert json.dumps(parsed["findings"][0]["evidence"]) == json.dumps(evidence)
     assert report.model_dump(mode="json") == before
 
 
