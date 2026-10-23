@@ -1,8 +1,9 @@
 """Compare report sizes between two kalanos versions on a set of datasets.
 
-Grades each dataset with both versions and prints a Markdown table of report bytes,
-bytes per episode and the change in bytes per episode. Run it from the repository
-root with `uv run python -m scripts.report_size --help`.
+Grades each dataset with both versions and prints a table of report bytes, bytes per
+episode and the change in bytes per episode. A terminal gets a rendered table, and a
+pipe or redirect gets Markdown. `--output` also writes the Markdown table to a file.
+Run it from the repository root with `uv run python -m scripts.report_size --help`.
 
 A version is a git ref this repository resolves (branch, tag, SHA or remote-tracking
 ref), or the path to a built `.whl`. To measure uncommitted work, run `uv build` and

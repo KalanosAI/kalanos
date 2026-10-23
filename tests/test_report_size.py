@@ -8,6 +8,7 @@
 import importlib
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 
 # External
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 
@@ -101,6 +103,27 @@ def _sha(git: list[str], ref: str) -> str:
     return subprocess.run(
         [*git, "rev-parse", ref], check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+def _comparison():
+    """Return a comparison with a smaller, an equal and a mismatched dataset.
+
+    Returns
+    -------
+    Comparison
+        pusht halves its bytes per episode, utokyo is unchanged, and usc_cloth_sim
+        loads 8 episodes instead of 10 at the same bytes per episode.
+    """
+
+    before = versions.Version(label="53087a3", key="53087a3d" * 5, source="")
+    after = versions.Version(label="HEAD", key="abcdef01" * 5, source="")
+    pusht, utokyo, cloth = config.DATASETS
+    rows = [
+        (pusht, grading.Measurement(1000, 10), grading.Measurement(500, 10)),
+        (utokyo, grading.Measurement(1000, 10), grading.Measurement(1000, 10)),
+        (cloth, grading.Measurement(1000, 10), grading.Measurement(800, 8)),
+    ]
+    return table.compare(before, after, rows)
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -234,18 +257,10 @@ def test_options_key_follows_bundle(tmp_path, monkeypatch):
     assert grading.options_key() != key
 
 
-def test_table_names_versions_options_and_change():
-    """The table names both versions and the options, and shows each change."""
+def test_markdown_names_versions_options_and_change():
+    """The Markdown table names both versions and the options, and shows each change."""
 
-    before = versions.Version(label="53087a3", key="53087a3d" * 5, source="")
-    after = versions.Version(label="HEAD", key="abcdef01" * 5, source="")
-    pusht, utokyo, cloth = config.DATASETS
-    rows = [
-        (pusht, grading.Measurement(1000, 10), grading.Measurement(500, 10)),
-        (utokyo, grading.Measurement(1000, 10), grading.Measurement(1000, 10)),
-        (cloth, grading.Measurement(1000, 10), grading.Measurement(800, 8)),
-    ]
-    lines = table.render_table(before, after, rows).splitlines()
+    lines = table.to_markdown(_comparison()).splitlines()
 
     assert lines[:3] == [
         "Before: 53087a3 (53087a3d5308)",
@@ -262,6 +277,64 @@ def test_table_names_versions_options_and_change():
         "The two versions loaded a different number of episodes for "
         "lerobot/usc_cloth_sim.",
     ]
+
+
+def test_terminal_render_keeps_every_number_whole_on_a_narrow_terminal():
+    """At 80 columns every cell and the note show, without pipes or cut numbers."""
+
+    before = versions.Version(label="main", key="d" * 40, source="")
+    after = versions.Version(label="HEAD", key="e" * 40, source="")
+    pusht, utokyo, cloth = config.DATASETS
+    rows = [
+        (
+            pusht,
+            grading.Measurement(61_225_507, 206),
+            grading.Measurement(48_489_170, 206),
+        ),
+        (
+            utokyo,
+            grading.Measurement(63_945_758, 70),
+            grading.Measurement(16_663_922, 70),
+        ),
+        (
+            cloth,
+            grading.Measurement(493_045_422, 1000),
+            grading.Measurement(315_241_906, 990),
+        ),
+    ]
+    comparison = table.compare(before, after, rows)
+    console = Console(width=80, record=True)
+    console.print(table.to_rich(comparison, 80))
+    text = console.export_text()
+
+    assert "Before: main (dddddddddddd)" in text
+    for cells in [*comparison.rows, comparison.mean]:
+        for cell in cells[1:]:
+            assert cell in text
+    assert "different number of episodes" in text
+    assert "|" not in text and "…" not in text
+
+
+def test_terminal_render_colours_the_change_by_sign():
+    """A smaller report per episode is green, a larger one red, no change plain."""
+
+    before = versions.Version(label="a", key="a" * 40, source="")
+    after = versions.Version(label="b", key="b" * 40, source="")
+    pusht, utokyo, cloth = config.DATASETS
+    rows = [
+        (pusht, grading.Measurement(1000, 10), grading.Measurement(500, 10)),
+        (utokyo, grading.Measurement(1000, 10), grading.Measurement(1000, 10)),
+        (cloth, grading.Measurement(1000, 10), grading.Measurement(2000, 10)),
+    ]
+    console = Console(width=120, force_terminal=True, color_system="standard")
+    with console.capture() as capture:
+        console.print(table.to_rich(table.compare(before, after, rows), 120))
+    out = capture.get()
+
+    # Right-justified padding sits inside the colour code.
+    assert re.search(r"\x1b\[32m *-50\.0%", out)
+    assert re.search(r"\x1b\[31m *\+100\.0%", out)
+    assert re.search(r" \+0\.0% ", out)
 
 
 def test_measure_rejects_a_report_with_no_episodes(tmp_path):
@@ -281,3 +354,31 @@ def test_cli_reports_an_unknown_version():
     )
     assert result.exit_code == 1
     assert "report_size: no-such-ref" in result.output
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_cli_writes_markdown_to_output_whatever_stdout_is(
+    tmp_path, monkeypatch, terminal
+):
+    """--output gets Markdown; stdout gets the same, or a table on a terminal."""
+
+    monkeypatch.setattr(cli, "pin_dataset", lambda spec: spec)
+    monkeypatch.setattr(
+        cli,
+        "ensure_measurement",
+        lambda version, dataset, repo, cache: grading.Measurement(1000, 10),
+    )
+    stdout = SimpleNamespace(isatty=lambda: terminal)
+    monkeypatch.setattr(cli, "sys", SimpleNamespace(stdout=stdout, stderr=sys.stderr))
+    output = tmp_path / "sizes.md"
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["--before", "HEAD", "--dataset", config.DATASETS[0], "--output", str(output)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "| lerobot/pusht@7628202 | 10 |" in output.read_text()
+    if terminal:
+        assert "|" not in result.stdout and "lerobot/pusht@7628202" in result.stdout
+    else:
+        assert output.read_text() == result.stdout

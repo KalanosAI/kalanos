@@ -12,13 +12,14 @@ from typing import Annotated
 
 # External
 import typer
+from rich.console import Console
 
 # Internal
 from . import __doc__ as usage
 from . import config
 from .grading import GradeFailed, ensure_measurement
 from .hub import pin_dataset
-from .table import render_table
+from .table import compare, to_markdown, to_rich
 from .versions import merge_base, resolve_version
 
 
@@ -69,6 +70,10 @@ def main(
             show_default="reports/report-size",
         ),
     ] = config.CACHE_DIR,
+    output: Annotated[
+        Path | None,
+        typer.Option(help="Also write the Markdown table to this file."),
+    ] = None,
 ) -> None:
     """Measure every dataset at both versions and print the table.
 
@@ -85,11 +90,14 @@ def main(
         The datasets to grade, or None for the defaults.
     cache_dir : Path
         Where reports and their sizes are cached.
+    output : Path | None
+        A file to write the Markdown table to, or None.
 
     Raises
     ------
     typer.Exit
-        With code 1 when a version or dataset doesn't resolve or a grade fails.
+        With code 1 when a version or dataset doesn't resolve, a grade fails or the
+        table can't be written.
     """
 
     # kalanos grade puts a relative --report under KALANOS_REPORTS_DIR.
@@ -108,7 +116,21 @@ def main(
         print(f"report_size: {exc}", file=sys.stderr)
         raise typer.Exit(code=1) from exc
 
-    print(render_table(old_side, new_side, list(zip(datasets, old, new, strict=True))))
+    comparison = compare(old_side, new_side, list(zip(datasets, old, new, strict=True)))
+    if sys.stdout.isatty():
+        console = Console(highlight=False)
+        console.print(to_rich(comparison, console.width))
+    else:
+        print(to_markdown(comparison))
+
+    # Written after printing, so a bad path still leaves the table on screen.
+    if output is not None:
+        try:
+            output.write_text(to_markdown(comparison) + "\n")
+        except OSError as exc:
+            print(f"report_size: {exc}", file=sys.stderr)
+            raise typer.Exit(code=1) from exc
+        print(f"wrote {output}", file=sys.stderr)
 
 
 if __name__ == "__main__":
