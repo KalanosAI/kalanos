@@ -109,8 +109,8 @@ packages = ["src/kalanos"]
 # The sdist is an allowlist, not "everything git tracks": only what is needed to
 # build the wheel and run the tests from source. pyproject.toml, README.md and
 # LICENSE are always added by hatchling. Anything not listed here (scripts/,
-# .github/, uv.lock, local output) never reaches PyPI, except the explicit
-# release-check script included below for its metadata tests.
+# .github/, uv.lock, local output) never reaches PyPI, except the release-check
+# script and the report-size benchmark, included below for their tests.
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
@@ -119,6 +119,7 @@ include = [
     "/CONTRIBUTING.md",
     "/CITATION.cff",
     "/scripts/check_release.py",
+    "/scripts/report_size",
     "/SECURITY.md",
 ]
 
