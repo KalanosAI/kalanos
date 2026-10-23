@@ -24,7 +24,16 @@ from enum import Enum
 from typing import Any, Literal
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
@@ -59,6 +68,11 @@ from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import Inventory, Producer, RunInfo
+from kalanos.analysis.models.reason_codes import (
+    TABLE_KEY,
+    decode_reasons,
+    encode_reasons,
+)
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
@@ -765,6 +779,10 @@ class Report(BaseModel):
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
     `eligibility_counts` and `readiness`.
+
+    A JSON-mode dump stores each reason text once, in a first key `reason_codes`,
+    and every `reason`, `reasons` and `detail` value holds its index there
+    (see `reason_codes`). Validation reads the codes back as text.
     """
 
     diagnostics: DiagnosticsReport | None = None
@@ -796,6 +814,53 @@ class Report(BaseModel):
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
     near_duplicates: NearDuplicateSummary | None = None
+
+    @model_serializer(mode="wrap")
+    def _write_reason_codes(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict[str, Any]:
+        """Code every reason text when dumping to JSON.
+
+        Parameters
+        ----------
+        handler : SerializerFunctionWrapHandler
+            Pydantic's own serializer for this model.
+        info : SerializationInfo
+            The dump's settings; only JSON mode is coded.
+
+        Returns
+        -------
+        dict[str, Any]
+            The dumped report, led by `reason_codes` in JSON mode,
+            otherwise as Pydantic dumps it.
+        """
+
+        data = handler(self)
+        return encode_reasons(data) if info.mode_is_json() else data
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _read_reason_codes(
+        cls, data: Any, handler: ModelWrapValidatorHandler["Report"]
+    ) -> "Report":
+        """Turn reason codes back into text before validating.
+
+        Parameters
+        ----------
+        data : Any
+            The input, coded when it is a dict holding `reason_codes`.
+        handler : ModelWrapValidatorHandler[Report]
+            Pydantic's own validator for this model.
+
+        Returns
+        -------
+        Report
+            The validated report, holding reason texts.
+        """
+
+        if isinstance(data, dict) and TABLE_KEY in data:
+            return handler(decode_reasons(data))
+        return handler(data)
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":
