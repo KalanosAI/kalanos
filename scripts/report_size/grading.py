@@ -163,6 +163,27 @@ def measure(report: Path) -> Measurement:
     return Measurement(bytes=report.stat().st_size, episodes=episodes)
 
 
+def report_path(version: Version, dataset: str, cache: Path) -> Path:
+    """Return where a dataset's report at a version is cached.
+
+    Parameters
+    ----------
+    version : Version
+        The kalanos version.
+    dataset : str
+        A Hugging Face dataset as `<owner>/<name>@<revision>`.
+    cache : Path
+        The cache directory.
+
+    Returns
+    -------
+    Path
+        `<cache>/<version key>/<options key>/<owner>__<name>@<revision>.json`.
+    """
+
+    return cache / version.key / options_key() / f"{dataset.replace('/', '__')}.json"
+
+
 def ensure_measurement(
     version: Version, dataset: str, repo: Path, cache: Path
 ) -> Measurement:
@@ -188,10 +209,9 @@ def ensure_measurement(
         The report's size and loaded-episode count.
     """
 
-    folder = cache / version.key / options_key()
-    stem = dataset.replace("/", "__")
-    report = folder / f"{stem}.json"
-    sidecar = folder / f"{stem}.size.json"
+    report = report_path(version, dataset, cache)
+    folder = report.parent
+    sidecar = report.with_suffix(".size.json")
 
     if sidecar.is_file():
         print(f"reusing {dataset} for {version.label}", file=sys.stderr)
