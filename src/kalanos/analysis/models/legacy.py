@@ -260,20 +260,18 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
 
     raw = UPath(source).read_bytes()
     data = json.loads(raw)
-    if is_compact(data):
+    compact = is_compact(data)
+    if compact:
         # A decoded report holds one string per distinct key, shared by every use.
         # Serializing it again would write each key out in full at every use,
         # so a small file repeating a long key would grow to gigabytes.
-        # It is validated as a dict instead, in pydantic's Python mode:
-        # a strict field must accept the type `json.loads` gives it.
         data = decode_keys(data)
-        if _reads_as_current(str(data.get("schema_version", ""))):
-            return Report.model_validate(data)
-        return load_legacy(data)
-    version = str(data.get("schema_version", ""))
-    if _reads_as_current(version):
-        return Report.model_validate_json(raw)
-    return load_legacy(raw)
+    # The file is already parsed, so it is validated as a dict, in pydantic's
+    # Python mode: a strict field must accept the type `json.loads` gives it.
+    if _reads_as_current(str(data.get("schema_version", ""))):
+        return Report.model_validate(data)
+    # A full legacy report's digest is of the bytes read.
+    return load_legacy(data if compact else raw)
 
 
 __all__ = [

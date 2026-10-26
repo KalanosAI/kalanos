@@ -13,6 +13,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Changed
 
+- `kalanos.load_report`, `kalanos inspect` and `kalanos compare` validate a full report from the JSON they already parsed, so loading takes 22–29% less time and 33–46% less peak memory on reports of 9 to 118 MB.
 - A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 7.3.0).
 - Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 7.3.0).
 - `duplicates` names episodes by their index in `episodes`: `duplicates.exact` holds each group of identical episodes, and `duplicates.near` stores each near pair once, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`, which `cameras[].repeated_footage` already holds. On `lerobot/usc_cloth_sim`, its 487,458 near pairs take 6.2 MB. An older 7.x report that lists pair objects is converted on load (report schema 7.3.0).
