@@ -7,6 +7,7 @@
 # Built-in
 import csv
 import json
+import math
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -310,6 +311,33 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
     reloaded = Report.model_validate_json(json.dumps(older))
     assert reloaded.near_duplicates is None
     assert reloaded.duplicates == report.duplicates
+
+
+def test_re_runs_of_one_motion_get_one_dataset_warning(tmp_path):
+    """Five recordings of one motion, each slightly shifted, saturate the near tier:
+    the report carries one dataset warning and no near finding."""
+
+    pytest.importorskip("numpy")
+
+    rows = 200
+    for k in range(5):
+        lines = ["t_ms,joint_0,joint_1,joint_2"]
+        for i in range(rows):
+            values = (
+                math.sin(2 * math.pi * (j + 1) * i / (rows - 1) + 1e-4 * k)
+                for j in range(3)
+            )
+            lines.append(f"{i * 10}," + ",".join(f"{v:.6f}" for v in values))
+        (tmp_path / f"run_{k}.csv").write_text("\n".join(lines) + "\n")
+
+    report = _grade(tmp_path)
+
+    assert report.near_duplicates is not None and report.near_duplicates.saturated
+    assert [w.code for w in report.dataset_warnings] == ["near_duplicates_saturated"]
+    assert "5 of 5 episodes" in report.dataset_warnings[0].message
+    assert not [
+        f for f in report.findings if f.metric_id == "integrity.near_duplicate_episode"
+    ]
 
 
 def test_the_graded_episode_names_the_adapter_that_read_it(single_file_report):

@@ -25,7 +25,7 @@ from typer.testing import CliRunner
 # so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
 from kalanos.analysis.metrics import vision
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.report import DatasetWarning, Report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.families import (
     family_scores,
@@ -410,6 +410,31 @@ def test_inspect_prints_the_card_flagged_rows_and_an_episode_worst(tmp_path):
     ]
     assert episode_flagged
     assert all("· worst " in line for line in episode_flagged)
+
+
+def test_inspect_prints_dataset_warnings(tmp_path):
+    """Verify `inspect` prints a dataset warning once in the dataset view,
+    and not in one episode's view."""
+
+    message = "5 of 5 episodes have a near-identical partner."
+    report = grade(CSV_FIXTURE).model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="near_duplicates_saturated", message=message)
+            ]
+        }
+    )
+    json_path = tmp_path / "report.json"
+    write_report(report, json_path)
+
+    dataset = runner.invoke(app, ["inspect", str(json_path)])
+    one = runner.invoke(
+        app, ["inspect", str(json_path), "--episode", report.episodes[0].id]
+    )
+
+    assert dataset.exit_code == 0 and one.exit_code == 0
+    assert dataset.stdout.splitlines().count(f"warning {message}") == 1
+    assert message not in one.stdout
 
 
 def _card_rows(text: str) -> list[str]:

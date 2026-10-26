@@ -15,7 +15,8 @@ and every near pair up to `_MAX_LISTED_PAIRS`.
 A finding gives its partner count and lists no partner,
 since the pairs are already stored;
 a near finding also gives the limit and its nearest distance.
-When most pairs are near, the report says so once, in `Report.near_duplicates`,
+When most pairs are near, the report says so once, in `Report.near_duplicates`
+and as one warning in `Report.dataset_warnings`,
 in place of a near finding on every episode.
 
 Camera footage takes no part in the comparison,
@@ -47,6 +48,7 @@ from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Family, Level
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
+    DatasetWarning,
     DuplicateEpisodes,
     GradedEpisode,
     NearDuplicateSummary,
@@ -962,3 +964,39 @@ def find_duplicate_episodes(
         )
     ]
     return pairs, findings, summary
+
+
+def near_duplicate_warning(
+    summary: NearDuplicateSummary | None, n_episodes: int
+) -> DatasetWarning | None:
+    """The dataset warning a saturated near tier writes in place of near findings.
+
+    Parameters
+    ----------
+    summary : NearDuplicateSummary or None
+        The near search's counts, as `find_duplicate_episodes` returned them.
+    n_episodes : int
+        Every graded episode, whether or not it took part in the search.
+
+    Returns
+    -------
+    DatasetWarning or None
+        The warning, stating how many episodes have a near partner
+        and the share of compared pairs that are near.
+        `None` when the search did not run or the near tier is not saturated.
+    """
+
+    if summary is None or not summary.saturated:
+        return None
+    share = summary.pairs_near / summary.pairs_compared
+    return DatasetWarning(
+        code="near_duplicates_saturated",
+        message=(
+            f"{summary.episodes_with_partner} of {n_episodes} episodes"
+            " have a near-identical partner,"
+            f" and {summary.pairs_near:,} of {summary.pairs_compared:,}"
+            f" compared pairs ({share:.1%}) are near:"
+            " the near-duplicate check cannot tell copies from re-runs here,"
+            " so no episode carries a near-duplicate finding."
+        ),
+    )

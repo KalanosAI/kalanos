@@ -694,6 +694,27 @@ class NearDuplicateSummary(BaseModel):
     saturated: bool
 
 
+class DatasetWarning(BaseModel):
+    """A warning about the dataset as a whole, which belongs to no episode.
+
+    It is descriptive: it feeds no score, gate or eligibility decision.
+
+    Attributes
+    ----------
+    code : {"near_duplicates_saturated"}
+        What the warning is about.
+        `near_duplicates_saturated`: the near tier is saturated
+        (see `NearDuplicateSummary.saturated`),
+        so no episode carries a near-duplicate finding;
+        the counts are in `Report.near_duplicates`.
+    message : str
+        The warning, stated for a reader.
+    """
+
+    code: Literal["near_duplicates_saturated"]
+    message: str
+
+
 class NotObservable(BaseModel):
     """A metric that could not grade this dataset, and why.
 
@@ -857,6 +878,9 @@ class Report(BaseModel):
         or no group of comparable episodes holds two
         that differ in their payloads and could be resampled
         (every value finite, at least 2 rows).
+    dataset_warnings : list[DatasetWarning]
+        Warnings about the dataset as a whole, which belong to no episode.
+        Descriptive: they have no effect on any score.
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
@@ -896,6 +920,7 @@ class Report(BaseModel):
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
     near_duplicates: NearDuplicateSummary | None = None
+    dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
