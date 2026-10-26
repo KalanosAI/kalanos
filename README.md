@@ -92,6 +92,7 @@ The full [HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON
 ```bash
 kalanos grade recording.csv --report recording.html
 kalanos grade dataset/ --report dataset.json     # directories are walked recursively
+kalanos grade dataset/ --report dataset.compact.json --compact   # short key aliases: a smaller file, for machines
 kalanos profiles list                            # available evaluation scopes
 kalanos adapters                                 # available readers
 ```

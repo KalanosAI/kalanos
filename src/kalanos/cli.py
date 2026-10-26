@@ -34,6 +34,7 @@ from kalanos.analysis.models.binding import (
     Bundle,
     RequirementsSection,
 )
+from kalanos.analysis.models.compact_keys import encode_keys
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import KalanosError
@@ -49,7 +50,7 @@ from kalanos.analysis.reporting.families import (
     format_lowest,
 )
 from kalanos.analysis.reporting.flagged import flagged_rows
-from kalanos.analysis.reporting.render import render_json
+from kalanos.analysis.reporting.render import render_compact_json, render_json
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.bundle import load_bundle, load_bundle_policy
 from kalanos.assets.mapping import parse_map_argument
@@ -163,6 +164,16 @@ def grade(
         typer.Option(
             "--json",
             help="Print the Report model to stdout instead of the report card.",
+        ),
+    ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            "--compact",
+            help=(
+                "Write the report JSON with short key aliases and one key table, "
+                "for machines. Applies to --report, --json and --publish."
+            ),
         ),
     ] = False,
     color: Annotated[
@@ -348,6 +359,10 @@ def grade(
         stdout is decided by `as_json` either way.
     as_json : bool
         Print the Report model to stdout instead of the report card.
+    compact : bool
+        Replace every key of the report JSON with a short alias,
+        in the `report` file, on stdout with `as_json`, and in the `publish` payload.
+        `report`, when given, must end in `.json`.
     color : bool or None
         Style the card with color and Unicode, or print it as plain ASCII.
         `None` styles it only when stdout is a terminal and `NO_COLOR` is unset.
@@ -434,6 +449,18 @@ def grade(
     if not publish and name is not None:
         print("kalanos: --name needs --publish", file=sys.stderr)
         raise typer.Exit(code=2)
+    if compact and report is None and not as_json and not publish:
+        print(
+            "kalanos: --compact needs --report FILE.json, --json or --publish",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
+    if compact and report is not None and report.suffix.lower() != ".json":
+        print(
+            "kalanos: --compact writes JSON; --report must end in .json",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
     # (hub_url, api_key), set exactly when `publish` is.
     credentials: tuple[str, str] | None = None
     if publish:
@@ -490,7 +517,7 @@ def grade(
             report if report.is_absolute() else get_settings().reports_dir / report
         )
         try:
-            write_report(result, destination)
+            write_report(result, destination, compact=compact)
         except (ValueError, OSError) as exc:
             print(f"kalanos: {exc}", file=sys.stderr)
             raise typer.Exit(code=2) from exc
@@ -498,7 +525,7 @@ def grade(
     # Step 3: stdout is the model for a caller that wants to pipe it onward,
     # or the report card for a person reading the terminal.
     if as_json:
-        print(render_json(result))
+        print(render_compact_json(result) if compact else render_json(result))
     else:
         width = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
         print(
@@ -526,6 +553,8 @@ def grade(
                     file=sys.stderr,
                 )
             raise typer.Exit(code=2) from exc
+        if compact:
+            payload = encode_keys(payload)
         try:
             published = publish_report(
                 report=payload, api_key=key, name=name, hub_url=hub
@@ -793,7 +822,9 @@ def inspect(
 def publish(
     report: Annotated[
         Path,
-        typer.Argument(help="A report JSON written by `kalanos grade --report`."),
+        typer.Argument(
+            help="A report JSON written by `kalanos grade --report`, full or compact."
+        ),
     ],
     api_key: Annotated[
         str | None,
