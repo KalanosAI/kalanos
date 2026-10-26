@@ -85,6 +85,28 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 # field names, so a reader cannot tell them apart by content alone.
 CURRENT_SCHEMA_VERSION = "7.3.0"
 
+# Significant digits a stored near-duplicate distance keeps.
+# The near limit, 0.02, is exact at 4 digits,
+# so a distance within it never rounds above it.
+NRMSE_DIGITS = 4
+
+
+def round_nrmse(value: float) -> float:
+    """`value` rounded to `NRMSE_DIGITS` significant digits.
+
+    Parameters
+    ----------
+    value : float
+        A normalized RMSE.
+
+    Returns
+    -------
+    float
+        The rounded value.
+    """
+
+    return float(f"{value:.{NRMSE_DIGITS}g}")
+
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
 # ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
@@ -555,9 +577,7 @@ class NearPairs(BaseModel):
         The later episodes near `episode[k]`, ascending, each greater than `episode[k]`.
     nrmse : list[list[float]]
         The normalized RMSE of each pair, aligned with `partners`,
-        to 4 significant digits.
-        A pair converted from a report written before this encoding
-        keeps its distance unrounded.
+        to `NRMSE_DIGITS` significant digits.
     """
 
     episode: list[int] = Field(default_factory=list)
@@ -885,7 +905,7 @@ class Report(BaseModel):
         Those reports named both episodes of each pair by id.
         Each pair becomes indices into `episodes`: an exact pair joins
         the group of its first episode, and a near pair is stored under
-        its earlier episode with its distance unrounded.
+        its earlier episode with its distance rounded as a fresh report's is.
         The footage fields are dropped, since `cameras` holds the same facts.
 
         Parameters
@@ -932,7 +952,7 @@ class Report(BaseModel):
                 exact.setdefault(a, [a]).append(b)
             else:
                 lo, hi = min(a, b), max(a, b)
-                near.setdefault(lo, []).append((hi, nrmse))
+                near.setdefault(lo, []).append((hi, round_nrmse(nrmse)))
         rows = [(lo, sorted(near[lo])) for lo in sorted(near)]
         return {
             **data,

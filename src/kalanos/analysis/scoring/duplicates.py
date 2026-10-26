@@ -51,6 +51,7 @@ from kalanos.analysis.models.report import (
     GradedEpisode,
     NearDuplicateSummary,
     NearPairs,
+    round_nrmse,
 )
 from kalanos.analysis.models.scoring import Finding, Severity
 from kalanos.analysis.optional import load_numpy
@@ -93,10 +94,6 @@ _PRUNE_AXES = 8
 _PRUNE_SAMPLE = 4_000
 # Above this share of every pair left to compare, pruning is dropped.
 _PRUNE_GIVE_UP = 0.25
-# Significant digits a stored distance keeps.
-# The near limit, 0.02, is exact at 4 digits,
-# so a distance within it never rounds above it.
-_NRMSE_DIGITS = 4
 
 _UNCALIBRATED = {
     "accepted": False,
@@ -719,23 +716,6 @@ def _within_duration(n_rows: "np.ndarray", emit: Emit) -> Emit:
     return filtered
 
 
-def _significant(value: float) -> float:
-    """`value` rounded to `_NRMSE_DIGITS` significant digits.
-
-    Parameters
-    ----------
-    value : float
-        A normalized RMSE.
-
-    Returns
-    -------
-    float
-        The rounded value.
-    """
-
-    return float(f"{value:.{_NRMSE_DIGITS}g}")
-
-
 def _finding(
     episode_id: str,
     tier: Literal["exact", "near"],
@@ -923,7 +903,7 @@ def find_duplicate_episodes(
     for ids, i, j, distance in found:
         a, b = order[ids[i]], order[ids[j]]
         lo, hi = min(a, b), max(a, b)
-        later.setdefault(lo, []).append((hi, _significant(distance)))
+        later.setdefault(lo, []).append((hi, round_nrmse(distance)))
     rows = [(lo, sorted(later[lo])) for lo in sorted(later)]
     groups_exact = sorted(
         (
@@ -971,7 +951,7 @@ def find_duplicate_episodes(
         for rep, (nearest_distance, count) in near.items():
             evidence = {
                 "max_nrmse": _NEAR_RMSE,
-                "nearest_nrmse": _significant(nearest_distance),
+                "nearest_nrmse": round_nrmse(nearest_distance),
             }
             for copy in copies[rep]:
                 made[(copy, "near")] = (count, evidence)

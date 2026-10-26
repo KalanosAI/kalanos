@@ -173,7 +173,7 @@ def test_a_7_x_report_with_pair_objects_loads(tmp_path, version):
     assert isinstance(loaded, Report)
     assert loaded.duplicates.exact == []
     near = loaded.duplicates.near
-    assert (near.episode, near.partners, near.nrmse) == ([0], [[1]], [[0.0123456789]])
+    assert (near.episode, near.partners, near.nrmse) == ([0], [[1]], [[0.01235]])
     assert isinstance(load_report(out), Report)
     diff = compare(out, out)
     assert diff.added_episodes == diff.removed_episodes == diff.episode_changes == []
