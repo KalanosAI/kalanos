@@ -132,6 +132,76 @@ def test_a_7_2_report_with_episode_diagnostics_and_thumbnails_loads(tmp_path):
     assert loaded.diagnostics.model_dump(mode="json")["results"] == results
 
 
+def _with_pair_objects(version: str) -> tuple[dict, list[str]]:
+    """A graded report as `version` wrote `duplicates`: one object per pair, by id.
+
+    Parameters
+    ----------
+    version : str
+        The schema version to declare.
+
+    Returns
+    -------
+    tuple of (dict, list of str)
+        The payload, and its episode ids in order.
+    """
+
+    payload = grade(TINY_V3).model_dump(mode="json")
+    payload["schema_version"] = version
+    ids = [e["id"] for e in payload["episodes"]]
+    payload["duplicates"] = [
+        {
+            "episodes": [ids[1], ids[0]],
+            "tier": "near",
+            "nrmse": 0.0123456789,
+            "footage_identical": True,
+            "cameras": ["observation.images.top"],
+        }
+    ]
+    return payload, ids
+
+
+@pytest.mark.parametrize("version", ["7.2.0", "7.3.0"])
+def test_a_7_x_report_with_pair_objects_loads(tmp_path, version):
+    payload, ids = _with_pair_objects(version)
+    assert len(ids) == 2
+    out = tmp_path / "r.json"
+    out.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(out))
+
+    assert isinstance(loaded, Report)
+    assert loaded.duplicates.exact == []
+    near = loaded.duplicates.near
+    assert (near.episode, near.partners, near.nrmse) == ([0], [[1]], [[0.01235]])
+    assert isinstance(load_report(out), Report)
+    diff = compare(out, out)
+    assert diff.added_episodes == diff.removed_episodes == diff.episode_changes == []
+    result = CliRunner().invoke(app, ["inspect", str(out)])
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            lambda pair: pair["episodes"].__setitem__(0, "not_an_episode"),
+            "not_an_episode",
+        ),
+        (lambda pair: pair.pop("tier"), "malformed pair"),
+        (lambda pair: pair.__setitem__("tier", "nearby"), "malformed pair"),
+    ],
+)
+def test_a_malformed_or_unknown_pair_is_refused(tmp_path, change, message):
+    payload, _ids = _with_pair_objects("7.3.0")
+    change(payload["duplicates"][0])
+    out = tmp_path / "r.json"
+    out.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=message):
+        load_any(UPath(out))
+
+
 @pytest.mark.parametrize("version", ["7.4.0", "8.0.0", "7.x.0"])
 def test_a_newer_or_malformed_7_report_is_refused(tmp_path, version):
     payload = grade(TINY_V3).model_dump(mode="json")

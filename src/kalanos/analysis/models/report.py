@@ -85,6 +85,28 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 # field names, so a reader cannot tell them apart by content alone.
 CURRENT_SCHEMA_VERSION = "7.3.0"
 
+# Significant digits a stored near-duplicate distance keeps.
+# The near limit, 0.02, is exact at 4 digits,
+# so a distance within it never rounds above it.
+NRMSE_DIGITS = 4
+
+
+def round_nrmse(value: float) -> float:
+    """`value` rounded to `NRMSE_DIGITS` significant digits.
+
+    Parameters
+    ----------
+    value : float
+        A normalized RMSE.
+
+    Returns
+    -------
+    float
+        The rounded value.
+    """
+
+    return float(f"{value:.{NRMSE_DIGITS}g}")
+
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
 # ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
@@ -540,29 +562,85 @@ class CameraSummary(BaseModel):
     repeated_footage: list[list[str]] = Field(default_factory=list)
 
 
-class DuplicateEpisodes(BaseModel):
-    """Two episodes whose numeric payloads are identical or nearly so.
+class NearPairs(BaseModel):
+    """The listed pairs of episodes within the near-duplicate limit.
+
+    A pair is stored once, under its earlier episode,
+    and only episodes with a later partner have an entry.
+    Episodes are indices into `Report.episodes`.
 
     Attributes
     ----------
-    episodes : list[str]
-        The pair, in episode order.
-    tier : {"exact", "near"}
-        `exact` when every payload hashes identically,
-        `near` when the resampled trajectories lie within the near-duplicate limit.
-    nrmse : float
-        The normalized RMSE between the two trajectories, 0.0 for an exact pair.
-    footage_identical : bool
-        Whether the pair also repeats its camera footage exactly.
-    cameras : list[str]
-        The cameras whose footage the pair repeats exactly.
+    episode : list[int]
+        The earlier episode of each entry's pairs, ascending.
+    partners : list[list[int]]
+        The later episodes near `episode[k]`, ascending, each greater than `episode[k]`.
+    nrmse : list[list[float]]
+        The normalized RMSE of each pair, aligned with `partners`,
+        to `NRMSE_DIGITS` significant digits.
     """
 
-    episodes: list[str]
-    tier: Literal["exact", "near"]
-    nrmse: float
-    footage_identical: bool = False
-    cameras: list[str] = Field(default_factory=list)
+    episode: list[int] = Field(default_factory=list)
+    partners: list[list[int]] = Field(default_factory=list)
+    nrmse: list[list[float]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _aligned(self) -> "NearPairs":
+        """Refuse lists that do not line up, or pairs not stored once in index order.
+
+        Returns
+        -------
+        NearPairs
+            The validated pairs.
+
+        Raises
+        ------
+        ValueError
+            If the lists differ in length, an entry is empty,
+            or the indices are not strictly ascending as documented.
+        """
+
+        if not len(self.episode) == len(self.partners) == len(self.nrmse):
+            raise ValueError("near pairs: episode, partners and nrmse differ in length")
+        previous = -1
+        for first, partners, distances in zip(
+            self.episode, self.partners, self.nrmse, strict=True
+        ):
+            if not partners or len(partners) != len(distances):
+                raise ValueError(
+                    f"near pairs of episode {first}: partners and nrmse "
+                    "must be non-empty and of equal length"
+                )
+            if first <= previous:
+                raise ValueError("near pairs: episodes are not strictly ascending")
+            if any(b <= a for a, b in zip([first, *partners], partners, strict=False)):
+                raise ValueError(
+                    f"near pairs of episode {first}: partners must be strictly "
+                    "ascending and later than the episode"
+                )
+            previous = first
+        return self
+
+
+class DuplicateEpisodes(BaseModel):
+    """The episodes whose numeric payloads are identical or nearly so.
+
+    Episodes are indices into `Report.episodes`.
+    Which pairs also repeat their camera footage is read from
+    `Report.cameras[].repeated_footage`.
+
+    Attributes
+    ----------
+    exact : list[list[int]]
+        Each group of episodes whose payloads hash identically, earliest first,
+        the groups ordered by their earliest episode.
+        The earliest episode stands for its group in `near`.
+    near : NearPairs
+        Every listed near pair, each with its normalized RMSE.
+    """
+
+    exact: list[list[int]] = Field(default_factory=list)
+    near: NearPairs = Field(default_factory=NearPairs)
 
 
 class NearDuplicateSummary(BaseModel):
@@ -576,9 +654,9 @@ class NearDuplicateSummary(BaseModel):
     limit : float
         The largest normalized RMSE at which a pair counts as near.
     max_partners : int
-        The most near partners a finding lists.
-        Each episode also keeps only this many in `Report.duplicates`
+        The most near partners each episode keeps in `Report.duplicates`
         when `pairs_listed` is less than `pairs_near`.
+        A near finding lists no partner; its pairs are in `Report.duplicates.near`.
     episodes_compared : int
         The representatives the near search compared.
     pairs_compared : int
@@ -587,7 +665,8 @@ class NearDuplicateSummary(BaseModel):
     pairs_near : int
         Of those, the pairs within `limit` whose row counts also agree.
     pairs_listed : int
-        The near pairs in `Report.duplicates`: every one of `pairs_near`,
+        The near pairs in `Report.duplicates.near`, each stored once:
+        every one of `pairs_near`,
         or, when there are too many to list, those among the nearest
         `max_partners` of either episode.
     episodes_with_partner : int
@@ -762,12 +841,15 @@ class Report(BaseModel):
     cameras : list[CameraSummary]
         Each camera compared across the episodes it appears in:
         descriptive, and the source of the cross-episode vision findings.
-    duplicates : list[DuplicateEpisodes]
-        Each pair of episodes whose numeric payloads are identical or nearly so.
-        Identical episodes pair only with the first of them,
-        which also stands for them in a near pair.
+    duplicates : DuplicateEpisodes
+        The episodes whose numeric payloads are identical or nearly so,
+        as indices into `episodes`.
+        Identical episodes form one group, whose first episode
+        also stands for them in a near pair.
         Every near pair is listed, unless there are too many:
         `near_duplicates.pairs_listed` then falls short of `pairs_near`.
+        A report written before this encoding listed one object per pair,
+        and is converted on load.
     near_duplicates : NearDuplicateSummary or None
         How many pairs the near-duplicate search found, and whether that many
         leaves the near tier uninformative for this dataset.
@@ -812,8 +894,77 @@ class Report(BaseModel):
     sufficiency: Sufficiency | None = None
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
-    duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
+    duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
     near_duplicates: NearDuplicateSummary | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _duplicates_from_pairs(cls, data: Any) -> Any:
+        """Convert the one-object-per-pair `duplicates` of reports 7.0.0 to 7.3.0.
+
+        Those reports named both episodes of each pair by id.
+        Each pair becomes indices into `episodes`: an exact pair joins
+        the group of its first episode, and a near pair is stored under
+        its earlier episode with its distance rounded as a fresh report's is.
+        The footage fields are dropped, since `cameras` holds the same facts.
+
+        Parameters
+        ----------
+        data : Any
+            The raw input to the model.
+
+        Returns
+        -------
+        Any
+            `data`, with `duplicates` converted when it was a dict holding a list there.
+
+        Raises
+        ------
+        ValueError
+            If a pair is malformed or names an episode that is not in `episodes`.
+        """
+
+        if not isinstance(data, dict) or not isinstance(data.get("duplicates"), list):
+            return data
+        index = {
+            episode["id"]: k
+            for k, episode in enumerate(data.get("episodes") or [])
+            if isinstance(episode, dict) and "id" in episode
+        }
+        exact: dict[int, list[int]] = {}
+        near: dict[int, list[tuple[int, float]]] = {}
+        for pair in data["duplicates"]:
+            try:
+                names, tier = pair["episodes"], pair["tier"]
+                nrmse = pair["nrmse"] if tier == "near" else 0.0
+            except (KeyError, TypeError):
+                raise ValueError(f"duplicates: malformed pair {pair!r}") from None
+            if tier not in ("exact", "near") or len(names) != 2:
+                raise ValueError(f"duplicates: malformed pair {pair!r}")
+            unknown = [name for name in names if name not in index]
+            if unknown:
+                raise ValueError(
+                    f"duplicates: pair names episode {unknown[0]!r}, "
+                    "which is not in the report"
+                )
+            a, b = index[names[0]], index[names[1]]
+            if tier == "exact":
+                exact.setdefault(a, [a]).append(b)
+            else:
+                lo, hi = min(a, b), max(a, b)
+                near.setdefault(lo, []).append((hi, round_nrmse(nrmse)))
+        rows = [(lo, sorted(near[lo])) for lo in sorted(near)]
+        return {
+            **data,
+            "duplicates": {
+                "exact": [sorted(exact[first]) for first in sorted(exact)],
+                "near": {
+                    "episode": [lo for lo, _found in rows],
+                    "partners": [[hi for hi, _d in found] for _lo, found in rows],
+                    "nrmse": [[d for _hi, d in found] for _lo, found in rows],
+                },
+            },
+        }
 
     @model_serializer(mode="wrap")
     def _write_reason_codes(
@@ -868,12 +1019,21 @@ class Report(BaseModel):
 
         Every episode carries an eligibility; its compatibility `train_ready`
         mirrors it exactly; the gate's failing list is exactly the blocked
-        episodes; and the counts partition the episodes plus the failed ones.
+        episodes; the counts partition the episodes plus the failed ones;
+        and every index in `duplicates` names an episode.
         """
 
         episode_ids = [e.id for e in self.episodes]
         if len(episode_ids) != len(set(episode_ids)):
             raise ValueError("duplicate episode ids")
+        near = self.duplicates.near
+        indices = [
+            *(k for group in self.duplicates.exact for k in group),
+            *near.episode,
+            *(k for partners in near.partners for k in partners),
+        ]
+        if any(not 0 <= k < len(episode_ids) for k in indices):
+            raise ValueError("duplicates names an episode index outside episodes")
         if self.coverage is not None:
             from kalanos.analysis.coverage import report_coverage
 

@@ -25,6 +25,8 @@ def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any
     """Drop the keys of a model's JSON dump whose value is its field's empty default.
 
     Nested models are walked through lists, tuples and dicts.
+    A field whose factory makes a model is dropped when its written form equals
+    that default model's.
     A key that is not a field, and any value inside a free-form dict, is kept as it is.
 
     Parameters
@@ -43,6 +45,7 @@ def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any
     """
 
     defaults = _empty_defaults(type(model))
+    model_defaults = _model_defaults(type(model))
     fields = type(model).model_fields
     out: dict[str, Any] = {}
     for key, value in data.items():
@@ -51,7 +54,10 @@ def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any
             if type(value) is type(default) and value == default:
                 continue
         if key in fields:
-            out[key] = _walk(getattr(model, key), value)
+            walked = _walk(getattr(model, key), value)
+            if key in model_defaults and walked == model_defaults[key]:
+                continue
+            out[key] = walked
         else:
             out[key] = value
     return out
@@ -122,4 +128,33 @@ def _empty_defaults(
                 defaults[name] = []
             elif isinstance(made, dict) and not made:
                 defaults[name] = {}
+    return defaults
+
+
+@cache
+def _model_defaults(cls: type[BaseModel]) -> dict[str, dict[str, Any]]:
+    """Map each field whose factory makes a model to that model's written form.
+
+    Parameters
+    ----------
+    cls : type[BaseModel]
+        The model class.
+
+    Returns
+    -------
+    dict[str, dict[str, Any]]
+        The default model's JSON dump with its own empty defaults left out,
+        so a field equal to it can be left out as well.
+        A field whose factory makes no model, or that has no factory, is absent.
+    """
+
+    defaults: dict[str, dict[str, Any]] = {}
+    for name, field in cls.model_fields.items():
+        if (
+            field.default_factory is not None
+            and not field.default_factory_takes_validated_data
+        ):
+            made = field.get_default(call_default_factory=True)
+            if isinstance(made, BaseModel):
+                defaults[name] = omit_empty_defaults(made, made.model_dump(mode="json"))
     return defaults

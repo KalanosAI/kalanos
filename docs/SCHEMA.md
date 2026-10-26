@@ -18,15 +18,17 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 
 - `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.
 - `thumbnail_png_base64` is no longer written, neither in a vision diagnostic's `evidence.frames[]` nor in a metric's `evidence`. A vision result embeds one WebP preview of its blurriest sampled frame, in that frame's `thumbnail_webp_base64`, and names the frame in `measurements.preview_row` (`null` with `preview_frames: 0` or when the frame cannot be encoded). Each frame keeps its `source_row` and `presentation_time_s`, and the video file is the result's `subject.source_path`.
+- `duplicates` is no longer a list of pair objects. It is a `DuplicateEpisodes` object that names episodes by their index in `episodes`: `exact` holds each group of identical episodes, and `near` stores each near pair once, under its earlier episode, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`; read shared footage from `cameras[].repeated_footage`. A 7.0.0 to 7.3.0 report that lists pair objects is converted on load, its distances rounded to 4 significant digits.
 - `duplicates` lists every near pair up to 1.5 million. Past that, it keeps a near pair only when it is among the 5 nearest of either episode, and `near_duplicates.pairs_listed` falls short of `pairs_near`.
-- An `integrity.near_duplicate_episode` finding lists at most the episode's 5 nearest partners in `evidence.partners`, nearest first (they were in episode order), and gives the partners left out in a new `evidence.partners_omitted`, its `value` less the partners listed. `value` still counts every episode it is near.
+- An `integrity.near_duplicate_episode` finding no longer lists partners: its evidence is `max_nrmse`, the limit, and `nearest_nrmse`, the distance to its nearest partner to 4 significant digits. `partners`, `nrmse`, `footage_identical` and `partners_omitted` are gone from it, and `value` still counts every episode it is near. Its pairs are in `duplicates.near`.
+- An `integrity.duplicate_episode` finding's evidence is empty: `partners` and `footage_identical` are gone, since `duplicates.exact` holds the group and `cameras[].repeated_footage` the repeated footage. `value` still counts the other copies.
 - When the near tier is saturated (see `NearDuplicateSummary.saturated`), no `integrity.near_duplicate_episode` finding is written.
 
 | Field | Type | What it is |
 |---|---|---|
 | `near_duplicates` | `NearDuplicateSummary` or `null` | How many pairs the near-duplicate search found, over the whole dataset. `null` when the search did not run: numpy is missing, or no group of comparable episodes holds two that differ in their payloads and could be resampled (every value finite, at least 2 rows). |
 | `NearDuplicateSummary.limit` | `float` | The largest normalized RMSE at which a pair counts as near. |
-| `NearDuplicateSummary.max_partners` | `int` | The most near partners a finding lists. Each episode also keeps only this many in `duplicates` when `pairs_listed` is less than `pairs_near`. |
+| `NearDuplicateSummary.max_partners` | `int` | The most near partners each episode keeps in `duplicates` when `pairs_listed` is less than `pairs_near`. A near finding lists no partner. |
 | `NearDuplicateSummary.episodes_compared` | `int` | The episodes the near search compared: the first of each group of exact copies. |
 | `NearDuplicateSummary.pairs_compared` | `int` | The pairs among them, summed over the groups of episodes that hold the same streams and channels. |
 | `NearDuplicateSummary.pairs_near` | `int` | Of those, the pairs within `limit` whose row counts also agree. |
@@ -81,12 +83,12 @@ A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null,
 | `FamilyTail.n_below` | `int` | How many episodes scored the family strictly below `below`. |
 | `FamilyTail.n_scored` | `int` | How many episodes scored the family. An episode with nothing to score in it is left out. |
 | `FamilyTail.lowest` | `float` | The lowest episode score in the family. |
-| `duplicates` | `list[DuplicateEpisodes]` | Each pair of episodes whose numeric payloads are identical or nearly so. Identical episodes pair only with the first of them, which also stands for them in a near pair. |
-| `DuplicateEpisodes.episodes` | `list[str]` | The pair, in episode order. |
-| `DuplicateEpisodes.tier` | `exact` or `near` | `exact` when every payload hashes identically, `near` when the resampled trajectories lie within the near-duplicate limit. |
-| `DuplicateEpisodes.nrmse` | `float` | The normalized RMSE between the two trajectories, 0.0 for an exact pair. |
-| `DuplicateEpisodes.footage_identical` | `bool` | Whether the pair also repeats its camera footage exactly. |
-| `DuplicateEpisodes.cameras` | `list[str]` | The cameras whose footage the pair repeats exactly. |
+| `duplicates` | `DuplicateEpisodes` | The episodes whose numeric payloads are identical or nearly so, as indices into `episodes`. Which pairs also repeat their footage is read from `cameras[].repeated_footage`. |
+| `DuplicateEpisodes.exact` | `list[list[int]]` | Each group of episodes whose payloads hash identically, earliest first, the groups ordered by their earliest episode. The earliest stands for its group in `near`. |
+| `DuplicateEpisodes.near` | `NearPairs` | Every listed near pair, each stored once. |
+| `NearPairs.episode` | `list[int]` | The earlier episode of each entry's pairs, ascending. Only episodes with a later near partner have an entry. |
+| `NearPairs.partners` | `list[list[int]]` | The later episodes near `episode[k]`, ascending. |
+| `NearPairs.nrmse` | `list[list[float]]` | The normalized RMSE of each pair, aligned with `partners`, to 4 significant digits. |
 
 An episode's `score` and `families` now come from its metrics, each counted once at its worst subject and weighted within its family. A family scores only when one of its `core` metrics (a new `MetricPolicy.core` flag) graded in the episode. Channel and stream scores keep their own fold and are for display.
 

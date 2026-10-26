@@ -6,6 +6,7 @@
 
 # Built-in
 import csv
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -277,10 +278,9 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
 
     report = _grade(tmp_path)
 
-    assert [(d.episodes, d.tier) for d in report.duplicates] == [
-        (["run_a.csv", "run_b.csv"], "exact"),
-        (["run_a.csv", "run_c.csv"], "exact"),
-    ]
+    assert [
+        [report.episodes[k].id for k in group] for group in report.duplicates.exact
+    ] == [["run_a.csv", "run_b.csv", "run_c.csv"]]
     flagged = [
         f.episode_id
         for f in report.findings
@@ -293,10 +293,23 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
     loaded = Report.model_validate_json(report.model_dump_json())
     assert loaded.duplicates == report.duplicates
     assert loaded.near_duplicates == report.near_duplicates
-    # A 7.2.0 report has no near-duplicate summary, and still loads.
+    # A 7.2.0 report has no near-duplicate summary, lists one object per pair,
+    # and still loads into the current encoding.
     older = report.model_dump(mode="json", exclude={"near_duplicates"})
     older["schema_version"] = "7.2.0"
-    assert Report.model_validate(older).near_duplicates is None
+    older["duplicates"] = [
+        {
+            "episodes": ["run_a.csv", copy],
+            "tier": "exact",
+            "nrmse": 0.0,
+            "footage_identical": False,
+            "cameras": [],
+        }
+        for copy in ("run_b.csv", "run_c.csv")
+    ]
+    reloaded = Report.model_validate_json(json.dumps(older))
+    assert reloaded.near_duplicates is None
+    assert reloaded.duplicates == report.duplicates
 
 
 def test_the_graded_episode_names_the_adapter_that_read_it(single_file_report):
