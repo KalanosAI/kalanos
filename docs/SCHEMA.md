@@ -10,6 +10,9 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - Every value under a key named `reason`, `reasons` or `detail`, at any depth, holds an index into `reason_codes`: a string becomes an integer, a list of strings a list of integers, and the keys of a `reasons` map (the coverage rows) become integers written as strings. `null` stays `null`.
 - Codes are per report. The same text can have a different code in another report.
 - A field whose value is `null`, `[]` or `{}` is left out when its default is that same value. This includes top-level lists such as `findings`, `skipped` and `unresolved`. A field that is nullable but has no default is still written as `null`, and a value inside a free-form `evidence` or `calibration` object is written as it is.
+- `streams[].coverage` lists only the rows where at least one subject was computed, skipped or errored.
+- When an episode has a `coverage` ledger, a stream- or channel-level key in `episodes[].coverage.metrics` that is missing from a stream's `coverage` neither computed, skipped nor errored on that stream. The episode row gives its counts and reasons. An episode with no `coverage` ledger recorded none, as before.
+- Episode and dataset ledgers are unchanged.
 
 ## Changed in 7.3.0
 
@@ -176,6 +179,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 5. Keep showing `scope`, `eligibility_counts`, `readiness`, `sufficiency` and `coverage` together wherever readiness appears: a `readiness.score` of `null` means undefined.
 6. Decode every `reason`, `reasons` and `detail` value through `reason_codes` before showing or comparing it.
 7. Read a missing key as `null`, or as an empty list or map when the field is a list or map.
+8. Read per-metric coverage totals from the episode or dataset ledger, since stream rows no longer add up to them.
 
 ## Fixtures
 

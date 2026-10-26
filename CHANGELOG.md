@@ -14,6 +14,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - Every reason text is written once, in the new first key `reason_codes`, and each `reason`, `reasons` and `detail` value holds its index there (report schema 8.0.0). `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read the codes back as text.
 - `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.3.0. A 7.2.0 report's per-episode diagnostics are ignored on load.
 - A written report leaves out a field whose value is null, an empty list or an empty map when that is the field's default, and loading the report restores it. This affects `--json`, `--report` and the publish payload; `Report.model_dump` is unchanged (report schema 8.0.0).
+- Each stream's `coverage` lists only the metrics that computed, skipped or errored on it. The episode and dataset coverage ledgers keep every metric with the same counts (report schema 8.0.0).
 
 ## [0.8.2] - 2026-10-21
 
