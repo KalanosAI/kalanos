@@ -45,6 +45,7 @@ from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     CURRENT_SCHEMA_VERSION,
     AnalysedEpisode,
+    DatasetWarning,
     GradedChannel,
     GradedEpisode,
     GradedStream,
@@ -1315,6 +1316,26 @@ def test_every_finding_renders_with_its_severity_metric_and_location():
     empty = render_html(_sample_report().model_copy(update={"findings": []}))
     assert 'class="empty"' in empty
     assert 'class="findings"' not in empty
+
+
+def test_html_shows_dataset_warnings():
+    """A dataset warning renders once, in its own section,
+    and a report with none renders no such section."""
+
+    warning = DatasetWarning(
+        code="near_duplicates_saturated", message="5 of 5 episodes are alike."
+    )
+    report = _sample_report().model_copy(update={"dataset_warnings": [warning]})
+
+    html = render_html(report)
+
+    column = html[html.index('<div class="column">') :]
+    assert column.count('data-warning="near_duplicates_saturated"') == 1
+    assert (
+        '<p data-warning="near_duplicates_saturated">5 of 5 episodes are alike.</p>'
+        in column
+    )
+    assert "Dataset warnings" not in render_html(_sample_report())
 
 
 def test_a_stream_less_finding_omits_the_stream_separator_in_the_html_table():

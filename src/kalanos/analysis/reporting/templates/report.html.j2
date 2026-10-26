@@ -245,6 +245,11 @@
     color: var(--muted);
   }
 
+  .dataset-warnings p {
+    border-left: 3px solid var(--warning);
+    padding-left: 0.5rem;
+  }
+
   .stream-metrics { margin-bottom: 0.25rem; }
   .episode-metrics { margin-bottom: 0.75rem; }
 
@@ -355,6 +360,10 @@
 
 <div class="column">
 
+{% if report.dataset_warnings %}<section aria-label="Dataset warnings" class="dataset-warnings">
+  <h2>Dataset warnings</h2>
+  {% for w in report.dataset_warnings %}<p data-warning="{{ w.code }}">{{ w.message }}</p>{% endfor %}
+</section>{% endif %}
 {% if family_scores %}<section aria-label="Family scores">
   <h2>Family scores</h2>
   <table class="plain">

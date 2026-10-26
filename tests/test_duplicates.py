@@ -25,6 +25,7 @@ from kalanos.analysis.scoring.duplicates import (
     _search,
     close_pairs,
     find_duplicate_episodes,
+    near_duplicate_warning,
     payload_fingerprint,
 )
 
@@ -470,6 +471,29 @@ def test_alike_episodes_saturate_the_near_tier():
     assert summary.pairs_listed == sum(p[2] == "near" for p in _flat(pairs)) == 435
 
 
+def test_a_saturated_near_tier_warns_once():
+    """A saturated near tier gives one dataset warning,
+    stating the episodes with a partner and the share of near pairs."""
+
+    pytest.importorskip("numpy")
+
+    _pairs, _findings, summary = _run(*_alike(30))
+
+    warning = near_duplicate_warning(summary, 30)
+
+    assert warning is not None
+    assert warning.code == "near_duplicates_saturated"
+    assert "30 of 30 episodes" in warning.message
+    assert "435 of 435" in warning.message
+    assert "100.0%" in warning.message
+
+
+def test_no_search_gives_no_warning():
+    """A dataset the near search did not run on gets no dataset warning."""
+
+    assert near_duplicate_warning(None, 5) is None
+
+
 def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
     """Every near pair is listed up to the limit;
     past it, the pairs listed stay within a fixed number per episode."""
@@ -506,6 +530,7 @@ def test_a_near_finding_states_count_limit_and_nearest():
     cluster = {f"episode_{index}" for index in range(8)}
     assert summary is not None
     assert not summary.saturated
+    assert near_duplicate_warning(summary, 20) is None
     assert (summary.pairs_near, summary.pairs_compared) == (28, 190)
     flat = _flat(pairs)
     assert all({a, b} <= cluster for a, b, _t, _d in flat)
@@ -536,6 +561,7 @@ def test_two_near_episodes_never_saturate():
     assert summary is not None
     assert summary.pairs_near == summary.pairs_compared == 1
     assert not summary.saturated
+    assert near_duplicate_warning(summary, 2) is None
     assert _ids(findings, "integrity.near_duplicate_episode") == [
         "episode_0",
         "episode_1",

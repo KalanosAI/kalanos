@@ -221,3 +221,17 @@ def test_inspect_reads_current_and_legacy_reports(tmp_path):
     assert out.exit_code == 0 and "2/2 pass" in out.stdout
     out = runner.invoke(app, ["inspect", str(TOWEL_6_4)])
     assert out.exit_code == 0 and "2 contradiction" in out.stdout
+
+
+def test_a_report_without_dataset_warnings_loads(tmp_path):
+    """A 7.3.0 report written before `dataset_warnings` existed loads with none."""
+
+    payload = grade(TINY_V3).model_dump(mode="json")
+    payload.pop("dataset_warnings", None)
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(path))
+
+    assert isinstance(loaded, Report)
+    assert loaded.dataset_warnings == []

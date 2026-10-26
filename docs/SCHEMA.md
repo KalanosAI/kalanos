@@ -23,6 +23,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - An `integrity.near_duplicate_episode` finding no longer lists partners: its evidence is `max_nrmse`, the limit, and `nearest_nrmse`, the distance to its nearest partner to 4 significant digits. `partners`, `nrmse`, `footage_identical` and `partners_omitted` are gone from it, and `value` still counts every episode it is near. Its pairs are in `duplicates.near`.
 - An `integrity.duplicate_episode` finding's evidence is empty: `partners` and `footage_identical` are gone, since `duplicates.exact` holds the group and `cameras[].repeated_footage` the repeated footage. `value` still counts the other copies.
 - When the near tier is saturated (see `NearDuplicateSummary.saturated`), no `integrity.near_duplicate_episode` finding is written.
+- `dataset_warnings` is new. When the near tier is saturated, it holds one `near_duplicates_saturated` warning stating how many episodes have a near-identical partner and the share of compared pairs that are near. It feeds no score.
 
 | Field | Type | What it is |
 |---|---|---|
@@ -36,8 +37,11 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `NearDuplicateSummary.episodes_with_partner` | `int` | The episodes, exact copies included, with at least one near partner. |
 | `NearDuplicateSummary.median_nearest_nrmse` | `float` or `null` | The median, over compared episodes with a near partner, of the distance to their nearest one. `null` when `pairs_near` is 0. |
 | `NearDuplicateSummary.saturated` | `bool` | Whether more than half the compared pairs are near and there are more near pairs than compared episodes. The near tier then does not separate copies from re-runs in this dataset; the exact tier still applies. |
+| `dataset_warnings` | `list[DatasetWarning]` | Warnings about the dataset as a whole, which belong to no episode. Descriptive: they have no effect on any score. Left out of a written report when empty. |
+| `DatasetWarning.code` | `"near_duplicates_saturated"` | What the warning is about. `near_duplicates_saturated`: the near tier is saturated, so no episode carries a near-duplicate finding; the counts are in `near_duplicates`. |
+| `DatasetWarning.message` | `str` | The warning, stated for a reader. |
 
-A 7.2.0 report still loads: its `episodes[].diagnostics` is ignored, any `thumbnail_png_base64` stays in `evidence` as it was written, and `near_duplicates` is null.
+A 7.2.0 report still loads: its `episodes[].diagnostics` is ignored, any `thumbnail_png_base64` stays in `evidence` as it was written, `near_duplicates` is null and `dataset_warnings` is empty.
 
 ## Added in 7.2.0
 

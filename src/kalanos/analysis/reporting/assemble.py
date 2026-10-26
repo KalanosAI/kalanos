@@ -82,6 +82,7 @@ from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
     StreamKey,
     find_duplicate_episodes,
+    near_duplicate_warning,
     payload_fingerprint,
 )
 from kalanos.analysis.scoring.eligibility import (
@@ -607,6 +608,11 @@ def assemble_report(
         graded_episodes, fingerprints
     )
     findings.extend(duplicate_findings)
+    dataset_warnings = [
+        w
+        for w in (near_duplicate_warning(near_duplicates, len(graded_episodes)),)
+        if w is not None
+    ]
     graded_episodes = [
         e.model_copy(
             update={
@@ -734,4 +740,5 @@ def assemble_report(
         cameras=cameras,
         duplicates=duplicates,
         near_duplicates=near_duplicates,
+        dataset_warnings=dataset_warnings,
     )

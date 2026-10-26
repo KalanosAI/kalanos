@@ -713,6 +713,9 @@ def inspect(
             if r.score is not None
             else "readiness undefined: " + "; ".join(r.reasons)
         )
+    if episode is None:
+        for w in loaded.dataset_warnings:
+            console.print(f"warning {w.message}", markup=False)
     if loaded.score.families:
         console.print(
             "families "
