@@ -89,6 +89,20 @@ def test_omits_only_empty_values_equal_to_the_default():
     assert data == before
 
 
+class Holder(BaseModel):
+    child: Child = Field(default_factory=Child)
+
+
+def test_omits_a_model_field_equal_to_its_default_model():
+    empty, filled = Holder(), Holder(child=Child(note="x"))
+
+    assert omit_empty_defaults(empty, empty.model_dump(mode="json")) == {}
+    result = omit_empty_defaults(filled, filled.model_dump(mode="json"))
+    assert result == {"child": {"note": "x"}}
+    assert Holder.model_validate({}) == empty
+    assert Holder.model_validate(result) == filled
+
+
 @pytest.mark.parametrize("vision", [False, True], ids=["plain", "vision"])
 def test_a_written_report_loads_back_equal(tmp_path, vision):
     bundle = Bundle(diagnostics=DiagnosticPlan(vision=True)) if vision else None
