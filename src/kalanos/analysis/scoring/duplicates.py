@@ -10,13 +10,16 @@ so this pass compares the numeric payloads of every pair of episodes after gradi
 - a near duplicate lies within `_NEAR_RMSE` once each trajectory is resampled
   and normalized, and is only reported.
 
-A near finding lists at most its episode's `_MAX_PARTNERS` nearest partners,
-`Report.duplicates` lists every near pair up to `_MAX_LISTED_PAIRS`,
-and when most pairs are near, the report says so once, in `Report.near_duplicates`,
+`Report.duplicates` stores each pair once, as episode indices,
+and every near pair up to `_MAX_LISTED_PAIRS`.
+A finding gives its partner count and lists no partner,
+since the pairs are already stored;
+a near finding also gives the limit and its nearest distance.
+When most pairs are near, the report says so once, in `Report.near_duplicates`,
 in place of a near finding on every episode.
 
-Camera footage takes no part in the comparison.
-A pair that also repeats its footage exactly, as `scoring.cameras` finds it, says so.
+Camera footage takes no part in the comparison,
+and `Report.cameras[].repeated_footage` already says which episodes repeat it.
 It reads payloads the channel metrics already fetched, so it decodes no video.
 A copy trimmed or shifted in time resamples onto different points,
 so it is not found (docs/METRICS.md, "Duplicate episodes").
@@ -44,10 +47,10 @@ from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Family, Level
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
-    CameraSummary,
     DuplicateEpisodes,
     GradedEpisode,
     NearDuplicateSummary,
+    NearPairs,
 )
 from kalanos.analysis.models.scoring import Finding, Severity
 from kalanos.analysis.optional import load_numpy
@@ -69,7 +72,7 @@ _NEAR_RMSE = 0.02
 # The most a near pair's streams may each differ in row count,
 # as a share of the longer one.
 _DURATION_TOLERANCE = 0.1
-# Near partners a finding lists, and that each episode keeps past `_MAX_LISTED_PAIRS`.
+# Near partners each episode keeps past `_MAX_LISTED_PAIRS`.
 _MAX_PARTNERS = 5
 # The most near pairs `Report.duplicates` lists in full.
 # Past it, each episode keeps only its `_MAX_PARTNERS` nearest,
@@ -90,6 +93,10 @@ _PRUNE_AXES = 8
 _PRUNE_SAMPLE = 4_000
 # Above this share of every pair left to compare, pruning is dropped.
 _PRUNE_GIVE_UP = 0.25
+# Significant digits a stored distance keeps.
+# The near limit, 0.02, is exact at 4 digits,
+# so a distance within it never rounds above it.
+_NRMSE_DIGITS = 4
 
 _UNCALIBRATED = {
     "accepted": False,
@@ -222,52 +229,6 @@ def payload_fingerprint(
         variances=variances,
         varies=varies,
     )
-
-
-def _footage(cameras: Sequence[CameraSummary]) -> dict[str, dict[str, int]]:
-    """Where each episode sits among the cameras' exact footage repeats.
-
-    A pair is looked up from its two episodes' entries,
-    since listing every pair of a repeat group grows with the square of its size.
-
-    Parameters
-    ----------
-    cameras : Sequence[CameraSummary]
-        The camera summaries, whose `repeated_footage` groups name the episodes.
-
-    Returns
-    -------
-    dict of str to dict of str to int
-        For each episode in a repeat group, each camera it repeats on
-        and the index of its group there, in camera order.
-    """
-
-    groups: dict[str, dict[str, int]] = {}
-    for camera in cameras:
-        for index, group in enumerate(camera.repeated_footage):
-            for episode_id in group:
-                groups.setdefault(episode_id, {})[camera.camera] = index
-    return groups
-
-
-def _shared_footage(footage: dict[str, dict[str, int]], a: str, b: str) -> list[str]:
-    """The cameras whose footage episodes `a` and `b` repeat exactly.
-
-    Parameters
-    ----------
-    footage : dict of str to dict of str to int
-        Each episode's repeat groups, from `_footage`.
-    a, b : str
-        The two episodes.
-
-    Returns
-    -------
-    list of str
-        The cameras on which both episodes sit in one repeat group, in camera order.
-    """
-
-    left, right = footage.get(a, {}), footage.get(b, {})
-    return [camera for camera, group in left.items() if right.get(camera) == group]
 
 
 def _vectors(
@@ -758,14 +719,30 @@ def _within_duration(n_rows: "np.ndarray", emit: Emit) -> Emit:
     return filtered
 
 
+def _significant(value: float) -> float:
+    """`value` rounded to `_NRMSE_DIGITS` significant digits.
+
+    Parameters
+    ----------
+    value : float
+        A normalized RMSE.
+
+    Returns
+    -------
+    float
+        The rounded value.
+    """
+
+    return float(f"{value:.{_NRMSE_DIGITS}g}")
+
+
 def _finding(
     episode_id: str,
     tier: Literal["exact", "near"],
-    partners: list[tuple[str, float]],
     count: int,
-    footage: dict[str, dict[str, int]],
+    evidence: dict,
 ) -> Finding:
-    """An episode-level finding that `episode_id` duplicates each of `partners`.
+    """An episode-level finding that `episode_id` duplicates `count` episodes.
 
     Parameters
     ----------
@@ -773,37 +750,22 @@ def _finding(
         The episode the finding is about.
     tier : {"exact", "near"}
         `exact` requests review, `near` is only reported.
-    partners : list of tuple of (str, float)
-        Each partner's episode id and normalized RMSE.
     count : int
-        How many episodes `episode_id` duplicates, counting the exact copies
-        a partner stands for and, on a near finding,
-        every partner past the nearest `_MAX_PARTNERS`.
-    footage : dict of str to dict of str to int
-        Each episode's repeat groups, from `_footage`.
+        How many episodes `episode_id` duplicates,
+        counting the exact copies a partner stands for.
+    evidence : dict
+        The finding's evidence.
 
     Returns
     -------
     Finding
-        The finding, with the partners in its evidence.
+        The finding.
     """
 
     exact = tier == "exact"
     metric_id = (
         "integrity.duplicate_episode" if exact else "integrity.near_duplicate_episode"
     )
-    evidence: dict = {
-        "partners": [partner for partner, _d in partners],
-        "footage_identical": [
-            bool(_shared_footage(footage, episode_id, partner))
-            for partner, _d in partners
-        ],
-    }
-    # An exact partner is always 0 apart, so only a near finding lists distances.
-    if not exact:
-        evidence["nrmse"] = [distance for _p, distance in partners]
-        evidence["max_nrmse"] = _NEAR_RMSE
-        evidence["partners_omitted"] = count - len(partners)
     return Finding(
         id=content_digest({"metric": metric_id, "episode": episode_id}),
         metric_id=metric_id,
@@ -825,8 +787,7 @@ def _finding(
 def find_duplicate_episodes(
     episodes: Sequence[GradedEpisode],
     fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
-    cameras: Sequence[CameraSummary] = (),
-) -> tuple[list[DuplicateEpisodes], list[Finding], NearDuplicateSummary | None]:
+) -> tuple[DuplicateEpisodes, list[Finding], NearDuplicateSummary | None]:
     """Pair the episodes whose numeric payloads are identical or nearly so.
 
     Only episodes whose fingerprinted streams sit at the same keys
@@ -842,7 +803,8 @@ def find_duplicate_episodes(
       and every copy in either group is near the other group's earliest episode.
 
     Every copy still carries each finding the pair implies.
-    A near finding lists only the episode's `_MAX_PARTNERS` nearest partners.
+    A finding lists no partner, only how many there are,
+    and a near finding also the distance to the nearest.
     Every near pair is kept while there are at most `_MAX_LISTED_PAIRS`;
     past that, a near pair is kept only when it is among the `_MAX_PARTNERS` nearest
     of either episode.
@@ -851,16 +813,16 @@ def find_duplicate_episodes(
     Parameters
     ----------
     episodes : Sequence[GradedEpisode]
-        Every graded episode, which sets the order of pairs and findings.
+        Every graded episode, which sets the order of pairs and findings,
+        and whose positions the pairs' indices are.
+        `Report.episodes` must keep this order.
     fingerprints : Mapping
         Each episode's fingerprints by episode id, as grading collected them.
-    cameras : Sequence[CameraSummary]
-        The camera summaries, whose exact footage repeats annotate a pair.
 
     Returns
     -------
-    tuple of (list of DuplicateEpisodes, list of Finding, NearDuplicateSummary or None)
-        Every kept pair in episode order, one finding per episode and tier
+    tuple of (DuplicateEpisodes, list of Finding, NearDuplicateSummary or None)
+        Every exact group and kept near pair, one finding per episode and tier
         with at least one partner, and the near search's counts over the dataset,
         `None` when no group reached the near search.
     """
@@ -875,13 +837,11 @@ def find_duplicate_episodes(
         signature = tuple(sorted((key, tuple(p.channels)) for key, p in prints.items()))
         groups.setdefault(signature, []).append((episode.id, prints))
 
-    footage = _footage(cameras)
-    pairs: list[DuplicateEpisodes] = []
     # Each group's episodes by its earliest one, which comes first.
     copies: dict[str, list[str]] = {}
-    # Each representative's nearest partners with their distances,
+    # Each representative's distance to its nearest partner,
     # and how many episodes it is near, copies included.
-    near: dict[str, tuple[list[tuple[str, float]], int]] = {}
+    near: dict[str, tuple[float, int]] = {}
     # Each searched group's representatives and their nearest partners.
     searched: list[tuple[list[str], _Nearest]] = []
     listed = _Listed()
@@ -898,19 +858,7 @@ def find_duplicate_episodes(
             identity = tuple((prints[k].sha256, prints[k].n_rows) for k in keys)
             by_hash.setdefault(identity, []).append(episode_id)
         for ids in by_hash.values():
-            first = ids[0]
-            copies[first] = ids
-            for b in ids[1:]:
-                shared = _shared_footage(footage, first, b)
-                pairs.append(
-                    DuplicateEpisodes(
-                        episodes=[first, b],
-                        tier="exact",
-                        nrmse=0.0,
-                        footage_identical=bool(shared),
-                        cameras=shared,
-                    )
-                )
+            copies[ids[0]] = ids
 
         # Step 3: near pairs, among the earliest episodes of the groups
         # resampled on every key. Copies resample to the same points,
@@ -954,17 +902,9 @@ def find_duplicate_episodes(
         pairs_compared += len(ids) * (len(ids) - 1) // 2
         pairs_near += nearest.total
         for row in numpy.flatnonzero(nearest.counts).tolist():
-            kept = [
-                (ids[partner], distance)
-                for partner, distance in zip(
-                    nearest.partner[row].tolist(),
-                    nearest.distance[row].tolist(),
-                    strict=True,
-                )
-                if partner >= 0
-            ]
-            near[ids[row]] = (kept, round(float(nearest.weighted[row])))
-            nearest_distances.append(kept[0][1])
+            nearest_distance = float(nearest.distance[row, 0])
+            near[ids[row]] = (nearest_distance, round(float(nearest.weighted[row])))
+            nearest_distances.append(nearest_distance)
 
     # Step 4: every near pair while they fit, else each episode's nearest.
     if listed.blocks is not None:
@@ -979,18 +919,28 @@ def find_duplicate_episodes(
         found = [
             (ids, i, j, d) for ids, nearest in searched for i, j, d in nearest.pairs()
         ]
+    later: dict[int, list[tuple[int, float]]] = {}
     for ids, i, j, distance in found:
-        a, b = ids[i], ids[j]
-        shared = _shared_footage(footage, a, b)
-        pairs.append(
-            DuplicateEpisodes(
-                episodes=[a, b],
-                tier="near",
-                nrmse=distance,
-                footage_identical=bool(shared),
-                cameras=shared,
-            )
-        )
+        a, b = order[ids[i]], order[ids[j]]
+        lo, hi = min(a, b), max(a, b)
+        later.setdefault(lo, []).append((hi, _significant(distance)))
+    rows = [(lo, sorted(later[lo])) for lo in sorted(later)]
+    groups_exact = sorted(
+        (
+            sorted(order[episode_id] for episode_id in ids)
+            for ids in copies.values()
+            if len(ids) > 1
+        ),
+        key=lambda group: group[0],
+    )
+    pairs = DuplicateEpisodes(
+        exact=groups_exact,
+        near=NearPairs(
+            episode=[lo for lo, _kept in rows],
+            partners=[[hi for hi, _d in kept] for _lo, kept in rows],
+            nrmse=[[d for _hi, d in kept] for _lo, kept in rows],
+        ),
+    )
 
     summary = None
     if searched:
@@ -1011,33 +961,24 @@ def find_duplicate_episodes(
             ),
         )
 
-    # Step 5: pairs in episode order, then one finding per episode and tier.
-    pairs = [
-        pair.model_copy(
-            update={"episodes": sorted(pair.episodes, key=order.__getitem__)}
-        )
-        for pair in pairs
-    ]
-    pairs.sort(key=lambda p: (order[p.episodes[0]], order[p.episodes[1]], p.tier))
-    partners: dict[tuple[str, Literal["exact", "near"]], list[tuple[str, float]]] = {}
-    counts: dict[tuple[str, Literal["exact", "near"]], int] = {}
-    for pair in pairs:
-        if pair.tier != "exact":
-            continue
-        # `a` is the group's earliest episode, and lists every other copy.
-        a, b = pair.episodes
-        partners.setdefault((a, "exact"), []).append((b, 0.0))
-        partners[(b, "exact")] = [(a, 0.0)]
-        counts[(a, "exact")] = counts[(b, "exact")] = len(copies[a]) - 1
+    # Step 5: one finding per episode and tier, in episode order.
+    made: dict[tuple[str, Literal["exact", "near"]], tuple[int, dict]] = {}
+    for ids in copies.values():
+        if len(ids) > 1:
+            for episode_id in ids:
+                made[(episode_id, "exact")] = (len(ids) - 1, {})
     if summary is not None and not summary.saturated:
-        for rep, (kept, count) in near.items():
+        for rep, (nearest_distance, count) in near.items():
+            evidence = {
+                "max_nrmse": _NEAR_RMSE,
+                "nearest_nrmse": _significant(nearest_distance),
+            }
             for copy in copies[rep]:
-                partners[(copy, "near")] = kept
-                counts[(copy, "near")] = count
+                made[(copy, "near")] = (count, evidence)
     findings = [
-        _finding(episode_id, tier, found, counts[(episode_id, tier)], footage)
-        for (episode_id, tier), found in sorted(
-            partners.items(), key=lambda item: (order[item[0][0]], item[0][1])
+        _finding(episode_id, tier, count, dict(evidence))
+        for (episode_id, tier), (count, evidence) in sorted(
+            made.items(), key=lambda item: (order[item[0][0]], item[0][1])
         )
     ]
     return pairs, findings, summary

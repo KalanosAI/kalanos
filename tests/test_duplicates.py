@@ -15,7 +15,7 @@ import pytest
 # Internal
 from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.report import CameraSummary, GradedEpisode
+from kalanos.analysis.models.report import GradedEpisode
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.analysis.scoring import duplicates
 from kalanos.analysis.scoring.duplicates import (
@@ -58,7 +58,7 @@ def _arm(
     )
 
 
-def _run(*frames: pl.DataFrame, cameras: list[CameraSummary] | None = None):
+def _run(*frames: pl.DataFrame):
     """Run the pass over one episode per frame, each a single numeric stream,
     and return its pairs, findings and near-duplicate summary."""
 
@@ -76,13 +76,13 @@ def _run(*frames: pl.DataFrame, cameras: list[CameraSummary] | None = None):
     for episode, frame in zip(episodes, frames, strict=True):
         fingerprint = payload_fingerprint(frame, list(frame.columns))
         fingerprints[episode.id] = {key: fingerprint} if fingerprint else {}
-    return find_duplicate_episodes(episodes, fingerprints, cameras or [])
+    return find_duplicate_episodes(episodes, fingerprints)
 
 
-def _find(*frames: pl.DataFrame, cameras: list[CameraSummary] | None = None):
+def _find(*frames: pl.DataFrame):
     """Run the pass over one episode per frame, and return its pairs and findings."""
 
-    pairs, findings, _summary = _run(*frames, cameras=cameras)
+    pairs, findings, _summary = _run(*frames)
     return pairs, findings
 
 
@@ -90,6 +90,43 @@ def _alike(n: int) -> list[pl.DataFrame]:
     """`n` re-runs of one motion, each within the near limit of every other."""
 
     return [_arm(1e-4 * index) for index in range(n)]
+
+
+def _flat(dups) -> list[tuple[str, str, str, float]]:
+    """Expand stored duplicates back to `(a, b, tier, nrmse)` pairs in episode order,
+    reading index `k` as `_run`'s `episode_k`."""
+
+    name = "episode_{}".format
+    pairs = [
+        (name(group[0]), name(other), "exact", 0.0)
+        for group in dups.exact
+        for other in group[1:]
+    ]
+    near = dups.near
+    pairs += [
+        (name(first), name(other), "near", distance)
+        for first, partners, distances in zip(
+            near.episode, near.partners, near.nrmse, strict=True
+        )
+        for other, distance in zip(partners, distances, strict=True)
+    ]
+    return sorted(
+        pairs, key=lambda p: (int(p[0].split("_")[1]), int(p[1].split("_")[1]), p[2])
+    )
+
+
+def _tiers(dups) -> list[tuple[list[str], str]]:
+    """Each stored pair's two episodes and tier, in episode order."""
+
+    return [([a, b], tier) for a, b, tier, _d in _flat(dups)]
+
+
+def _search_vectors(frames: list[pl.DataFrame]):
+    """The vectors the pass searches for `frames`, built apart from it."""
+
+    key = ("proprio.joint_position", None, "observation.state", 0)
+    prints = [payload_fingerprint(frame, list(frame.columns)) for frame in frames]
+    return duplicates._vectors([{key: p} for p in prints if p], [key])
 
 
 def _ids(findings, metric_id: str) -> list[str]:
@@ -110,9 +147,7 @@ def test_identical_payloads_are_exact_duplicates():
 
     pairs, findings = _find(*episodes)
 
-    assert [(p.episodes, p.tier, p.nrmse) for p in pairs] == [
-        (["episode_0", "episode_2"], "exact", 0.0)
-    ]
+    assert _flat(pairs) == [("episode_0", "episode_2", "exact", 0.0)]
     assert _ids(findings, "integrity.duplicate_episode") == ["episode_0", "episode_2"]
     assert {f.consequence for f in findings} == {Consequence.REVIEW}
 
@@ -125,21 +160,19 @@ def test_exact_copies_pair_with_the_first_copy_alone():
 
     pairs, findings = _find(*episodes)
 
-    assert [(p.episodes, p.tier) for p in pairs] == [
+    assert _tiers(pairs) == [
         (["episode_0", "episode_2"], "exact"),
         (["episode_0", "episode_3"], "exact"),
         (["episode_0", "episode_4"], "exact"),
     ]
     flagged = {
-        f.episode_id: (f.value, f.evidence["partners"], f.consequence)
+        f.episode_id: (f.value, f.evidence, f.consequence)
         for f in findings
         if f.metric_id == "integrity.duplicate_episode"
     }
     assert flagged == {
-        "episode_0": (3.0, ["episode_2", "episode_3", "episode_4"], Consequence.REVIEW),
-        "episode_2": (3.0, ["episode_0"], Consequence.REVIEW),
-        "episode_3": (3.0, ["episode_0"], Consequence.REVIEW),
-        "episode_4": (3.0, ["episode_0"], Consequence.REVIEW),
+        episode_id: (3.0, {}, Consequence.REVIEW)
+        for episode_id in ("episode_0", "episode_2", "episode_3", "episode_4")
     }
 
 
@@ -153,21 +186,21 @@ def test_a_near_copy_of_one_copy_is_near_every_copy():
 
     pairs, findings = _find(_arm(), _arm(1.0), _arm(), _arm(), copy)
 
-    assert [(p.episodes, p.tier) for p in pairs] == [
+    assert _tiers(pairs) == [
         (["episode_0", "episode_2"], "exact"),
         (["episode_0", "episode_3"], "exact"),
         (["episode_0", "episode_4"], "near"),
     ]
     near = {
-        f.episode_id: (f.value, f.evidence["partners"])
+        f.episode_id: f.value
         for f in findings
         if f.metric_id == "integrity.near_duplicate_episode"
     }
     assert near == {
-        "episode_0": (1.0, ["episode_4"]),
-        "episode_2": (1.0, ["episode_4"]),
-        "episode_3": (1.0, ["episode_4"]),
-        "episode_4": (3.0, ["episode_0"]),
+        "episode_0": 1.0,
+        "episode_2": 1.0,
+        "episode_3": 1.0,
+        "episode_4": 3.0,
     }
 
 
@@ -181,9 +214,7 @@ def test_a_float32_copy_is_a_near_duplicate():
 
     pairs, findings = _find(original, _arm(1.0), copy)
 
-    assert [(p.episodes, p.tier) for p in pairs] == [
-        (["episode_0", "episode_2"], "near")
-    ]
+    assert _tiers(pairs) == [(["episode_0", "episode_2"], "near")]
     assert _ids(findings, "integrity.near_duplicate_episode") == [
         "episode_0",
         "episode_2",
@@ -208,10 +239,8 @@ def test_a_noisy_copy_is_a_near_duplicate():
 
     pairs, _findings = _find(original, _arm(1.0), copy)
 
-    assert [(p.episodes, p.tier) for p in pairs] == [
-        (["episode_0", "episode_2"], "near")
-    ]
-    assert pairs[0].nrmse <= _NEAR_RMSE
+    assert _tiers(pairs) == [(["episode_0", "episode_2"], "near")]
+    assert _flat(pairs)[0][3] <= _NEAR_RMSE
 
 
 def test_different_trajectories_are_not_paired():
@@ -228,7 +257,7 @@ def test_different_trajectories_are_not_paired():
 
     pairs, findings = _find(*episodes)
 
-    assert pairs == []
+    assert _flat(pairs) == []
     assert findings == []
 
 
@@ -245,7 +274,7 @@ def test_a_large_offset_does_not_hide_a_small_motion():
 
     pairs, findings = _find(*episodes)
 
-    assert pairs == []
+    assert _flat(pairs) == []
     assert findings == []
 
 
@@ -258,7 +287,7 @@ def test_constant_payloads_never_pair():
 
     pairs, findings = _find(flat, flat)
 
-    assert pairs == []
+    assert _flat(pairs) == []
     assert findings == []
 
 
@@ -270,7 +299,7 @@ def test_episodes_with_different_channels_are_not_compared():
 
     pairs, _findings = _find(original, renamed)
 
-    assert pairs == []
+    assert _flat(pairs) == []
 
 
 def test_a_duration_mismatch_is_not_near():
@@ -282,61 +311,8 @@ def test_a_duration_mismatch_is_not_near():
     longer, _findings = _find(_arm(rows=100), _arm(rows=150))
     close, _findings = _find(_arm(rows=100), _arm(rows=105))
 
-    assert longer == []
-    assert [(p.episodes, p.tier) for p in close] == [
-        (["episode_0", "episode_1"], "near")
-    ]
-
-
-def test_identical_footage_is_noted():
-    """A pair that also repeats a camera's footage exactly names that camera."""
-
-    pytest.importorskip("numpy")
-
-    camera = CameraSummary(
-        camera="observation.images.top",
-        stream="extero.exterior_rgb",
-        n_episodes=2,
-        compared=False,
-        repeated_footage=[["episode_0", "episode_1"]],
-    )
-
-    pairs, findings = _find(_arm(), _arm(), cameras=[camera])
-
-    assert pairs[0].footage_identical
-    assert pairs[0].cameras == ["observation.images.top"]
-    assert findings[0].evidence["footage_identical"] == [True]
-
-
-def test_footage_is_noted_on_each_pair_against_the_first_copy():
-    """Each pair against the earliest copy names the footage that pair repeats,
-    not footage the later copies repeat among themselves."""
-
-    camera = CameraSummary(
-        camera="observation.images.top",
-        stream="extero.exterior_rgb",
-        n_episodes=3,
-        compared=False,
-        repeated_footage=[["episode_0", "episode_2"]],
-    )
-    wrist = camera.model_copy(
-        update={
-            "camera": "observation.images.wrist",
-            "repeated_footage": [["episode_1", "episode_2"]],
-        }
-    )
-
-    pairs, findings = _find(_arm(), _arm(), _arm(), cameras=[camera, wrist])
-
-    assert [(p.episodes, p.footage_identical, p.cameras) for p in pairs] == [
-        (["episode_0", "episode_1"], False, []),
-        (["episode_0", "episode_2"], True, ["observation.images.top"]),
-    ]
-    assert {f.episode_id: f.evidence["footage_identical"] for f in findings} == {
-        "episode_0": [False, True],
-        "episode_1": [False],
-        "episode_2": [True],
-    }
+    assert _flat(longer) == []
+    assert _tiers(close) == [(["episode_0", "episode_1"], "near")]
 
 
 def test_a_non_numeric_channel_has_no_fingerprint():
@@ -370,9 +346,7 @@ def test_a_noisy_copy_with_a_sparse_reward_still_pairs():
 
     pairs, _findings = _find(*frames, copy)
 
-    assert [(p.episodes, p.tier) for p in pairs] == [
-        (["episode_0", "episode_4"], "near")
-    ]
+    assert _tiers(pairs) == [(["episode_0", "episode_4"], "near")]
 
 
 def test_close_pairs_agree_with_every_pair_across_blocks(monkeypatch):
@@ -493,7 +467,7 @@ def test_alike_episodes_saturate_the_near_tier():
     assert summary.pairs_near == summary.pairs_compared == 435
     assert summary.episodes_compared == summary.episodes_with_partner == 30
     assert _ids(findings, "integrity.near_duplicate_episode") == []
-    assert summary.pairs_listed == sum(p.tier == "near" for p in pairs) == 435
+    assert summary.pairs_listed == sum(p[2] == "near" for p in _flat(pairs)) == 435
 
 
 def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
@@ -506,7 +480,7 @@ def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
     pairs, _findings, summary = _run(*_alike(20))
 
     assert summary is not None
-    assert summary.pairs_listed == sum(p.tier == "near" for p in pairs) == 190
+    assert summary.pairs_listed == sum(p[2] == "near" for p in _flat(pairs)) == 190
 
     monkeypatch.setattr(duplicates, "_MAX_LISTED_PAIRS", 189)
     for n, near in ((20, 190), (60, 1_770)):
@@ -514,13 +488,14 @@ def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
 
         assert summary is not None
         assert summary.pairs_near == near
-        assert summary.pairs_listed == sum(p.tier == "near" for p in pairs)
+        assert summary.pairs_listed == sum(p[2] == "near" for p in _flat(pairs))
         assert summary.pairs_listed <= _MAX_PARTNERS * n
 
 
-def test_a_cluster_lists_its_five_nearest_partners():
+def test_a_near_finding_states_count_limit_and_nearest():
     """In a cluster of 8 alike episodes among distinct ones,
-    each lists its 5 nearest partners and counts all 7."""
+    each finding counts all 7 partners, states the limit and its nearest distance,
+    and lists no partner."""
 
     pytest.importorskip("numpy")
 
@@ -532,18 +507,21 @@ def test_a_cluster_lists_its_five_nearest_partners():
     assert summary is not None
     assert not summary.saturated
     assert (summary.pairs_near, summary.pairs_compared) == (28, 190)
-    assert all(set(p.episodes) <= cluster for p in pairs)
+    flat = _flat(pairs)
+    assert all({a, b} <= cluster for a, b, _t, _d in flat)
     near = {
         f.episode_id: f
         for f in findings
         if f.metric_id == "integrity.near_duplicate_episode"
     }
     assert set(near) == cluster
-    for finding in near.values():
+    for episode_id, finding in near.items():
         assert finding.value == 7.0
-        assert len(finding.evidence["partners"]) == _MAX_PARTNERS
-        assert finding.evidence["nrmse"] == sorted(finding.evidence["nrmse"])
-        assert finding.evidence["partners_omitted"] == 2
+        assert set(finding.evidence) == {"max_nrmse", "nearest_nrmse"}
+        assert finding.evidence["max_nrmse"] == _NEAR_RMSE
+        assert finding.evidence["nearest_nrmse"] == min(
+            d for a, b, _t, d in flat if episode_id in (a, b)
+        )
 
 
 def test_two_near_episodes_never_saturate():
@@ -574,16 +552,14 @@ def test_exact_copies_are_unchanged_when_saturated():
 
     assert summary is not None
     assert summary.saturated
-    assert [(p.episodes, p.tier) for p in pairs if p.tier == "exact"] == [
+    assert [(pair, tier) for pair, tier in _tiers(pairs) if tier == "exact"] == [
         (["episode_0", "episode_30"], "exact"),
         (["episode_0", "episode_31"], "exact"),
     ]
-    assert {
-        f.episode_id: (f.value, f.evidence["partners"], f.consequence) for f in findings
-    } == {
-        "episode_0": (2.0, ["episode_30", "episode_31"], Consequence.REVIEW),
-        "episode_30": (2.0, ["episode_0"], Consequence.REVIEW),
-        "episode_31": (2.0, ["episode_0"], Consequence.REVIEW),
+    assert {f.episode_id: (f.value, f.consequence) for f in findings} == {
+        "episode_0": (2.0, Consequence.REVIEW),
+        "episode_30": (2.0, Consequence.REVIEW),
+        "episode_31": (2.0, Consequence.REVIEW),
     }
 
 
@@ -646,6 +622,53 @@ def test_nearest_partners_agree_across_blocks(monkeypatch):
             assert [d for d, _p in kept] == pytest.approx([d for d, _p in partners])
 
 
+def test_every_near_pair_is_stored_once_and_recoverable():
+    """Each near pair among alike episodes is stored once, with its distance,
+    as a search over the same vectors, outside the pass, finds it."""
+
+    pytest.importorskip("numpy")
+
+    frames = _alike(30)
+    expected = [
+        (f"episode_{i}", f"episode_{j}", "near", d)
+        for i, j, d in close_pairs(_search_vectors(frames), _NEAR_RMSE)
+    ]
+
+    pairs, _findings, _summary = _run(*frames)
+
+    flat = _flat(pairs)
+    assert len(expected) == 435
+    assert len({(a, b) for a, b, _t, _d in flat}) == len(flat) == len(expected)
+    assert [p[:3] for p in flat] == [p[:3] for p in expected]
+    assert [p[3] for p in flat] == pytest.approx([p[3] for p in expected], rel=1e-3)
+
+
+def test_distances_keep_four_significant_digits():
+    """A stored distance and a finding's nearest distance keep 4 significant digits."""
+
+    np = pytest.importorskip("numpy")
+
+    rng = np.random.default_rng(42)
+    original = _arm()
+    copy = original.with_columns(
+        pl.col(name)
+        + rng.normal(
+            0.0, 0.01 * float(np.std(original[name].to_numpy())), original.height
+        )
+        for name in CHANNELS
+    )
+
+    frames = [original, _arm(1.0), copy]
+    ((_i, _j, raw),) = close_pairs(_search_vectors(frames), _NEAR_RMSE)
+
+    pairs, findings = _find(*frames)
+
+    (stored,) = pairs.near.nrmse[0]
+    assert raw != float(f"{raw:.4g}")
+    assert stored == float(f"{raw:.4g}")
+    assert {f.evidence["nearest_nrmse"] for f in findings} == {stored}
+
+
 def test_without_numpy_there_is_no_summary(monkeypatch):
     """Without numpy only exact copies are paired, and no summary is made."""
 
@@ -654,6 +677,4 @@ def test_without_numpy_there_is_no_summary(monkeypatch):
     pairs, _findings, summary = _run(_arm(), _arm(1.0), _arm())
 
     assert summary is None
-    assert [(p.episodes, p.tier) for p in pairs] == [
-        (["episode_0", "episode_2"], "exact")
-    ]
+    assert _tiers(pairs) == [(["episode_0", "episode_2"], "exact")]

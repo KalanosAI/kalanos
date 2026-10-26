@@ -220,6 +220,16 @@ def test_a_7_0_0_report_without_family_weights_still_loads():
     assert kalanos.Report.model_validate(payload).family_weights == {}
 
 
+def test_a_duplicate_index_outside_the_episodes_is_refused():
+    """Verify `duplicates` can only name episodes the report holds."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    payload["duplicates"] = {"exact": [[0, len(payload["episodes"])]]}
+
+    with pytest.raises(ValueError, match="outside episodes"):
+        kalanos.Report.model_validate(payload)
+
+
 def test_a_graded_report_rolls_up_each_metric_and_round_trips_them():
     """Verify the dataset and episode scores carry per-metric rollups that reload."""
 

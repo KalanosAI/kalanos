@@ -599,7 +599,7 @@ def assemble_report(
     )
     findings.extend(camera_findings)
     duplicates, duplicate_findings, near_duplicates = find_duplicate_episodes(
-        graded_episodes, fingerprints, cameras
+        graded_episodes, fingerprints
     )
     findings.extend(duplicate_findings)
     graded_episodes = [
