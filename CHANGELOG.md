@@ -8,6 +8,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Added
 
+- `kalanos grade --compact` writes the report JSON with every key replaced by a short alias and one key table first, under `_compact`. `kalanos.load_report`, `kalanos inspect`, `kalanos compare` and `kalanos publish` read both formats. Full JSON stays the default.
 - When the near-duplicate tier is saturated, the report writes one dataset warning to the new `dataset_warnings`, stating how many episodes have a near-identical partner and the share of compared pairs that are near. `kalanos inspect` and the HTML report show it (report schema 7.3.0).
 
 ### Changed

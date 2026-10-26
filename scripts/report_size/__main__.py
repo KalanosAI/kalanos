@@ -16,8 +16,9 @@ from rich.console import Console
 
 # Internal
 from . import __doc__ as usage
+from . import compact as compact_table
 from . import config
-from .grading import GradeFailed, ensure_measurement
+from .grading import GradeFailed, ensure_measurement, report_path
 from .hub import pin_dataset
 from .table import compare, to_markdown, to_rich
 from .versions import merge_base, resolve_version
@@ -74,6 +75,13 @@ def main(
         Path | None,
         typer.Option(help="Also write the Markdown table to this file."),
     ] = None,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            help="Also measure the compact encoding of each --after report: size, "
+            "encode time, load time and peak memory."
+        ),
+    ] = False,
 ) -> None:
     """Measure every dataset at both versions and print the table.
 
@@ -92,12 +100,14 @@ def main(
         Where reports and their sizes are cached.
     output : Path | None
         A file to write the Markdown table to, or None.
+    compact : bool
+        Also measure each `after` report's compact encoding, in a second table.
 
     Raises
     ------
     typer.Exit
-        With code 1 when a version or dataset doesn't resolve, a grade fails or the
-        table can't be written.
+        With code 1 when a version or dataset doesn't resolve, a grade fails, a
+        compact measurement fails or the table can't be written.
     """
 
     # kalanos grade puts a relative --report under KALANOS_REPORTS_DIR.
@@ -123,10 +133,24 @@ def main(
     else:
         print(to_markdown(comparison))
 
+    markdown = to_markdown(comparison)
+    if compact:
+        try:
+            measured = [
+                (d, compact_table.measure_compact(report_path(new_side, d, cache)))
+                for d in datasets
+            ]
+        except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+            print(f"report_size: {exc}", file=sys.stderr)
+            raise typer.Exit(code=1) from exc
+        compact_markdown = compact_table.to_markdown(measured)
+        print(f"\n{compact_markdown}")
+        markdown += f"\n\n{compact_markdown}"
+
     # Written after printing, so a bad path still leaves the table on screen.
     if output is not None:
         try:
-            output.write_text(to_markdown(comparison) + "\n")
+            output.write_text(markdown + "\n")
         except OSError as exc:
             print(f"report_size: {exc}", file=sys.stderr)
             raise typer.Exit(code=1) from exc

@@ -6,6 +6,7 @@
 
 # Built-in
 from collections import Counter
+from typing import Any
 
 # External
 import yaml
@@ -17,6 +18,7 @@ from kalanos.analysis.diagnostics.previews import tracking_preview
 from kalanos.analysis.diagnostics.runner import diagnostic_lines
 
 # Internal
+from kalanos.analysis.models.compact_keys import encode_keys
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import Finding, ScoreResult
@@ -35,6 +37,15 @@ from kalanos.analysis.reporting.summary import finding_groups
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
+
+# How many findings the page shows before the rest go behind a disclosure.
+_FINDINGS_PREVIEW = 8
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+
 # PackageLoader resolves through the package's own loader, so this works
 # whether `kalanos` is an editable checkout or unzipped from a wheel —
 # the same reasoning `assets/policy.py` follows for its own resource path.
@@ -46,14 +57,6 @@ _TEMPLATE_ENVIRONMENT = Environment(
     autoescape=select_autoescape(enabled_extensions=("html", "j2", "xml")),
     undefined=StrictUndefined,
 )
-
-# How many findings the page shows before the rest go behind a disclosure.
-_FINDINGS_PREVIEW = 8
-
-
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
-# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
-# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 
 def _score_attr(score: ScoreResult) -> str:
@@ -124,6 +127,11 @@ _TEMPLATE_ENVIRONMENT.filters["low_episodes"] = format_low_episodes
 _TEMPLATE_ENVIRONMENT.filters["lowest"] = format_lowest
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 def _episode_finding_counts(findings: list[Finding]) -> dict[str, int]:
     """Count findings per episode id, so the page can open the episodes that have one.
 
@@ -168,9 +176,22 @@ def _stream_finding_counts(
     )
 
 
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+def _json_data(report: Report) -> dict[str, Any]:
+    """Dump a Report as the JSON document a report file holds.
+
+    Parameters
+    ----------
+    report : Report
+        The report to dump.
+
+    Returns
+    -------
+    dict[str, Any]
+        The report in JSON mode, with its reason codes,
+        and without the empty values that defaults restore.
+    """
+
+    return omit_empty_defaults(report, report.model_dump(mode="json"))
 
 
 @reporter(name="json", extensions=(".json",))
@@ -194,10 +215,26 @@ def render_json(report: Report) -> str:
 
     # inf_nan_mode="null" writes NaN as null, as model_dump_json does.
     # The default writes a bare NaN token, which is not valid JSON.
-    return to_json(
-        omit_empty_defaults(report, report.model_dump(mode="json")),
-        inf_nan_mode="null",
-    ).decode()
+    return to_json(_json_data(report), inf_nan_mode="null").decode()
+
+
+def render_compact_json(report: Report) -> str:
+    """Render a Report as JSON with every key replaced by a short alias.
+
+    Parameters
+    ----------
+    report : Report
+        The report to render.
+
+    Returns
+    -------
+    str
+        `render_json`'s document with its key table first, under `_compact`,
+        and every key replaced by its alias.
+        `kalanos.load_report` reads it back.
+    """
+
+    return to_json(encode_keys(_json_data(report)), inf_nan_mode="null").decode()
 
 
 @reporter(name="yaml", extensions=(".yaml", ".yml"))

@@ -19,6 +19,13 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+# Internal
+from kalanos.analysis.reporting.render import render_json
+from kalanos.api import grade
+
+# Local
+from helpers import CSV_FIXTURE
+
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
 # ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
@@ -34,6 +41,7 @@ assert spec is not None and spec.loader is not None
 sys.modules["report_size"] = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sys.modules["report_size"])
 cli = importlib.import_module("report_size.__main__")
+compact = importlib.import_module("report_size.compact")
 config = importlib.import_module("report_size.config")
 grading = importlib.import_module("report_size.grading")
 hub = importlib.import_module("report_size.hub")
@@ -382,3 +390,83 @@ def test_cli_writes_markdown_to_output_whatever_stdout_is(
         assert "|" not in result.stdout and "lerobot/pusht@7628202" in result.stdout
     else:
         assert output.read_text() == result.stdout
+
+
+def test_measure_compact_writes_and_measures_the_compact_file(tmp_path):
+    """The compact file lands beside the report, smaller, with every number measured."""
+
+    report = tmp_path / "org__name@abc.json"
+    report.write_text(render_json(grade(CSV_FIXTURE)))
+
+    measured = compact.measure_compact(report)
+
+    assert (tmp_path / "org__name@abc.compact.json").is_file()
+    assert 0 < measured.compact_bytes < measured.full_bytes
+    assert measured.full_bytes == report.stat().st_size
+    assert measured.saving > 0
+    assert measured.encode_seconds > 0
+    assert measured.load_full_seconds > 0 and measured.load_compact_seconds > 0
+    assert measured.peak_full_bytes > 0 and measured.peak_compact_bytes > 0
+
+
+def test_compact_markdown_renders_one_row_per_dataset():
+    """Each dataset gets one row, with sizes in MB and the saving in percent."""
+
+    measured = compact.CompactMeasurement(
+        full_bytes=4_000_000,
+        compact_bytes=3_000_000,
+        encode_seconds=0.5,
+        load_full_seconds=1.0,
+        load_compact_seconds=1.25,
+        peak_full_bytes=100_000_000,
+        peak_compact_bytes=150_000_000,
+    )
+
+    markdown = compact.to_markdown([("a/b@1", measured), ("c/d@2", measured)])
+
+    rows = [line for line in markdown.splitlines() if line.startswith("| ")]
+    assert rows[1:] == [
+        f"| {name} | 4.00 | 3.00 | 25.0% | 0.50 | 1.00 | 1.25 | 100.00 | 150.00 |"
+        for name in ("a/b@1", "c/d@2")
+    ]
+
+
+def test_cli_compact_appends_the_compact_table(tmp_path, monkeypatch):
+    """--compact measures each after-side report and adds its table to --output."""
+
+    monkeypatch.setattr(cli, "pin_dataset", lambda spec: spec)
+    monkeypatch.setattr(
+        cli,
+        "ensure_measurement",
+        lambda version, dataset, repo, cache: grading.Measurement(1000, 10),
+    )
+    measured: list[Path] = []
+
+    def fake(report: Path):
+        measured.append(report)
+        return compact.CompactMeasurement(1000, 600, 0.1, 0.2, 0.3, 10**6, 10**6)
+
+    monkeypatch.setattr(compact, "measure_compact", fake)
+    output = tmp_path / "sizes.md"
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "--before",
+            "HEAD",
+            "--dataset",
+            config.DATASETS[0],
+            "--output",
+            str(output),
+            "--compact",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    [report] = measured
+    assert report.name == config.DATASETS[0].replace("/", "__") + ".json"
+    assert report.is_relative_to(tmp_path)
+    assert "| lerobot/pusht@7628202 | 10 |" in output.read_text()
+    assert f"| {config.DATASETS[0]} | 0.00 | 0.00 | 40.0% |" in output.read_text()

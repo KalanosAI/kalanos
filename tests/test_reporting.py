@@ -67,7 +67,12 @@ from kalanos.analysis.reporting.assemble import (
 from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
 from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import registered_reporters
-from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
+from kalanos.analysis.reporting.render import (
+    render_compact_json,
+    render_html,
+    render_json,
+    render_yaml,
+)
 from kalanos.analysis.reporting.write import write_report
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import (
@@ -1005,6 +1010,23 @@ def test_write_report_raises_on_an_unknown_suffix(tmp_path):
 
     with pytest.raises(ValueError, match=r"unsupported report suffix.*\.html.*\.json"):
         write_report(report, tmp_path / "r.txt")
+
+
+def test_write_report_compact_writes_the_compact_render(tmp_path):
+    """Verify compact=True writes `render_compact_json`'s text to a .json path."""
+
+    report = _sample_report()
+    path = write_report(report, tmp_path / "r.json", compact=True)
+
+    assert path.read_text() == render_compact_json(report)
+
+
+def test_write_report_compact_refuses_a_path_other_than_json(tmp_path):
+    """Verify compact=True refuses a suffix that does not hold JSON, writing nothing."""
+
+    with pytest.raises(ValueError, match="use a .json path"):
+        write_report(_sample_report(), tmp_path / "r.html", compact=True)
+    assert not (tmp_path / "r.html").exists()
 
 
 def test_the_registry_claims_exactly_the_suffixes_write_report_accepts():

@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 # Internal
 from kalanos import api, publish
+from kalanos.analysis.models.compact_keys import TABLE_KEY, encode_keys
 from kalanos.cli import app
 from kalanos.publish import PublishError, check_hub_url
 
@@ -231,6 +232,39 @@ def test_unusable_report_file_is_refused(hub, tmp_path, content):
     assert hub.requests == []
 
 
+def test_compact_report_is_sent_unchanged(hub, tmp_path):
+    hub.answers.append(ACCEPTED)
+    compact = encode_keys(HF_REPORT)
+
+    result = _run("publish", _write(tmp_path, compact), "--api-key", KEY)
+
+    assert result.exit_code == 0, result.stderr
+    [request] = hub.requests
+    assert request["body"] == {"report": compact}
+    assert next(iter(request["body"]["report"])) == TABLE_KEY
+
+
+def test_compact_local_report_needs_a_name(hub, tmp_path):
+    result = _run(
+        "publish", _write(tmp_path, encode_keys(LOCAL_REPORT)), "--api-key", KEY
+    )
+
+    assert result.exit_code == 2
+    assert "--name" in result.stderr
+    assert hub.requests == []
+
+
+def test_compact_report_of_another_version_is_refused(hub, tmp_path):
+    compact = encode_keys(HF_REPORT)
+    compact[TABLE_KEY]["version"] = 2
+
+    result = _run("publish", _write(tmp_path, compact), "--api-key", KEY)
+
+    assert result.exit_code == 2
+    assert "compact encoding version 2 is not supported" in result.stderr
+    assert hub.requests == []
+
+
 def test_unauthorized_names_the_key_by_prefix(hub, tmp_path):
     hub.answers.append((401, {}, {"error": "unauthorized", "detail": "revoked"}))
 
@@ -352,6 +386,53 @@ def test_grade_publish_sends_the_graded_report(hub):
     assert request["body"]["name"] == "acme/set"
     assert "Submitted rep_123" in result.stderr
     assert "Submitted" not in result.stdout
+
+
+def test_grade_publish_compact_sends_the_compact_report(hub):
+    hub.answers.append(ACCEPTED)
+
+    result = _run(
+        "grade",
+        str(CSV_FIXTURE),
+        "--publish",
+        "--compact",
+        "--json",
+        "--api-key",
+        KEY,
+        "--name",
+        "acme/set",
+    )
+
+    assert result.exit_code == 0, result.stderr
+    [request] = hub.requests
+    assert next(iter(request["body"]["report"])) == TABLE_KEY
+    assert json.loads(result.stdout) == request["body"]["report"]
+
+
+def test_grade_publish_compact_of_a_local_dataset_needs_a_name(hub):
+    result = _run("grade", str(CSV_FIXTURE), "--publish", "--compact", "--api-key", KEY)
+
+    assert result.exit_code == 2
+    assert "--name" in result.stderr
+    assert hub.requests == []
+
+
+def test_grade_publish_compact_shows_the_hub_refusal(hub):
+    hub.answers.append((422, {}, {"status": "KALANOS_UNSUPPORTED", "error": "no"}))
+
+    result = _run(
+        "grade",
+        str(CSV_FIXTURE),
+        "--publish",
+        "--compact",
+        "--api-key",
+        KEY,
+        "--name",
+        "acme/set",
+    )
+
+    assert result.exit_code == 2
+    assert "KALANOS_UNSUPPORTED" in result.stderr
 
 
 def test_grade_publish_json_keeps_stdout_one_document(hub):

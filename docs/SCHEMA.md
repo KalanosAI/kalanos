@@ -14,6 +14,28 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - When an episode has a `coverage` ledger, a stream- or channel-level key in `episodes[].coverage.metrics` that is missing from a stream's `coverage` neither computed, skipped nor errored on that stream. The episode row gives its counts and reasons. An episode with no `coverage` ledger recorded none, as before.
 - Episode and dataset ledgers are unchanged.
 
+## Compact encoding (version 1)
+
+`kalanos grade --compact` writes the same report with every object key replaced by a short alias. The encoding is independent of the schema version: decoding a compact file gives the full report of whatever schema it holds.
+
+- The first key is always `_compact`, holding `{"version": 1, "keys": [...]}`.
+- `keys[i]` is the key whose alias is the bijective base-62 numeral of `i`, over the alphabet `0-9a-zA-Z`: `0` to `Z` for the first 62 keys, then `00` to `ZZ` for the next 3,844, then three characters.
+- Keys are ordered by how often they occur in the report, most frequent first, ties by key. Every key at every depth is aliased, including metric ids and evidence keys, so aliases differ from report to report.
+- Values are never touched, and each object keeps its key order. `_` is outside the alias alphabet, so `_compact` is never an alias.
+- A reader that meets another `version` must refuse the file.
+
+```json
+{"schema_version": "8.0.0", "source": {"repo_id": "lerobot/pusht"}}
+```
+
+becomes
+
+```json
+{"_compact": {"version": 1, "keys": ["repo_id", "schema_version", "source"]}, "1": "8.0.0", "2": {"0": "lerobot/pusht"}}
+```
+
+To decode, read the table, then replace each key `k` with `keys[i]` where `alias(i) == k`. Since the table comes first, a streaming reader can translate keys as they arrive.
+
 ## Changed in 7.3.0
 
 - `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.

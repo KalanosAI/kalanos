@@ -17,6 +17,7 @@ from kalanos.analysis.reporting.registry import (
     RegisteredReporter,
     registered_reporters,
 )
+from kalanos.analysis.reporting.render import render_compact_json
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -33,7 +34,7 @@ def _reporter_for(suffix: str) -> RegisteredReporter | None:
     return None
 
 
-def write_report(report: Report, path: Path) -> Path:
+def write_report(report: Report, path: Path, *, compact: bool = False) -> Path:
     """Render a Report and write it to `path`, picking the format from the suffix.
 
     Parameters
@@ -43,6 +44,9 @@ def write_report(report: Report, path: Path) -> Path:
     path : Path
         Where to write it. `.json` writes the raw model; `.yaml`/`.yml` write
         YAML; `.html` renders a page.
+    compact : bool
+        Write the JSON with every key replaced by a short alias.
+        `path` must then end in `.json`.
 
     Returns
     -------
@@ -52,8 +56,15 @@ def write_report(report: Report, path: Path) -> Path:
     Raises
     ------
     ValueError
-        If no registered reporter claims `path`'s suffix.
+        If no registered reporter claims `path`'s suffix,
+        or `compact` is set and `path` does not end in `.json`.
     """
+
+    if compact:
+        if path.suffix.lower() != ".json":
+            raise ValueError(f"{path}: a compact report is JSON; use a .json path")
+        path.write_text(render_compact_json(report), encoding="utf-8")
+        return path
 
     entry = _reporter_for(path.suffix.lower())
     if entry is None:
