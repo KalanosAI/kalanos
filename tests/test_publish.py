@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 # Internal
 from kalanos import api, publish
+from kalanos.analysis.models.compact_keys import TABLE_KEY, encode_keys
 from kalanos.cli import app
 from kalanos.publish import PublishError, check_hub_url
 
@@ -228,6 +229,39 @@ def test_unusable_report_file_is_refused(hub, tmp_path, content):
     result = _run("publish", path, "--api-key", KEY)
 
     assert result.exit_code == 2
+    assert hub.requests == []
+
+
+def test_compact_report_is_sent_unchanged(hub, tmp_path):
+    hub.answers.append(ACCEPTED)
+    compact = encode_keys(HF_REPORT)
+
+    result = _run("publish", _write(tmp_path, compact), "--api-key", KEY)
+
+    assert result.exit_code == 0, result.stderr
+    [request] = hub.requests
+    assert request["body"] == {"report": compact}
+    assert next(iter(request["body"]["report"])) == TABLE_KEY
+
+
+def test_compact_local_report_needs_a_name(hub, tmp_path):
+    result = _run(
+        "publish", _write(tmp_path, encode_keys(LOCAL_REPORT)), "--api-key", KEY
+    )
+
+    assert result.exit_code == 2
+    assert "--name" in result.stderr
+    assert hub.requests == []
+
+
+def test_compact_report_of_another_version_is_refused(hub, tmp_path):
+    compact = encode_keys(HF_REPORT)
+    compact[TABLE_KEY]["version"] = 2
+
+    result = _run("publish", _write(tmp_path, compact), "--api-key", KEY)
+
+    assert result.exit_code == 2
+    assert "compact encoding version 2 is not supported" in result.stderr
     assert hub.requests == []
 
 

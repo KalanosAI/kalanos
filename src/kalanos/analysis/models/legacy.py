@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from upath import UPath
 
 # Internal
+from kalanos.analysis.models.compact_keys import decode_keys, is_compact
 from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION, Report
 
 
@@ -248,14 +249,28 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
         If `source` cannot be read.
     ValueError
         If the file is not JSON,
+        a compact file's key table is malformed,
         or a file of the current schema major does not validate as a `Report`.
+    UnsupportedEncoding
+        If a compact file declares an encoding version this kalanos can't read.
     UnsupportedSchema
         If the file declares neither the current schema major,
         up to the current version, nor one of `LEGACY_SCHEMAS`.
     """
 
     raw = UPath(source).read_bytes()
-    version = str(json.loads(raw).get("schema_version", ""))
+    data = json.loads(raw)
+    if is_compact(data):
+        # A decoded report holds one string per distinct key, shared by every use.
+        # Serializing it again would write each key out in full at every use,
+        # so a small file repeating a long key would grow to gigabytes.
+        # It is validated as a dict instead, in pydantic's Python mode:
+        # a strict field must accept the type `json.loads` gives it.
+        data = decode_keys(data)
+        if _reads_as_current(str(data.get("schema_version", ""))):
+            return Report.model_validate(data)
+        return load_legacy(data)
+    version = str(data.get("schema_version", ""))
     if _reads_as_current(version):
         return Report.model_validate_json(raw)
     return load_legacy(raw)
