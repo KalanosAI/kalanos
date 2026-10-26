@@ -37,6 +37,15 @@ from kalanos.analysis.reporting.summary import finding_groups
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
+
+# How many findings the page shows before the rest go behind a disclosure.
+_FINDINGS_PREVIEW = 8
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+
 # PackageLoader resolves through the package's own loader, so this works
 # whether `kalanos` is an editable checkout or unzipped from a wheel —
 # the same reasoning `assets/policy.py` follows for its own resource path.
@@ -48,14 +57,6 @@ _TEMPLATE_ENVIRONMENT = Environment(
     autoescape=select_autoescape(enabled_extensions=("html", "j2", "xml")),
     undefined=StrictUndefined,
 )
-
-# How many findings the page shows before the rest go behind a disclosure.
-_FINDINGS_PREVIEW = 8
-
-
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
-# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
-# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 
 def _score_attr(score: ScoreResult) -> str:
@@ -126,6 +127,11 @@ _TEMPLATE_ENVIRONMENT.filters["low_episodes"] = format_low_episodes
 _TEMPLATE_ENVIRONMENT.filters["lowest"] = format_lowest
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 def _episode_finding_counts(findings: list[Finding]) -> dict[str, int]:
     """Count findings per episode id, so the page can open the episodes that have one.
 
@@ -186,11 +192,6 @@ def _json_data(report: Report) -> dict[str, Any]:
     """
 
     return omit_empty_defaults(report, report.model_dump(mode="json"))
-
-
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 @reporter(name="json", extensions=(".json",))
