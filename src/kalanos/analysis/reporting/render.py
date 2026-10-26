@@ -10,6 +10,7 @@ from collections import Counter
 # External
 import yaml
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
+from pydantic_core import to_json
 
 from kalanos.analysis.coverage import coverage_lines
 from kalanos.analysis.diagnostics.previews import tracking_preview
@@ -25,6 +26,7 @@ from kalanos.analysis.reporting.families import (
     format_low_episodes,
     format_lowest,
 )
+from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import reporter
 from kalanos.analysis.reporting.summary import finding_groups
 
@@ -173,7 +175,10 @@ def _stream_finding_counts(
 
 @reporter(name="json", extensions=(".json",))
 def render_json(report: Report) -> str:
-    """Render a Report as compact, parseable JSON without omitting any fields.
+    """Render a Report as compact JSON, leaving out the empty values defaults restore.
+
+    A field whose value is null, an empty list or an empty map is left out
+    when its default gives the same value.
 
     Parameters
     ----------
@@ -184,9 +189,15 @@ def render_json(report: Report) -> str:
     -------
     str
         The report as JSON text, matching `Report`'s own field names.
+        `Report.model_validate_json` reads it back.
     """
 
-    return report.model_dump_json()
+    # inf_nan_mode="null" writes NaN as null, as model_dump_json does.
+    # The default writes a bare NaN token, which is not valid JSON.
+    return to_json(
+        omit_empty_defaults(report, report.model_dump(mode="json")),
+        inf_nan_mode="null",
+    ).decode()
 
 
 @reporter(name="yaml", extensions=(".yaml", ".yml"))
@@ -203,12 +214,14 @@ def render_yaml(report: Report) -> str:
     str
         The report as YAML text. Parses back into the model with
         `Report.model_validate(yaml.safe_load(...))`.
+        Null and empty values the field defaults restore are left out,
+        as in `render_json`.
     """
 
     # mode="json" turns Path, Grade, Severity, Level, MetricStatus and SkipReason into
     # strings yaml.safe_dump accepts and Report.model_validate can read back.
     return yaml.safe_dump(
-        report.model_dump(mode="json"),
+        omit_empty_defaults(report, report.model_dump(mode="json")),
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,
