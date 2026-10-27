@@ -325,7 +325,7 @@ After every episode is graded, each camera is compared with itself across the ep
 
 Quartiles are linear interpolations over every episode of the camera, the one under test included. A finding is critical and requests review under a scope that grades vision (`video_quality` or `sampled_video_quality`), and is a `report_only` warning otherwise; it never moves the 0-100 score. The blur and exposure rules are independent: raw Laplacian variance scales with contrast, so a dimmed or brightened episode can carry both findings. No absolute blur floor is set, because none separates the calibration datasets: clean `laplacian_var` ranges from 6.0 on aloha's `cam_right_wrist` to 1821 on cmu_stretch, while a 5x5 blur reaches up to 52.8 on cmu_stretch and 11.3 on aloha, and every frame dimmed to 0.2x, measured on the same 60 injected streams, up to 97.2 on cmu_stretch.
 
-A camera with at least half its pixels at or below 5 in every compared episode is described as `dark`, and one with at least half at or above 250 as `white`. The trait requests nothing: lerobot/pusht, whose simulator renders on white, is described, not flagged. `Report.cameras` holds one summary per camera: its key, the episodes it appears in, whether blur and exposure were compared and why not, its median `laplacian_var` and `exposure_level`, its trait, the episodes flagged by each rule, and the groups of episodes with repeated footage.
+A camera with at least half its pixels at or below 5 in every compared episode is described as `dark`, and one with at least half at or above 250 as `white`. The trait requests nothing: lerobot/pusht, whose simulator renders on white, is described, not flagged. `Report.cameras` holds one summary per camera: its key, the episodes it appears in, whether blur and exposure were compared and why not, its median `laplacian_var` and `exposure_level`, its trait, the episodes flagged by each rule, the groups of episodes with repeated footage, and its visual variation.
 
 Measured on `lerobot/aloha_static_towel` at revision `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff`, retrieved 2026-09-30: 50 episodes of 500 frames (AV1, 640x480, 50 fps) of `cam_high` and `cam_left_wrist`, each summarised from 10 evenly spaced frames as the median native-luminance Laplacian variance and the median frame mean. Variants were applied to the decoded luminance before measuring.
 
@@ -335,6 +335,23 @@ Measured on `lerobot/aloha_static_towel` at revision `13ad96f5ed0e219e48c7247162
 | cam_left_wrist | 27.2 / 35.6 / 44.6 | 100.1 / 105.3 / 113.8 | 8.6 | 9.9 / 52.6 | 120.6 / 180.5 |
 
 Over every run of 4 to 10 consecutive clean episodes, the fence alone held a false positive in 5 to 9 of every 41 to 47 windows, and with the two gaps it held none on either camera. With the gaps, every injected 3x3 blur, 0.5x dim and 2x brightening was flagged at 5, 6, 8 and 10 episodes, while at 4 episodes some were missed (7 of 188 blurs on `cam_left_wrist`, 21 of 188 dims on `cam_high`).
+
+`cameras[].visual_variation` says how much a camera's footage changes between episodes. Each episode's sampled frames, the positions blur and exposure measure, decoded as 128x128 gray, are average-pooled to 16x16 and scaled to 0-1, so it decodes nothing more. Its `value` is the root mean square, over every pair of the camera's episodes, of the RMS difference between their pooled frames. It is computed from running per-pixel sums while episodes are graded, so no pair is compared and no episode's frames are kept. Two episodes that show the same footage read 0 apart.
+
+Motion in view counts as change: an arm crossing a fixed scene makes the episodes read varied, as a change of room or objects does. The value compares episodes within one camera. Two cameras' or two datasets' values do not rank them, since resolution, framing and how much of the view moves all set the scale. It is descriptive: no score, grade or threshold reads it.
+
+It covers the episodes whose read decoded every sampled frame, grouped by how many frames were sampled, and `episodes` says how many the largest group holds. Of two groups of equal size, the one met first in episode order is covered. A full frame scan pools the same frames a sample takes. Only a camera's first stream in an episode counts. It is unavailable, with `value` null and the reason in `reason`, when fewer than two episodes have a complete read with the same number of frames.
+
+Measured on six LeRobot v3.0 datasets, retrieved 2026-10-27, 50 evenly spaced episodes each, 10 evenly spaced frames per episode, against a control per camera of 50 copies of one episode with Gaussian noise of SD 2.55 (1% of 255, `numpy.random.default_rng(42)`): every one of the 11 real cameras read above its control, from about 3x on usc_cloth_sim (0.0055 against 0.0018) to over 100x on cmu_stretch and aloha_static_towel. Pooling the frames cost about 0.19 ms per camera per episode.
+
+| Dataset | Revision |
+|---|---|
+| lerobot/cmu_stretch | `d84574233973ea9a292babd008256d2290a3f96e` |
+| lerobot/berkeley_autolab_ur5 | `c4e26a697fc4c04776b0558f83e563d14be0109f` |
+| lerobot/pusht | `7628202a2180972f291ba1bc6723834921e72c19` |
+| lerobot/aloha_sim_transfer_cube_human | `6a43d500f101255823a9d2b9dc244eeb01a2cd31` |
+| lerobot/usc_cloth_sim | `6c4fb6acf8a6db8c4d0692b318023272c4967b5f` |
+| lerobot/aloha_static_towel | `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff` |
 
 ---
 

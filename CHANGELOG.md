@@ -10,6 +10,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - `kalanos grade --compact` writes the report JSON with every key replaced by a short alias and one key table first, under `_compact`. `kalanos.load_report`, `kalanos inspect`, `kalanos compare` and `kalanos publish` read both formats. Full JSON stays the default.
 - The report states how much episodes' trajectories differ from each other in `motion_variation`: the root mean square, over every pair of episodes, of the distance the near-duplicate check measures, from the trajectories it already resamples, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one dataset (report schema 8.0.0).
+- Each camera states how much its footage changes between episodes in `cameras[].visual_variation`: the root mean square, over every pair of episodes, of the difference between their sampled gray frames pooled to 16x16, from the frames the vision metrics already sample, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one camera (report schema 8.0.0).
 - When the near-duplicate tier is saturated, the report writes one dataset warning to the new `dataset_warnings`, stating how many episodes have a near-identical partner and the share of compared pairs that are near. `kalanos inspect` and the HTML report show it (report schema 7.3.0).
 
 ### Changed

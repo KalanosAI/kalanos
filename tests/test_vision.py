@@ -38,6 +38,7 @@ from kalanos.analysis.metrics.vision import (
     dark_frame_pct,
     exposure_level,
     exposure_shift_pct,
+    footage_vector,
     frame_count_vs_timebase,
     frozen_frame_pct,
     max_gap_s,
@@ -69,6 +70,12 @@ from kalanos.analysis.reporting.assemble import (
     grade_episode,
     grade_stream,
     scope_policy,
+)
+from kalanos.analysis.scoring.cameras import (
+    _TOO_FEW_FOOTAGE,
+    FootageVariation,
+    camera_key,
+    compare_cameras,
 )
 from kalanos.analysis.scoring.score import score_episode
 from kalanos.assets.dictionary import load_default_dictionary
@@ -1844,3 +1851,123 @@ def test_a_payload_that_raises_still_grades_its_stream(monkeypatch):
 
     assert graded.metrics["sharpness_score"].availability == Availability.ERROR
     assert graded.frames is None
+
+
+def _visual_variation(streams: list[Stream]):
+    """Grade each of `streams` as one episode; return the camera's visual variation."""
+
+    footage = FootageVariation()
+    episodes = [
+        grade_episode(
+            Episode(id=f"episode_{index}", streams=[stream]),
+            adapter="test",
+            adapter_confidence=1.0,
+            policy=load_default_policy(),
+            dictionary=load_default_dictionary(),
+            footage=footage,
+        )[0]
+        for index, stream in enumerate(streams)
+    ]
+    (summary,), _findings = compare_cameras(
+        episodes, grades_vision=True, footage=footage
+    )
+    return summary.visual_variation
+
+
+def test_noisy_copies_vary_less_than_distinct_episodes():
+    """50 copies of one episode with 1% noise vary far less than 50 distinct ones."""
+
+    base = clean_frames(frames=30, height=128, width=128, seed=0)
+    rng = numpy.random.default_rng(42)
+    noisy = [
+        base.model_copy(
+            update={
+                "payload": SyntheticFrames(
+                    frames=[
+                        numpy.clip(frame + rng.normal(0, 2.55, frame.shape), 0, 255)
+                        .round()
+                        .astype(numpy.uint8)
+                        for frame in base.payload.frames
+                    ]
+                )
+            }
+        )
+        for _ in range(50)
+    ]
+    distinct = [
+        clean_frames(frames=30, height=128, width=128, seed=1000 * index)
+        for index in range(50)
+    ]
+
+    copies, varied = _visual_variation(noisy), _visual_variation(distinct)
+    assert copies.episodes == varied.episodes == 50
+    assert copies.value * 10 < varied.value
+
+
+def test_footage_reuses_the_vision_read(monkeypatch):
+    """The footage vector comes from the read the vision metrics already made."""
+
+    calls = []
+    read = vision._read
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return read(*args, **kwargs)
+
+    monkeypatch.setattr(vision, "_read", counting)
+    stream = clean_frames(frames=30, height=128, width=128)
+
+    footage = FootageVariation()
+
+    graded, _findings = grade_stream(
+        stream,
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+        footage=footage,
+    )
+    vector = footage_vector(stream_context(stream))
+
+    assert len(calls) == 1
+    assert footage.result(camera_key(graded)).episodes == 1
+    assert vector is not None and len(vector) == 10 * 16 * 16
+
+
+def test_full_scan_pools_the_sampled_frames():
+    """A full scan pools the frames a sample takes, so its vector matches a sample's."""
+
+    stream = clean_frames(frames=30, height=128, width=128)
+
+    sampled = footage_vector(stream_context(stream))
+    scanned = footage_vector(stream_context(stream, full_frame_scan=True))
+
+    assert sampled is not None and scanned is not None
+    assert numpy.array_equal(sampled, scanned)
+
+
+def test_an_incomplete_read_is_not_counted():
+    """A read the decode cap cuts short misses sampled frames, so it counts for none."""
+
+    stream = clean_frames(frames=30, height=128, width=128)
+    counted = {}
+    for name, spec in (
+        ("capped", VisionSpec(sample_frames=2, max_decode_frames=3)),
+        ("whole", None),
+    ):
+        vision.clear_cache()
+        footage = FootageVariation()
+        graded, _findings = grade_stream(
+            stream,
+            policy=load_default_policy(),
+            is_regular=True,
+            episode_id="episode_0",
+            category=None,
+            vision=spec,
+            footage=footage,
+        )
+        counted[name] = footage.result(camera_key(graded))
+
+    assert counted["capped"].episodes == 0
+    assert counted["capped"].reason == _TOO_FEW_FOOTAGE
+    assert counted["whole"].episodes == 1
