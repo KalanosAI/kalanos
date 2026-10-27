@@ -15,7 +15,7 @@ import pytest
 # Internal
 from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.report import GradedEpisode, MotionVariation, round_nrmse
+from kalanos.analysis.models.report import GradedEpisode, Variation, round_nrmse
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.analysis.scoring import duplicates
 from kalanos.analysis.scoring.duplicates import (
@@ -707,7 +707,7 @@ def test_without_numpy_there_is_no_summary(monkeypatch):
     pairs, _findings, summary, motion = _run(_arm(), _arm(1.0), _arm())
 
     assert summary is None
-    assert motion == MotionVariation(episodes=0, reason=_NO_NUMPY)
+    assert motion == Variation(episodes=0, reason=_NO_NUMPY)
     assert _tiers(pairs) == [(["episode_0", "episode_2"], "exact")]
 
 
@@ -766,7 +766,7 @@ def test_exact_copies_read_zero_motion_variation():
 
     *_rest, motion = _run(_arm(), _arm(), _arm())
 
-    assert motion == MotionVariation(value=0.0, episodes=3)
+    assert motion == Variation(value=0.0, episodes=3)
 
 
 def test_motion_variation_covers_the_largest_group():
@@ -809,4 +809,4 @@ def test_one_comparable_episode_has_no_motion_variation():
 
     *_rest, motion = _run(_arm(), flat)
 
-    assert motion == MotionVariation(episodes=1, reason=_TOO_FEW)
+    assert motion == Variation(episodes=1, reason=_TOO_FEW)

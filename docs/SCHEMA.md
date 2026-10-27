@@ -17,10 +17,10 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 
 | Field | Type | What it is |
 |---|---|---|
-| `motion_variation` | `MotionVariation` or `null` | How much the episodes' trajectories differ from each other. `null` in a report written before the field existed. |
-| `MotionVariation.value` | `float` or `null` | The root mean square, over every pair of covered episodes, of their normalized RMSE, to 4 significant digits. It compares episodes within one dataset. `null` when unavailable, and left out of a written report. |
-| `MotionVariation.episodes` | `int` | The episodes covered, exact copies included: the largest group that holds the same numeric streams and channels and could be resampled. 0 when numpy is missing. |
-| `MotionVariation.reason` | `str` or `null` | Why `value` is `null`: numpy is missing, or fewer than two episodes are comparable. Written as an index into `reason_codes`, and left out when `null`. |
+| `motion_variation` | `Variation` or `null` | How much the episodes' trajectories differ from each other, as their normalized RMSE. It covers, exact copies included, the largest group that holds the same numeric streams and channels and could be resampled; `episodes` is 0 when numpy is missing, and `reason` says numpy is missing or fewer than two episodes are comparable. `null` in a report written before the field existed. |
+| `Variation.value` | `float` or `null` | The root mean square, over every pair of covered episodes, of their distance, to 4 significant digits. It compares episodes within one dataset. `null` when unavailable, and left out of a written report. |
+| `Variation.episodes` | `int` | The episodes covered. |
+| `Variation.reason` | `str` or `null` | Why `value` is `null`. Written as an index into `reason_codes`, and left out when `null`. |
 
 A report without `motion_variation` still loads, with `motion_variation` null.
 

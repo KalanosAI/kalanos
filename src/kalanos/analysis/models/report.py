@@ -694,27 +694,23 @@ class NearDuplicateSummary(BaseModel):
     saturated: bool
 
 
-class MotionVariation(BaseModel):
-    """How much the episodes' trajectories differ from each other, over the dataset.
+class Variation(BaseModel):
+    """How much a set of episodes differ from each other.
 
     It is descriptive: it feeds no score, gate or eligibility decision,
     and no threshold marks a value as low.
-    The channels are scaled by their spread over the covered episodes,
-    so a value compares episodes within one dataset, not two datasets.
+    A value compares episodes within one dataset, not two datasets.
+    The field that holds it says which distance it measures
+    and which episodes it covers.
 
     Attributes
     ----------
     value : float or None
-        The root mean square, over every pair of covered episodes,
-        of their normalized RMSE: the distance the near-duplicate tier measures.
+        The root mean square, over every pair of covered episodes, of their distance.
         Rounded to `NRMSE_DIGITS` significant digits.
         `None` when it is unavailable, with the reason in `reason`.
     episodes : int
-        The episodes covered, exact copies included:
-        the largest group of episodes that hold the same numeric streams and channels
-        and could be resampled (every value finite, at least 2 rows).
-        Episodes whose every channel is constant take no part.
-        0 when numpy is missing.
+        The episodes covered.
     reason : str or None
         Why `value` is `None`; `None` when there is a value.
     """
@@ -908,9 +904,16 @@ class Report(BaseModel):
         or no group of comparable episodes holds two
         that differ in their payloads and could be resampled
         (every value finite, at least 2 rows).
-    motion_variation : MotionVariation or None
+    motion_variation : Variation or None
         How much the episodes' trajectories differ from each other,
         from the same resampled trajectories the near-duplicate search compares.
+        The distance is their normalized RMSE, the one the near-duplicate tier measures.
+        The channels are scaled by their spread over the covered episodes.
+        It covers, exact copies included, the largest group of episodes
+        that hold the same numeric streams and channels and could be resampled
+        (every value finite, at least 2 rows).
+        Episodes whose every channel is constant take no part.
+        `episodes` is 0 when numpy is missing.
         `None` in a report written before the field existed.
     dataset_warnings : list[DatasetWarning]
         Warnings about the dataset as a whole, which belong to no episode.
@@ -954,7 +957,7 @@ class Report(BaseModel):
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
     near_duplicates: NearDuplicateSummary | None = None
-    motion_variation: MotionVariation | None = None
+    motion_variation: Variation | None = None
     dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
 
     @model_validator(mode="before")

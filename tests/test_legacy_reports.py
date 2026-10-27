@@ -22,7 +22,7 @@ from kalanos.analysis.models.legacy import (
     load_any,
     load_legacy,
 )
-from kalanos.analysis.models.report import MotionVariation, Report
+from kalanos.analysis.models.report import Report, Variation
 from kalanos.analysis.scoring.duplicates import _TOO_FEW
 from kalanos.api import compare, grade, load_report
 from kalanos.assets.bundle import Bundle
@@ -268,4 +268,4 @@ def test_an_unavailable_motion_variation_keeps_its_count_when_written(tmp_path):
 
     assert "value" not in written and written["episodes"] == 1
     assert isinstance(loaded, Report)
-    assert loaded.motion_variation == MotionVariation(episodes=1, reason=_TOO_FEW)
+    assert loaded.motion_variation == Variation(episodes=1, reason=_TOO_FEW)

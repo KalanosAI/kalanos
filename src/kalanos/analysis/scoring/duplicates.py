@@ -54,9 +54,9 @@ from kalanos.analysis.models.report import (
     DatasetWarning,
     DuplicateEpisodes,
     GradedEpisode,
-    MotionVariation,
     NearDuplicateSummary,
     NearPairs,
+    Variation,
     round_nrmse,
 )
 from kalanos.analysis.models.scoring import Finding, Severity
@@ -812,9 +812,7 @@ def _finding(
 def find_duplicate_episodes(
     episodes: Sequence[GradedEpisode],
     fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
-) -> tuple[
-    DuplicateEpisodes, list[Finding], NearDuplicateSummary | None, MotionVariation
-]:
+) -> tuple[DuplicateEpisodes, list[Finding], NearDuplicateSummary | None, Variation]:
     """Pair the episodes whose numeric payloads are identical or nearly so.
 
     Only episodes whose fingerprinted streams sit at the same keys
@@ -859,7 +857,7 @@ def find_duplicate_episodes(
     summary : NearDuplicateSummary or None
         The near search's counts over the dataset,
         `None` when no group reached the near search.
-    motion_variation : MotionVariation
+    motion_variation : Variation
         How much the covered episodes' trajectories differ from each other.
     """
 
@@ -1007,13 +1005,11 @@ def find_duplicate_episodes(
         )
 
     if numpy is None:
-        motion_variation = MotionVariation(episodes=0, reason=_NO_NUMPY)
+        motion_variation = Variation(episodes=0, reason=_NO_NUMPY)
     elif motion is None:
-        motion_variation = MotionVariation(episodes=largest, reason=_TOO_FEW)
+        motion_variation = Variation(episodes=largest, reason=_TOO_FEW)
     else:
-        motion_variation = MotionVariation(
-            value=round_nrmse(motion[1]), episodes=motion[0]
-        )
+        motion_variation = Variation(value=round_nrmse(motion[1]), episodes=motion[0])
 
     # Step 5: one finding per episode and tier, in episode order.
     made: dict[tuple[str, Literal["exact", "near"]], tuple[int, dict]] = {}
