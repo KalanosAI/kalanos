@@ -4,6 +4,9 @@
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+import math
+
 # External
 import pytest
 
@@ -15,12 +18,17 @@ from kalanos.analysis.models.report import (
     CameraFrames,
     GradedEpisode,
     GradedStream,
+    round_nrmse,
 )
 from kalanos.analysis.models.scoring import ScoreResult
-from kalanos.analysis.scoring.cameras import compare_cameras
+from kalanos.analysis.scoring.cameras import (
+    _TOO_FEW_FOOTAGE,
+    FootageVariation,
+    compare_cameras,
+)
 
 
-pytest.importorskip("numpy")
+numpy = pytest.importorskip("numpy")
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -135,6 +143,34 @@ def _camera(
         _episode(index, _stream(variance, level, **kwargs))
         for index, (variance, level) in enumerate(zip(variances, levels, strict=True))
     ]
+
+
+def _vectors(count: int, length: int, seed: int = 42) -> list:
+    """`count` seeded uniform vectors in [0, 1] of `length` float32 values."""
+
+    rng = numpy.random.default_rng(seed)
+    return list(rng.random((count, length), dtype=numpy.float32))
+
+
+def _pairwise(vectors: list) -> float:
+    """The RMS over every pair of `vectors` of their RMS difference, pair by pair."""
+
+    squares = [
+        float(numpy.mean((a.astype(numpy.float64) - b) ** 2))
+        for i, a in enumerate(vectors)
+        for b in vectors[i + 1 :]
+    ]
+    return round_nrmse(math.sqrt(sum(squares) / len(squares)))
+
+
+def _footage(*groups: list) -> FootageVariation:
+    """An accumulator holding each vector of `groups` as one episode of one camera."""
+
+    footage = FootageVariation()
+    vectors = [vector for group in groups for vector in group]
+    for index, vector in enumerate(vectors):
+        footage.add(f"episode_{index}", CAMERA, vector)
+    return footage
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -323,3 +359,75 @@ def test_an_incomplete_read_is_not_compared():
     _summaries, findings = compare_cameras(episodes, grades_vision=True)
 
     assert findings == []
+
+
+def test_footage_variation_matches_every_pair():
+    """The running sums give the RMS over every pair of the pairs' RMS difference."""
+
+    vectors = _vectors(30, 2560)
+
+    variation = _footage(vectors).result(CAMERA)
+
+    assert variation.episodes == 30
+    assert variation.value == _pairwise(vectors)
+
+
+def test_footage_variation_covers_the_largest_group():
+    """Episodes sampling fewer frames form their own group; the larger counts."""
+
+    full, short = _vectors(3, 2560), _vectors(2, 1280, seed=7)
+
+    variation = _footage(short, full).result(CAMERA)
+
+    assert variation.episodes == 3
+    assert variation.value == _pairwise(full)
+
+
+def test_a_footage_tie_keeps_the_earlier_group():
+    """Two groups of two: the one seen first counts."""
+
+    first, second = _vectors(2, 2560), _vectors(2, 1280, seed=7)
+
+    variation = _footage(first, second).result(CAMERA)
+
+    assert variation.episodes == 2
+    assert variation.value == _pairwise(first)
+
+
+def test_one_usable_episode_has_no_visual_variation():
+    """A camera with one usable episode cannot compare its footage, and says why."""
+
+    footage = FootageVariation()
+    footage.add("episode_0", CAMERA, _vectors(1, 2560)[0])
+    footage.add("episode_1", CAMERA, None)
+
+    variation = footage.result(CAMERA)
+
+    assert variation.value is None
+    assert variation.episodes == 1
+    assert variation.reason == _TOO_FEW_FOOTAGE
+
+
+def test_a_camera_counts_once_per_episode():
+    """A camera's second stream in an episode is ignored, as in the camera pass."""
+
+    first, other, second = _vectors(3, 2560)
+    footage = FootageVariation()
+    footage.add("episode_0", CAMERA, first)
+    footage.add("episode_0", CAMERA, second)
+    footage.add("episode_1", CAMERA, other)
+
+    variation = footage.result(CAMERA)
+
+    assert variation.episodes == 2
+    assert variation.value == _pairwise([first, other])
+
+
+def test_without_footage_there_is_no_visual_variation():
+    """The camera pass sets no visual variation when nothing gathered the footage."""
+
+    summaries, _findings = compare_cameras(
+        _camera(CLEAN_VARIANCES, CLEAN_LEVELS), grades_vision=True
+    )
+
+    assert summaries[0].visual_variation is None

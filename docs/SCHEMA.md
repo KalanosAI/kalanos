@@ -13,6 +13,18 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - `streams[].coverage` lists only the rows where at least one subject was computed, skipped or errored.
 - When an episode has a `coverage` ledger, a stream- or channel-level key in `episodes[].coverage.metrics` that is missing from a stream's `coverage` neither computed, skipped nor errored on that stream. The episode row gives its counts and reasons. An episode with no `coverage` ledger recorded none, as before.
 - Episode and dataset ledgers are unchanged.
+- `motion_variation` is new: how much the episodes' trajectories differ from each other, from the trajectories the duplicate check resamples. It is descriptive and feeds no score.
+- `cameras[].visual_variation` is new: how much each camera's footage changes between episodes, from the frames the vision metrics sample. It is descriptive and feeds no score.
+
+| Field | Type | What it is |
+|---|---|---|
+| `motion_variation` | `Variation` or `null` | How much the episodes' trajectories differ from each other, as their normalized RMSE. It covers, exact copies included, the largest group that holds the same numeric streams and channels and could be resampled; `episodes` is 0 when numpy is missing, and `reason` says numpy is missing or fewer than two episodes are comparable. `null` in a report written before the field existed. |
+| `Variation.value` | `float` or `null` | The root mean square, over every pair of covered episodes, of their distance, to 4 significant digits. It compares episodes within one dataset. `null` when unavailable, and left out of a written report. |
+| `Variation.episodes` | `int` | The episodes covered. |
+| `Variation.reason` | `str` or `null` | Why `value` is `null`. Written as an index into `reason_codes`, and left out when `null`. |
+| `cameras[].visual_variation` | `Variation` or `null` | How much the camera's footage changes between episodes, as the RMS difference of their sampled gray frames pooled to 16x16 on a 0-1 scale. Motion in view counts as change, and it compares episodes within this camera. It covers the largest group of episodes whose read decoded every sampled frame, with the same number of frames; `reason` says when fewer than two qualify. `null` in a report written before the field existed. |
+
+A report without `motion_variation` still loads, with `motion_variation` null. A report without `visual_variation` still loads, with each camera's `visual_variation` null.
 
 ## Compact encoding (version 1)
 

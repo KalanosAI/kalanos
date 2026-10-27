@@ -519,6 +519,32 @@ class DatasetTrait(BaseModel):
     n_with_finding: int
 
 
+class Variation(BaseModel):
+    """How much a set of episodes differ from each other.
+
+    It is descriptive: it feeds no score, gate or eligibility decision,
+    and no threshold marks a value as low.
+    A value compares episodes within one dataset, not two datasets.
+    The field that holds it says which distance it measures
+    and which episodes it covers.
+
+    Attributes
+    ----------
+    value : float or None
+        The root mean square, over every pair of covered episodes, of their distance.
+        Rounded to `NRMSE_DIGITS` significant digits.
+        `None` when it is unavailable, with the reason in `reason`.
+    episodes : int
+        The episodes covered.
+    reason : str or None
+        Why `value` is `None`; `None` when there is a value.
+    """
+
+    value: float | None = None
+    episodes: int
+    reason: str | None = None
+
+
 class CameraSummary(BaseModel):
     """One camera compared across the episodes it appears in.
 
@@ -545,6 +571,15 @@ class CameraSummary(BaseModel):
     repeated_footage : list of list of str
         Each group of episodes whose camera's sampled frames hash identically,
         in episode order.
+    visual_variation : Variation or None
+        How much the camera's footage changes between episodes:
+        the distance is the RMS difference of two episodes' sampled gray frames,
+        each average-pooled to 16x16 and scaled to 0-1.
+        It covers the largest group of episodes whose read decoded every sampled frame,
+        with the same number of frames.
+        Motion in view, such as an arm crossing it, counts as change.
+        It compares episodes within this camera.
+        `None` in a report written before the field existed.
     """
 
     camera: str
@@ -560,6 +595,7 @@ class CameraSummary(BaseModel):
     blur_outliers: list[str] = Field(default_factory=list)
     exposure_outliers: list[str] = Field(default_factory=list)
     repeated_footage: list[list[str]] = Field(default_factory=list)
+    visual_variation: Variation | None = None
 
 
 class NearPairs(BaseModel):
@@ -878,6 +914,17 @@ class Report(BaseModel):
         or no group of comparable episodes holds two
         that differ in their payloads and could be resampled
         (every value finite, at least 2 rows).
+    motion_variation : Variation or None
+        How much the episodes' trajectories differ from each other,
+        from the same resampled trajectories the near-duplicate search compares.
+        The distance is their normalized RMSE, the one the near-duplicate tier measures.
+        The channels are scaled by their spread over the covered episodes.
+        It covers, exact copies included, the largest group of episodes
+        that hold the same numeric streams and channels and could be resampled
+        (every value finite, at least 2 rows).
+        Episodes whose every channel is constant take no part.
+        `episodes` is 0 when numpy is missing.
+        `None` in a report written before the field existed.
     dataset_warnings : list[DatasetWarning]
         Warnings about the dataset as a whole, which belong to no episode.
         Descriptive: they have no effect on any score.
@@ -920,6 +967,7 @@ class Report(BaseModel):
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
     near_duplicates: NearDuplicateSummary | None = None
+    motion_variation: Variation | None = None
     dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
 
     @model_validator(mode="before")

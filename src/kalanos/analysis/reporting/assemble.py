@@ -35,6 +35,7 @@ from kalanos.analysis.metrics.registry import (
 from kalanos.analysis.metrics.vision import (
     camera_format,
     camera_frames,
+    footage_vector,
     is_camera_footage,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
@@ -77,7 +78,11 @@ from kalanos.analysis.models.report import (
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
-from kalanos.analysis.scoring.cameras import compare_cameras
+from kalanos.analysis.scoring.cameras import (
+    FootageVariation,
+    camera_key,
+    compare_cameras,
+)
 from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
     StreamKey,
@@ -129,6 +134,7 @@ def grade_stream(
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[StreamKey, PayloadFingerprint] | None = None,
+    footage: FootageVariation | None = None,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -158,6 +164,9 @@ def grade_stream(
         When given, receives the stream's payload fingerprint under its `StreamKey`,
         for the duplicate-episode pass; the key's last element counts
         the episode's earlier streams at the same place.
+    footage : FootageVariation or None
+        When given and the stream is camera footage,
+        receives its pooled sampled frames, for the camera's visual variation.
 
     Returns
     -------
@@ -289,35 +298,39 @@ def grade_stream(
         Level.STREAM, [*(gc.score for gc in graded_channels), own_score], policy=policy
     )
     is_camera = is_camera_footage(stream.kind.value, stream.taxonomy_type)
-    return (
-        GradedStream(
-            taxonomy_type=stream.taxonomy_type,
-            kind=stream.kind.value,
-            source_path=str(stream.source_path),
-            coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
-            instance=stream.instance,
-            attribution=stream.attribution,
-            category=category,
-            mapping_source=stream.mapping_source,
-            score=stream_score,
-            metrics=stream_metrics,
-            channels=graded_channels,
-            source_field=stream.source_field,
-            source_identity=stream.source_identity,
-            declared_channels=stream.channels if not graded_channels else [],
-            clock=stream.clock,
-            clock_info=stream.clock_info,
-            source_order=stream.source_order,
-            evaluation=evaluation,
-            frames=camera_frames(stream_ctx) if is_camera else None,
-            video_format=camera_format(
-                stream, reads_payloads=tier != ExecutionTier.METADATA
-            )
-            if is_camera
-            else None,
-        ),
-        findings,
+    graded_stream = GradedStream(
+        taxonomy_type=stream.taxonomy_type,
+        kind=stream.kind.value,
+        source_path=str(stream.source_path),
+        coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
+        instance=stream.instance,
+        attribution=stream.attribution,
+        category=category,
+        mapping_source=stream.mapping_source,
+        score=stream_score,
+        metrics=stream_metrics,
+        channels=graded_channels,
+        source_field=stream.source_field,
+        source_identity=stream.source_identity,
+        declared_channels=stream.channels if not graded_channels else [],
+        clock=stream.clock,
+        clock_info=stream.clock_info,
+        source_order=stream.source_order,
+        evaluation=evaluation,
+        frames=camera_frames(stream_ctx) if is_camera else None,
+        video_format=camera_format(
+            stream, reads_payloads=tier != ExecutionTier.METADATA
+        )
+        if is_camera
+        else None,
     )
+    # After `camera_frames`, so the vector comes from the read it cached;
+    # a read it could not publish is not tried again.
+    if footage is not None and is_camera:
+        read = graded_stream.frames is not None
+        vector = footage_vector(stream_ctx) if read else None
+        footage.add(episode_id, camera_key(graded_stream), vector)
+    return graded_stream, findings
 
 
 def grade_episode(
@@ -332,6 +345,7 @@ def grade_episode(
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] | None = None,
+    footage: FootageVariation | None = None,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -356,6 +370,9 @@ def grade_episode(
     fingerprints : dict or None
         When given, receives the episode's stream fingerprints under its id,
         for the duplicate-episode pass.
+    footage : FootageVariation or None
+        When given, receives the pooled sampled frames of each camera stream,
+        for the cameras' visual variation.
 
     Returns
     -------
@@ -386,6 +403,7 @@ def grade_episode(
             vision=vision,
             tier=tier,
             fingerprints=stream_prints,
+            footage=footage,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -545,6 +563,7 @@ def assemble_report(
     graded_episodes: list[GradedEpisode] = []
     findings: list[Finding] = []
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] = {}
+    footage = FootageVariation()
     for item in analysed:
         graded_episode, episode_findings = grade_episode(
             item.episode,
@@ -557,6 +576,7 @@ def assemble_report(
             vision=vision,
             tier=tier,
             fingerprints=fingerprints,
+            footage=footage,
         )
         graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
@@ -601,11 +621,11 @@ def assemble_report(
             review_findings([r for rs in diagnostic_results.values() for r in rs])
         )
     cameras, camera_findings = compare_cameras(
-        graded_episodes, grades_vision=grades_vision(requirements)
+        graded_episodes, grades_vision=grades_vision(requirements), footage=footage
     )
     findings.extend(camera_findings)
-    duplicates, duplicate_findings, near_duplicates = find_duplicate_episodes(
-        graded_episodes, fingerprints
+    duplicates, duplicate_findings, near_duplicates, motion_variation = (
+        find_duplicate_episodes(graded_episodes, fingerprints)
     )
     findings.extend(duplicate_findings)
     dataset_warnings = [
@@ -740,5 +760,6 @@ def assemble_report(
         cameras=cameras,
         duplicates=duplicates,
         near_duplicates=near_duplicates,
+        motion_variation=motion_variation,
         dataset_warnings=dataset_warnings,
     )

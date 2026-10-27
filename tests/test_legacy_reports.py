@@ -22,10 +22,14 @@ from kalanos.analysis.models.legacy import (
     load_any,
     load_legacy,
 )
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.report import Report, Variation
+from kalanos.analysis.scoring.duplicates import _TOO_FEW
 from kalanos.api import compare, grade, load_report
 from kalanos.assets.bundle import Bundle
 from kalanos.cli import app
+
+# Local
+from helpers import CSV_FIXTURE
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -235,3 +239,49 @@ def test_a_report_without_dataset_warnings_loads(tmp_path):
 
     assert isinstance(loaded, Report)
     assert loaded.dataset_warnings == []
+
+
+def test_a_report_without_motion_variation_loads(tmp_path):
+    """A report written before `motion_variation` existed loads with none."""
+
+    payload = grade(TINY_V3).model_dump(mode="json")
+    payload.pop("motion_variation", None)
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(path))
+
+    assert isinstance(loaded, Report)
+    assert loaded.motion_variation is None
+
+
+def test_a_report_without_visual_variation_loads(tmp_path):
+    """A report written before `visual_variation` existed loads with none."""
+
+    payload = grade(TINY_V3).model_dump(mode="json")
+    assert payload["cameras"]
+    for camera in payload["cameras"]:
+        camera.pop("visual_variation", None)
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(path))
+
+    assert isinstance(loaded, Report)
+    assert [camera.visual_variation for camera in loaded.cameras] == [None]
+
+
+def test_an_unavailable_motion_variation_keeps_its_count_when_written(tmp_path):
+    """A written report leaves out the null value but keeps `episodes`,
+    and reads the reason back from its code."""
+
+    out = tmp_path / "r.json"
+    result = CliRunner().invoke(app, ["grade", str(CSV_FIXTURE), "--report", str(out)])
+    assert result.exit_code == 0, result.output
+
+    written = json.loads(out.read_text())["motion_variation"]
+    loaded = load_any(UPath(out))
+
+    assert "value" not in written and written["episodes"] == 1
+    assert isinstance(loaded, Report)
+    assert loaded.motion_variation == Variation(episodes=1, reason=_TOO_FEW)
