@@ -604,8 +604,8 @@ def assemble_report(
         graded_episodes, grades_vision=grades_vision(requirements)
     )
     findings.extend(camera_findings)
-    duplicates, duplicate_findings, near_duplicates = find_duplicate_episodes(
-        graded_episodes, fingerprints
+    duplicates, duplicate_findings, near_duplicates, motion_variation = (
+        find_duplicate_episodes(graded_episodes, fingerprints)
     )
     findings.extend(duplicate_findings)
     dataset_warnings = [
@@ -740,5 +740,6 @@ def assemble_report(
         cameras=cameras,
         duplicates=duplicates,
         near_duplicates=near_duplicates,
+        motion_variation=motion_variation,
         dataset_warnings=dataset_warnings,
     )

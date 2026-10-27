@@ -291,9 +291,13 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
     assert {e.eligibility.status.value for e in report.episodes if e.eligibility} == {
         "review"
     }
+    assert report.motion_variation is not None
+    assert report.motion_variation.value == 0.0
+    assert report.motion_variation.episodes == 3
     loaded = Report.model_validate_json(report.model_dump_json())
     assert loaded.duplicates == report.duplicates
     assert loaded.near_duplicates == report.near_duplicates
+    assert loaded.motion_variation == report.motion_variation
     # A 7.2.0 report has no near-duplicate summary, lists one object per pair,
     # and still loads into the current encoding.
     older = report.model_dump(mode="json", exclude={"near_duplicates"})

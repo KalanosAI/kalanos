@@ -128,6 +128,14 @@ Every exact copy hashed equal, and no two clean episodes of any dataset did. All
 
 ---
 
+### Motion variation
+
+`Report.motion_variation` says how much episodes' trajectories differ from each other. Its `value` is the root mean square, over every pair of episodes, of the normalized RMSE the near tier measures, from the same resampled and scaled trajectories, so it reads no payload twice and decodes no video. It is computed from the per-point variance across episodes, so no pair is compared and it costs one pass over the trajectories at any episode count. Two episodes that move the same way read 0 apart, and a value grows as their motions part.
+
+It covers one group of episodes, the largest that holds the same numeric streams and channels and could be resampled (every value finite, at least 2 rows), and `episodes` says how many. Of two groups of equal size, the one met first in episode order is covered. Exact copies are included, since each is an episode a policy trains on, so a dataset of identical episodes reads 0. Episodes whose every channel is constant take no part, as in the duplicate check.
+
+The value follows trajectories, not scenes: episodes in one scene with varied motions read high, and episodes in several rooms that repeat one motion read low. It compares episodes within one dataset. Each channel is scaled by its spread over the covered episodes, so two datasets' values are not comparable. It is descriptive: no score, grade or threshold reads it. It is unavailable, with `value` null and the reason in `reason`, when numpy is missing (`episodes` is then 0) or fewer than two episodes are comparable.
+
 ## motion
 
 Whether the recorded motion is physically plausible. These need the taxonomy: jerk is normalised by the motion's own scale so that two robots can be compared, and 90% of maximum only means something once a value is known to be a joint velocity.

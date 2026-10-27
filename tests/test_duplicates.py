@@ -15,13 +15,16 @@ import pytest
 # Internal
 from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.report import GradedEpisode
+from kalanos.analysis.models.report import GradedEpisode, MotionVariation, round_nrmse
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.analysis.scoring import duplicates
 from kalanos.analysis.scoring.duplicates import (
     _MAX_PARTNERS,
     _NEAR_RMSE,
+    _NO_NUMPY,
+    _TOO_FEW,
     _Nearest,
+    _rms_pairwise,
     _search,
     close_pairs,
     find_duplicate_episodes,
@@ -61,7 +64,7 @@ def _arm(
 
 def _run(*frames: pl.DataFrame):
     """Run the pass over one episode per frame, each a single numeric stream,
-    and return its pairs, findings and near-duplicate summary."""
+    and return its pairs, findings, near-duplicate summary and motion variation."""
 
     score = ScoreResult(
         level=Level.EPISODE, score=None, grade=None, train_ready=None, n_contributing=0
@@ -83,7 +86,7 @@ def _run(*frames: pl.DataFrame):
 def _find(*frames: pl.DataFrame):
     """Run the pass over one episode per frame, and return its pairs and findings."""
 
-    pairs, findings, _summary = _run(*frames)
+    pairs, findings, _summary, _motion = _run(*frames)
     return pairs, findings
 
 
@@ -461,7 +464,7 @@ def test_alike_episodes_saturate_the_near_tier():
 
     pytest.importorskip("numpy")
 
-    pairs, findings, summary = _run(*_alike(30))
+    pairs, findings, summary, _motion = _run(*_alike(30))
 
     assert summary is not None
     assert summary.saturated
@@ -477,7 +480,7 @@ def test_a_saturated_near_tier_warns_once():
 
     pytest.importorskip("numpy")
 
-    _pairs, _findings, summary = _run(*_alike(30))
+    _pairs, _findings, summary, _motion = _run(*_alike(30))
 
     warning = near_duplicate_warning(summary, 30)
 
@@ -501,14 +504,14 @@ def test_past_the_listing_limit_near_output_grows_linearly(monkeypatch):
     pytest.importorskip("numpy")
 
     monkeypatch.setattr(duplicates, "_MAX_LISTED_PAIRS", 190)
-    pairs, _findings, summary = _run(*_alike(20))
+    pairs, _findings, summary, _motion = _run(*_alike(20))
 
     assert summary is not None
     assert summary.pairs_listed == sum(p[2] == "near" for p in _flat(pairs)) == 190
 
     monkeypatch.setattr(duplicates, "_MAX_LISTED_PAIRS", 189)
     for n, near in ((20, 190), (60, 1_770)):
-        pairs, _findings, summary = _run(*_alike(n))
+        pairs, _findings, summary, _motion = _run(*_alike(n))
 
         assert summary is not None
         assert summary.pairs_near == near
@@ -525,7 +528,7 @@ def test_a_near_finding_states_count_limit_and_nearest():
 
     distinct = [_arm(0.5 * (index + 1)) for index in range(12)]
 
-    pairs, findings, summary = _run(*_alike(8), *distinct)
+    pairs, findings, summary, _motion = _run(*_alike(8), *distinct)
 
     cluster = {f"episode_{index}" for index in range(8)}
     assert summary is not None
@@ -556,7 +559,7 @@ def test_two_near_episodes_never_saturate():
 
     copy = _arm().with_columns(pl.all().cast(pl.Float32))
 
-    _pairs, findings, summary = _run(_arm(), copy)
+    _pairs, findings, summary, _motion = _run(_arm(), copy)
 
     assert summary is not None
     assert summary.pairs_near == summary.pairs_compared == 1
@@ -574,7 +577,7 @@ def test_exact_copies_are_unchanged_when_saturated():
 
     pytest.importorskip("numpy")
 
-    pairs, findings, summary = _run(*_alike(30), _arm(), _arm())
+    pairs, findings, summary, _motion = _run(*_alike(30), _arm(), _arm())
 
     assert summary is not None
     assert summary.saturated
@@ -660,7 +663,7 @@ def test_every_near_pair_is_stored_once_and_recoverable():
         for i, j, d in close_pairs(_search_vectors(frames), _NEAR_RMSE)
     ]
 
-    pairs, _findings, _summary = _run(*frames)
+    pairs, _findings, _summary, _motion = _run(*frames)
 
     flat = _flat(pairs)
     assert len(expected) == 435
@@ -696,11 +699,114 @@ def test_distances_keep_four_significant_digits():
 
 
 def test_without_numpy_there_is_no_summary(monkeypatch):
-    """Without numpy only exact copies are paired, and no summary is made."""
+    """Without numpy only exact copies are paired,
+    and neither a summary nor a motion variation is made."""
 
     monkeypatch.setattr(duplicates, "load_numpy", lambda: None)
 
-    pairs, _findings, summary = _run(_arm(), _arm(1.0), _arm())
+    pairs, _findings, summary, motion = _run(_arm(), _arm(1.0), _arm())
 
     assert summary is None
+    assert motion == MotionVariation(episodes=0, reason=_NO_NUMPY)
     assert _tiers(pairs) == [(["episode_0", "episode_2"], "exact")]
+
+
+def test_rms_pairwise_matches_every_pair(monkeypatch):
+    """The one-pass motion variation equals the RMS over every pair's distance,
+    whether the rows fit one block or many."""
+
+    np = pytest.importorskip("numpy")
+
+    vectors = np.random.default_rng(42).normal(size=(30, 96)).astype(np.float32)
+    rows = vectors.astype(np.float64)
+    squares = [
+        ((rows[i] - rows[j]) ** 2).sum() / rows.shape[1]
+        for i in range(len(rows))
+        for j in range(i + 1, len(rows))
+    ]
+    expected = math.sqrt(sum(squares) / len(squares))
+
+    assert _rms_pairwise(vectors) == pytest.approx(expected, rel=1e-6)
+    monkeypatch.setattr(duplicates, "_CHUNK", 200)
+    assert _rms_pairwise(vectors) == pytest.approx(expected, rel=1e-6)
+
+
+def test_noisy_copies_vary_less_than_distinct_episodes():
+    """Copies of one episode with noise at 1% of each channel's spread
+    read far below distinct motions."""
+
+    np = pytest.importorskip("numpy")
+
+    rng = np.random.default_rng(42)
+    original = _arm()
+    noisy = [
+        original.with_columns(
+            pl.col(name)
+            + rng.normal(
+                0.0, 0.01 * float(np.std(original[name].to_numpy())), original.height
+            )
+            for name in CHANNELS
+        )
+        for _ in range(50)
+    ]
+    distinct = [_arm(2 * math.pi * index / 50) for index in range(50)]
+
+    *_rest, copies = _run(*noisy)
+    *_rest, varied = _run(*distinct)
+
+    assert copies.episodes == varied.episodes == 50
+    assert copies.value is not None and varied.value is not None
+    assert copies.value * 10 < varied.value
+
+
+def test_exact_copies_read_zero_motion_variation():
+    """Identical episodes are covered, copies included, and do not vary at all."""
+
+    pytest.importorskip("numpy")
+
+    *_rest, motion = _run(_arm(), _arm(), _arm())
+
+    assert motion == MotionVariation(value=0.0, episodes=3)
+
+
+def test_motion_variation_covers_the_largest_group():
+    """Only the largest group of episodes sharing channels is covered,
+    and constant episodes take no part."""
+
+    pytest.importorskip("numpy")
+
+    group = [_arm(0.0), _arm(1.0), _arm(2.0)]
+    renamed = [_arm(phase).rename({"joint_2": "gripper"}) for phase in (0.5, 1.5)]
+    flat = pl.DataFrame({name: [0.0] * 50 for name in CHANNELS})
+
+    *_rest, motion = _run(*renamed, flat, *group)
+
+    assert motion.episodes == 3
+    assert motion.value == round_nrmse(_rms_pairwise(_search_vectors(group)))
+
+
+def test_a_tie_keeps_the_earlier_group():
+    """Of two groups of equal size, the one whose episodes come first is covered."""
+
+    pytest.importorskip("numpy")
+
+    first = [_arm(0.0), _arm(0.1)]
+    second = [_arm(phase).rename({"joint_2": "gripper"}) for phase in (0.0, 2.0)]
+
+    *_rest, motion = _run(*first, *second)
+
+    assert motion.episodes == 2
+    assert motion.value == round_nrmse(_rms_pairwise(_search_vectors(first)))
+    assert motion.value != round_nrmse(_rms_pairwise(_search_vectors(second)))
+
+
+def test_one_comparable_episode_has_no_motion_variation():
+    """With fewer than two comparable episodes the value is unavailable, with why."""
+
+    pytest.importorskip("numpy")
+
+    flat = pl.DataFrame({name: [0.0] * 50 for name in CHANNELS})
+
+    *_rest, motion = _run(_arm(), flat)
+
+    assert motion == MotionVariation(episodes=1, reason=_TOO_FEW)

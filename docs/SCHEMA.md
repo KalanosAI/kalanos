@@ -13,6 +13,16 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - `streams[].coverage` lists only the rows where at least one subject was computed, skipped or errored.
 - When an episode has a `coverage` ledger, a stream- or channel-level key in `episodes[].coverage.metrics` that is missing from a stream's `coverage` neither computed, skipped nor errored on that stream. The episode row gives its counts and reasons. An episode with no `coverage` ledger recorded none, as before.
 - Episode and dataset ledgers are unchanged.
+- `motion_variation` is new: how much the episodes' trajectories differ from each other, from the trajectories the duplicate check resamples. It is descriptive and feeds no score.
+
+| Field | Type | What it is |
+|---|---|---|
+| `motion_variation` | `MotionVariation` or `null` | How much the episodes' trajectories differ from each other. `null` in a report written before the field existed. |
+| `MotionVariation.value` | `float` or `null` | The root mean square, over every pair of covered episodes, of their normalized RMSE, to 4 significant digits. It compares episodes within one dataset. `null` when unavailable, and left out of a written report. |
+| `MotionVariation.episodes` | `int` | The episodes covered, exact copies included: the largest group that holds the same numeric streams and channels and could be resampled. 0 when numpy is missing. |
+| `MotionVariation.reason` | `str` or `null` | Why `value` is `null`: numpy is missing, or fewer than two episodes are comparable. Written as an index into `reason_codes`, and left out when `null`. |
+
+A report without `motion_variation` still loads, with `motion_variation` null.
 
 ## Compact encoding (version 1)
 

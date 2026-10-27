@@ -19,6 +19,9 @@ When most pairs are near, the report says so once, in `Report.near_duplicates`
 and as one warning in `Report.dataset_warnings`,
 in place of a near finding on every episode.
 
+The same resampled trajectories also give `Report.motion_variation`,
+how much the compared episodes' trajectories differ from each other.
+
 Camera footage takes no part in the comparison,
 and `Report.cameras[].repeated_footage` already says which episodes repeat it.
 It reads payloads the channel metrics already fetched, so it decodes no video.
@@ -51,6 +54,7 @@ from kalanos.analysis.models.report import (
     DatasetWarning,
     DuplicateEpisodes,
     GradedEpisode,
+    MotionVariation,
     NearDuplicateSummary,
     NearPairs,
     round_nrmse,
@@ -101,6 +105,11 @@ _UNCALIBRATED = {
     "accepted": False,
     "reason": "candidate cross-episode rule; not calibrated",
 }
+_NO_NUMPY = "resampling trajectories needs numpy; add kalanos[numeric]"
+_TOO_FEW = (
+    "fewer than two episodes hold the same numeric streams and channels"
+    " and could be resampled"
+)
 
 # Where a stream sits in its episode: taxonomy type, instance, source field,
 # and which of the streams sharing those three it is.
@@ -291,6 +300,40 @@ def _vectors(
         target /= std.astype(numpy.float32)
         column += FINGERPRINT_POINTS * width
     return out
+
+
+def _rms_pairwise(vectors: "np.ndarray") -> float:
+    """The root mean square, over every pair of rows, of their normalized RMSE.
+
+    Summed over every pair `i < j`, the squared distance between rows
+    is `n` times their total squared deviation from the mean row,
+    so the mean over the `n (n - 1) / 2` pairs is `2n / (n - 1)` times
+    the total population variance of the columns, and no pair is compared.
+    The deviations are summed a block of rows at a time,
+    so no float64 copy of the whole array is made.
+
+    Parameters
+    ----------
+    vectors : numpy.ndarray
+        One row per episode, from `_vectors`, with at least 2 rows.
+
+    Returns
+    -------
+    float
+        The RMS, over every pair of rows, of `sqrt(sum(difference**2) / dim)`.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n, dim = vectors.shape
+    centre = vectors.mean(axis=0, dtype=numpy.float64)
+    step = max(1, _CHUNK // dim)
+    total = 0.0
+    for start in range(0, n, step):
+        deviation = vectors[start : start + step].astype(numpy.float64) - centre
+        total += float(numpy.einsum("ij,ij->", deviation, deviation))
+    return math.sqrt(2 * total / ((n - 1) * dim))
 
 
 def _confirm(
@@ -769,7 +812,9 @@ def _finding(
 def find_duplicate_episodes(
     episodes: Sequence[GradedEpisode],
     fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
-) -> tuple[DuplicateEpisodes, list[Finding], NearDuplicateSummary | None]:
+) -> tuple[
+    DuplicateEpisodes, list[Finding], NearDuplicateSummary | None, MotionVariation
+]:
     """Pair the episodes whose numeric payloads are identical or nearly so.
 
     Only episodes whose fingerprinted streams sit at the same keys
@@ -792,6 +837,10 @@ def find_duplicate_episodes(
     of either episode.
     When the near tier is saturated, no near finding is made.
 
+    The motion variation covers the largest group of resampled episodes,
+    exact copies included, since a copy is still an episode trained on;
+    of two groups of equal size, the one met first in episode order.
+
     Parameters
     ----------
     episodes : Sequence[GradedEpisode]
@@ -803,10 +852,15 @@ def find_duplicate_episodes(
 
     Returns
     -------
-    tuple of (DuplicateEpisodes, list of Finding, NearDuplicateSummary or None)
-        Every exact group and kept near pair, one finding per episode and tier
-        with at least one partner, and the near search's counts over the dataset,
+    pairs : DuplicateEpisodes
+        Every exact group and kept near pair.
+    findings : list of Finding
+        One finding per episode and tier with at least one partner.
+    summary : NearDuplicateSummary or None
+        The near search's counts over the dataset,
         `None` when no group reached the near search.
+    motion_variation : MotionVariation
+        How much the covered episodes' trajectories differ from each other.
     """
 
     # Step 1: each taking part episode's fingerprints, grouped by what they hold.
@@ -829,10 +883,21 @@ def find_duplicate_episodes(
     listed = _Listed()
     episodes_compared = pairs_compared = pairs_near = 0
     nearest_distances: list[float] = []
+    numpy = load_numpy()
+    # The most resampled episodes in any group,
+    # and the largest group's count and motion variation once it has two.
+    largest = 0
+    motion: tuple[int, float] | None = None
     for signature, members in groups.items():
+        keys = [key for key, _channels in signature]
+        resampled = [
+            (episode_id, prints)
+            for episode_id, prints in members
+            if all(prints[k].points is not None for k in keys)
+        ]
+        largest = max(largest, len(resampled))
         if len(members) < 2:
             continue
-        keys = [key for key, _channels in signature]
 
         # Step 2: exact copies hash identically, row count included, on every key.
         by_hash: dict[tuple, list[str]] = {}
@@ -845,18 +910,16 @@ def find_duplicate_episodes(
         # Step 3: near pairs, among the earliest episodes of the groups
         # resampled on every key. Copies resample to the same points,
         # so the other copies would only repeat their earliest one's pairs.
-        numpy = load_numpy()
         if numpy is None:
             continue
-        resampled = [
-            (episode_id, prints)
-            for episode_id, prints in members
-            if all(prints[k].points is not None for k in keys)
-        ]
         if len(resampled) < 2:
             continue
         # Scaled over every copy, as each copy's rows weigh in the pooled spread.
         vectors = _vectors([p for _id, p in resampled], keys)
+        # Taken before the copies are dropped, which a group of copies alone would
+        # otherwise leave with nothing to measure.
+        if motion is None or len(resampled) > motion[0]:
+            motion = (len(resampled), _rms_pairwise(vectors))
         firsts = [
             index
             for index, (episode_id, _p) in enumerate(resampled)
@@ -943,6 +1006,15 @@ def find_duplicate_episodes(
             ),
         )
 
+    if numpy is None:
+        motion_variation = MotionVariation(episodes=0, reason=_NO_NUMPY)
+    elif motion is None:
+        motion_variation = MotionVariation(episodes=largest, reason=_TOO_FEW)
+    else:
+        motion_variation = MotionVariation(
+            value=round_nrmse(motion[1]), episodes=motion[0]
+        )
+
     # Step 5: one finding per episode and tier, in episode order.
     made: dict[tuple[str, Literal["exact", "near"]], tuple[int, dict]] = {}
     for ids in copies.values():
@@ -963,7 +1035,7 @@ def find_duplicate_episodes(
             made.items(), key=lambda item: (order[item[0][0]], item[0][1])
         )
     ]
-    return pairs, findings, summary
+    return pairs, findings, summary, motion_variation
 
 
 def near_duplicate_warning(
