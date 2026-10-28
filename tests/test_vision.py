@@ -1902,6 +1902,8 @@ def test_noisy_copies_vary_less_than_distinct_episodes():
     """50 copies of one episode with 1% noise vary far less than 50 distinct ones."""
 
     base = clean_frames(frames=30, height=128, width=128, seed=0)
+    assert isinstance(base.payload, SyntheticFrames)
+    frames = base.payload.frames
     rng = numpy.random.default_rng(42)
     noisy = [
         base.model_copy(
@@ -1911,7 +1913,7 @@ def test_noisy_copies_vary_less_than_distinct_episodes():
                         numpy.clip(frame + rng.normal(0, 2.55, frame.shape), 0, 255)
                         .round()
                         .astype(numpy.uint8)
-                        for frame in base.payload.frames
+                        for frame in frames
                     ]
                 )
             }
@@ -1924,6 +1926,8 @@ def test_noisy_copies_vary_less_than_distinct_episodes():
     ]
 
     copies, varied = _visual_variation(noisy), _visual_variation(distinct)
+    assert copies is not None and varied is not None
+    assert copies.value is not None and varied.value is not None
     assert copies.episodes == varied.episodes == 50
     assert copies.value * 10 < varied.value
 
