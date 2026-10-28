@@ -4,6 +4,20 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.9.1] - 2026-10-28
+
+Report schema 8.0.0.
+Grading reads, grades and lets go of one episode at a time, so peak memory stays flat on large datasets, with or without a diagnostics plan, and `kalanos --version` prints the installed version.
+
+### Added
+
+- `kalanos --version` prints the installed kalanos version and exits. ([#76](https://github.com/KalanosAI/kalanos/pull/76))
+
+### Changed
+
+- `kalanos grade` grades each episode as soon as it is read and lets go of it before reading the next, so peak memory on a dataset read from one source no longer grows with its number of episodes. `duration_s` and `run.finished_at` now include the time spent grading. A mapping override that matches no stream still fails the run, now once every episode is graded. ([#73](https://github.com/KalanosAI/kalanos/pull/73))
+- With a diagnostics plan, `kalanos grade` writing a `.json` report also lets go of each episode once it is graded: each episode's diagnostics run as it is graded, and a cohort keeps only the normalized values it compares of each episode it lists. Diagnostic results still stay in memory until the report is written. ([#74](https://github.com/KalanosAI/kalanos/pull/74))
+
 ## [0.9.0] - 2026-10-28
 
 Report schema 8.0.0.
@@ -266,6 +280,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.9.1]: https://github.com/KalanosAI/kalanos/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/KalanosAI/kalanos/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/KalanosAI/kalanos/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/KalanosAI/kalanos/compare/v0.8.0...v0.8.1

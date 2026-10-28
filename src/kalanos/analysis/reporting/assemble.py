@@ -22,13 +22,14 @@ from pydantic_core import to_json
 from upath import UPath
 
 # Internal
-from kalanos.analysis.calibration import apply_calibration
+from kalanos.analysis.calibration import apply_calibration, may_promote
 from kalanos.analysis.coverage import (
     episode_coverage,
     report_coverage,
     rows_that_ran,
     stream_rows,
 )
+from kalanos.analysis.diagnostics.dataset import CohortInput
 from kalanos.analysis.identities import adapter_versions, detector_versions
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -190,7 +191,7 @@ def grade_stream(
     tuple[GradedStream, list[Finding]]
         The stream's own metrics and every channel, each graded; a
         Stream-level score rolled up over both; and every finding raised
-        anywhere in the stream, unsorted — only `assemble_report` sorts,
+        anywhere in the stream, unsorted — only `ReportBuilder.finish` sorts,
         once every episode has contributed.
     """
 
@@ -398,7 +399,7 @@ def grade_episode(
         episode's own metrics; a score folded from every metric graded in it;
         the recording's duration and sample count;
         and every finding raised anywhere in it, unsorted —
-        only `assemble_report` sorts the dataset-wide list.
+        only `ReportBuilder.finish` sorts the dataset-wide list.
     """
 
     # Step 1: grade every stream, and the channels within each.
@@ -614,6 +615,410 @@ def _blob(episode: GradedEpisode) -> bytes:
     return zlib.compress(data, 1)
 
 
+class ReportBuilder:
+    """Grade episodes one at a time, then assemble the run's Report from them.
+
+    `add` grades one episode and keeps only what the dataset-level steps read of it,
+    so a caller that hands over each recording as it is read
+    can let go of it before reading the next.
+    `finish` runs the dataset-level steps once, after the last `add`.
+    """
+
+    def __init__(
+        self,
+        *,
+        policy: Policy,
+        requirements: RequirementsSection | None = None,
+        tier: ExecutionTier = ExecutionTier.STANDARD,
+        vision_samples: int = DEFAULT_VISION_SAMPLES,
+        full_frame_scan: bool = False,
+        vision: VisionSpec | None = None,
+        diagnostics_plan=None,
+        keep_episodes: bool = True,
+    ) -> None:
+        """Start an empty run.
+
+        Parameters
+        ----------
+        policy : Policy
+            The loaded grading policy.
+            Distinct from each `AnalysedEpisode`'s own `policy`:
+            this is what the dataset-level rollup and `Report.policy_version`
+            grade against.
+        requirements : RequirementsSection or None
+            What a pass needs. `None` uses the built-in `numeric-core` scope.
+        tier : ExecutionTier
+            The execution tier the run grades at.
+        vision_samples : int
+            How many frames blur and exposure sample, and windows frozen frames read.
+        full_frame_scan : bool
+            Whether frame metrics read every frame rather than a sample.
+        vision : VisionSpec or None
+            Decode caps, previews and exposure levels; the defaults when `None`.
+        diagnostics_plan : DiagnosticPlan or None
+            The diagnostics to run. Each episode's run as it is added;
+            a cohort keeps only the values it compares of each episode it lists.
+        keep_episodes : bool
+            Make `finish` return a `Report` holding every graded episode.
+            Unset, each graded episode is held only as compressed JSON,
+            and `finish` returns a `StreamedReport`.
+        """
+
+        self._dictionary = load_default_dictionary()
+        self._tier = tier
+        self._requirements = requirements or RequirementsSection()
+        self._policy = scope_policy(policy, self._requirements)
+        self._vision_samples = vision_samples
+        self._full_frame_scan = full_frame_scan
+        self._vision = vision
+        self._diagnostics_plan = diagnostics_plan
+        self._keep_episodes = keep_episodes
+        self._policies: dict[str, Policy] = {}
+        # A dict keeps the order each adapter was first seen in.
+        self._adapters: dict[str, None] = {}
+        self._diagnostic_results: dict[str, list[DiagnosticResult]] = {}
+        # By cohort id, then by episode id.
+        self._cohort_inputs: dict[str, dict[str, CohortInput | BaseException]] = {}
+        self._graded_episodes: list[GradedEpisode] = []
+        self._blobs: list[bytes] = []
+        self._summaries: list[EpisodeSummary] = []
+        self._ledgers: list[Coverage | None] = []
+        self._findings: list[Finding] = []
+        self._fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] = {}
+        self._footage = FootageVariation()
+
+    def __len__(self) -> int:
+        """Count the episodes added so far."""
+
+        return len(self._graded_episodes) + len(self._blobs)
+
+    def add(self, item: AnalysedEpisode) -> None:
+        """Grade one analysed episode and keep what the dataset-level steps read of it.
+
+        Its diagnostics run as soon as it is graded,
+        so its coverage is final and it is summarized then;
+        without `keep_episodes`, it is then held only as compressed JSON.
+
+        Parameters
+        ----------
+        item : AnalysedEpisode
+            The canonical episode, the adapter that read it,
+            and the policy to grade it against.
+
+        Raises
+        ------
+        MappingOverrideError
+            If the episode's policy reviews a diagnostic the plan does not configure.
+        """
+
+        from kalanos.analysis.diagnostics.runner import validate_review_plan
+
+        plan = self._diagnostics_plan
+        validate_review_plan(plan, item.policy)
+        self._policies[item.episode.id] = item.policy
+        self._adapters.setdefault(item.adapter)
+        graded_episode, episode_findings = grade_episode(
+            item.episode,
+            adapter=item.adapter,
+            adapter_confidence=item.adapter_confidence,
+            policy=scope_policy(item.policy, self._requirements),
+            dictionary=self._dictionary,
+            vision_samples=self._vision_samples,
+            full_frame_scan=self._full_frame_scan,
+            vision=self._vision,
+            tier=self._tier,
+            fingerprints=self._fingerprints,
+            footage=self._footage,
+        )
+        self._findings.extend(episode_findings)
+        results: list[DiagnosticResult] = []
+        if plan is not None:
+            from kalanos.analysis.diagnostics.dataset import stored_cohort_input
+            from kalanos.analysis.diagnostics.runner import diagnose_episode
+
+            # Calibration fixes every id and every consequence but those of findings
+            # a manifest may still promote, which the windows leave pending.
+            own = apply_calibration(episode_findings, self._policies, None, None, None)
+            results = diagnose_episode(
+                item.episode,
+                plan,
+                self._tier,
+                own,
+                item.policy,
+                graded_episode,
+                {f.id for f in own if f.id and may_promote(f, item.policy)},
+            )
+            self._diagnostic_results[item.episode.id] = results
+            # The metadata tier skips every cohort, so it reads no payload for one.
+            for spec in (
+                plan.cohorts if self._tier is not ExecutionTier.METADATA else ()
+            ):
+                if item.episode.id in spec.episode_ids:
+                    self._cohort_inputs.setdefault(spec.id, {})[item.episode.id] = (
+                        stored_cohort_input(item.episode, spec)
+                    )
+        graded_episode = with_coverage(graded_episode, self._requirements, results)
+        self._summaries.append(summarize(graded_episode, self._requirements))
+        self._ledgers.append(graded_episode.coverage)
+        if len(self._ledgers) >= _LEDGERS_HELD:
+            self._ledgers = _merged(self._ledgers)
+        if self._keep_episodes:
+            self._graded_episodes.append(graded_episode)
+        else:
+            self._blobs.append(_blob(graded_episode))
+
+    def finish(
+        self,
+        *,
+        root: UPath,
+        skipped: Sequence[SkippedSource] = (),
+        unresolved: Sequence[UnresolvedSource] = (),
+        duration_s: float | None = None,
+        source: SourceInfo | None = None,
+        datasets: Sequence[DatasetInfo] = (),
+        mapping_overrides: Sequence[MappingOverride] = (),
+        scope: EvaluationScope | None = None,
+        producer: Producer | None = None,
+        run: RunInfo | None = None,
+        inventory: Inventory | None = None,
+        binding_conflicts: Sequence[BindingConflict] = (),
+    ) -> Report | StreamedReport:
+        """Run the dataset-level steps over every added episode and assemble the Report.
+
+        Called once, after the last `add`.
+
+        Parameters
+        ----------
+        root : UPath
+            The path the user pointed at.
+        skipped : Sequence[SkippedSource]
+            Files discovery declined to carry forward, or that no adapter claimed.
+        unresolved : Sequence[UnresolvedSource]
+            Files an adapter bid on and then could not read.
+        duration_s : float or None
+            Wall-clock time the run took, if the caller is timing it.
+        source : SourceInfo or None
+            What `root` was resolved from, if the caller resolved it.
+        datasets : Sequence[DatasetInfo]
+            What the adapter declared about each path it read, in walk order.
+        mapping_overrides : Sequence[MappingOverride]
+            The per-run overrides the pipeline applied.
+        scope : EvaluationScope or None
+            The scope identities to name on the report.
+        producer, run : Producer, RunInfo or None
+            Provenance, when the caller resolved it.
+        inventory : Inventory or None
+            Expected/loaded/failed episodes. `None` means every added episode
+            is the whole inventory.
+        binding_conflicts : Sequence[BindingConflict]
+            Mapping disagreements the resolver recorded.
+
+        Returns
+        -------
+        Report or StreamedReport
+            Every added episode, graded and rolled up to a Dataset-level score,
+            alongside every skipped and unresolved file with its reason or evidence.
+        """
+
+        dictionary = self._dictionary
+        tier = self._tier
+        requirements = self._requirements
+        policy = self._policy
+        diagnostics_plan = self._diagnostics_plan
+        policies = self._policies
+        graded_episodes = self._graded_episodes
+        blobs = self._blobs
+        summaries = self._summaries
+        ledgers = self._ledgers
+        findings = self._findings
+        fingerprints = self._fingerprints
+        footage = self._footage
+        adapters = adapter_versions(self._adapters)
+
+        # Step 2: decide eligibility once, now that every metric has run. Every
+        # count, the gate and the compatibility booleans derive from this.
+        scope = scope or EvaluationScope(
+            requirements_id=requirements.id, policy_id="default-decisions-v1"
+        )
+        n_episodes = len(self)
+        inventory = inventory or Inventory(loaded=n_episodes)
+        producer = producer or Producer(version="unknown")
+        producer = producer.model_copy(
+            update={"metrics": detector_versions(), "adapters": adapters}
+        )
+        findings = apply_calibration(findings, policies, run, scope, producer)
+        diagnostic_results = self._diagnostic_results
+        diagnostics = None
+        if diagnostics_plan is not None:
+            from kalanos.analysis.diagnostics.runner import review_findings
+            from kalanos.analysis.diagnostics.windows import resolve_windows
+
+            diagnostic_results = {
+                episode_id: [
+                    resolve_windows(r, findings) if r.kind == "windows" else r
+                    for r in results
+                ]
+                for episode_id, results in diagnostic_results.items()
+            }
+            findings.extend(
+                review_findings([r for rs in diagnostic_results.values() for r in rs])
+            )
+        cameras, camera_findings = compare_cameras(
+            (sample for summary in summaries for sample in summary.camera_samples),
+            grades_vision=grades_vision(requirements),
+            footage=footage,
+        )
+        findings.extend(camera_findings)
+        duplicates, duplicate_findings, near_duplicates, motion_variation = (
+            find_duplicate_episodes([s.id for s in summaries], fingerprints)
+        )
+        findings.extend(duplicate_findings)
+        dataset_warnings = [
+            w
+            for w in (near_duplicate_warning(near_duplicates, n_episodes),)
+            if w is not None
+        ]
+        decisions = decide_all(
+            summaries, findings, requirements=requirements, policy_id=scope.policy_id
+        )
+        graded_episodes = [
+            episode.model_copy(
+                update={
+                    "eligibility": decisions[episode.id],
+                    "score": episode.score.model_copy(
+                        update={
+                            "train_ready": decisions[
+                                episode.id
+                            ].compatibility_train_ready
+                        }
+                    ),
+                }
+            )
+            for episode in graded_episodes
+        ]
+        counts = counts_of(decisions.values(), inventory)
+        readiness = readiness_of(summaries, decisions, counts)
+        sufficiency = sufficiency_of(requirements, counts)
+        if diagnostics_plan is not None:
+            from kalanos.analysis.diagnostics.runner import finish_diagnostics
+
+            diagnostics = finish_diagnostics(
+                self._cohort_inputs,
+                diagnostics_plan,
+                diagnostic_results,
+                decisions,
+                tier,
+            )
+        if requirements.min_pass_windows:
+            from kalanos.analysis.diagnostics.validation import window_sufficiency
+
+            sufficiency = window_sufficiency(
+                sufficiency, diagnostics, decisions, inventory, requirements
+            )
+
+        # Step 3: the dataset rollup and the gate, which now only derives.
+        episode_scores = [s.score for s in summaries]
+        dataset_score = rollup(Level.DATASET, episode_scores, policy=policy).model_copy(
+            update={
+                "metrics": dataset_metric_rollups(summaries),
+                "family_tails": dataset_family_tails(episode_scores, policy=policy),
+            }
+        )
+        dataset_score, gate = apply_gate(
+            summaries,
+            findings,
+            dataset_score,
+            policy,
+            decisions=decisions,
+            readiness_score=readiness.score,
+            passing_quality=readiness.passing_quality,
+        )
+        # The dataset compatibility boolean derives from the counts and the
+        # inventory, whether or not the policy has a letter gate.
+        dataset_score = dataset_score.model_copy(
+            update={"train_ready": dataset_train_ready(counts)}
+        )
+
+        errors = [row for summary in summaries for row in summary.operational_errors]
+        if diagnostics:
+            errors.extend(
+                {
+                    "episode_id": r.episode_id or "dataset",
+                    "metric": f"diagnostics.{r.kind}.{r.id}",
+                    "reason": r.reason or "diagnostic failed",
+                }
+                for r in diagnostics.results
+                if r.availability.value == "error"
+            )
+        if errors and run is not None:
+            run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
+        fields: dict[str, Any] = dict(
+            diagnostics=diagnostics,
+            operational_errors=errors,
+            root=root,
+            coverage=report_coverage(ledgers, inventory),
+            score=dataset_score,
+            findings=sort_findings(findings),
+            skipped=list(skipped),
+            unresolved=list(unresolved),
+            policy_version=policy.schema_version,
+            family_weights=dict(policy.family_weights),
+            duration_s=duration_s,
+            source=source,
+            datasets=list(datasets),
+            categories=dictionary.category_groups,
+            mapping_overrides=list(mapping_overrides),
+            gate=gate,
+            readiness=readiness,
+            producer=producer,
+            run=run,
+            scope=scope,
+            inventory=inventory,
+            eligibility_counts=counts,
+            sufficiency=sufficiency,
+            binding_conflicts=list(binding_conflicts),
+            cameras=cameras,
+            duplicates=duplicates,
+            near_duplicates=near_duplicates,
+            motion_variation=motion_variation,
+            dataset_warnings=dataset_warnings,
+        )
+        if self._keep_episodes:
+            return Report(**fields, episodes=graded_episodes)
+
+        # Step 4: a header holding no episodes is not a valid `Report`,
+        # so it is built without validation and checked against the summaries instead.
+        header = Report.model_construct(**fields, episodes=[])
+        check_agreement(
+            header,
+            [
+                AgreementRow(
+                    id=s.id,
+                    eligibility=decisions[s.id],
+                    train_ready=decisions[s.id].compatibility_train_ready,
+                )
+                for s in summaries
+            ],
+            ledgers,
+        )
+        return StreamedReport(
+            header=header,
+            blobs=blobs,
+            decisions=decisions,
+            card_rows=[
+                CardRow(
+                    id=s.id,
+                    source_paths=s.source_paths,
+                    score=s.score.score,
+                    eligibility=decisions[s.id],
+                )
+                for s in summaries
+                if decisions[s.id].status is not EligibilityStatus.PASS
+            ],
+            unmapped_types=frozenset(t for s in summaries for t in s.unmapped_types),
+        )
+
+
 @overload
 def assemble_report(
     *,
@@ -736,8 +1141,7 @@ def assemble_report(
     keep_episodes : bool
         Return a `Report` holding every graded episode.
         Unset, each graded episode is held only as compressed JSON,
-        and a `StreamedReport` is returned,
-        unless a diagnostics plan is set: its diagnostics read across episodes.
+        and a `StreamedReport` is returned.
 
     Returns
     -------
@@ -745,246 +1149,34 @@ def assemble_report(
         Every analysed episode, graded and rolled up to a Dataset-level score,
         alongside every skipped and unresolved file with its reason or evidence.
     """
-
-    from kalanos.analysis.diagnostics.runner import validate_review_plan
-
-    for item in analysed:
-        validate_review_plan(diagnostics_plan, item.policy)
-    dictionary = load_default_dictionary()
-    tier = scope.tier if scope is not None else ExecutionTier.STANDARD
-    requirements = requirements or RequirementsSection()
-    policy = scope_policy(policy, requirements)
-    keep_episodes = keep_episodes or diagnostics_plan is not None
-    policies = {item.episode.id: item.policy for item in analysed}
-    adapters = adapter_versions(item.adapter for item in analysed)
-
-    # Step 1: grade every episode. Without a diagnostics plan its coverage is final
-    # as soon as it is graded, so it is summarized then;
-    # without `keep_episodes`, it is then held only as compressed JSON.
+    builder = ReportBuilder(
+        policy=policy,
+        requirements=requirements,
+        tier=scope.tier if scope is not None else ExecutionTier.STANDARD,
+        vision_samples=vision_samples,
+        full_frame_scan=full_frame_scan,
+        vision=vision,
+        diagnostics_plan=diagnostics_plan,
+        keep_episodes=keep_episodes,
+    )
     if keep_episodes:
         items: Iterable[AnalysedEpisode] = analysed
     else:
         queue = analysed if isinstance(analysed, deque) else deque(analysed)
         items = (queue.popleft() for _ in range(len(queue)))
-    graded_episodes: list[GradedEpisode] = []
-    blobs: list[bytes] = []
-    summaries: list[EpisodeSummary] = []
-    ledgers: list[Coverage | None] = []
-    findings: list[Finding] = []
-    fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] = {}
-    footage = FootageVariation()
     for item in items:
-        graded_episode, episode_findings = grade_episode(
-            item.episode,
-            adapter=item.adapter,
-            adapter_confidence=item.adapter_confidence,
-            policy=scope_policy(item.policy, requirements),
-            dictionary=dictionary,
-            vision_samples=vision_samples,
-            full_frame_scan=full_frame_scan,
-            vision=vision,
-            tier=tier,
-            fingerprints=fingerprints,
-            footage=footage,
-        )
-        findings.extend(episode_findings)
-        if diagnostics_plan is None:
-            graded_episode = with_coverage(graded_episode, requirements)
-            summaries.append(summarize(graded_episode, requirements))
-            ledgers.append(graded_episode.coverage)
-            if len(ledgers) >= _LEDGERS_HELD:
-                ledgers = _merged(ledgers)
-        if keep_episodes:
-            graded_episodes.append(graded_episode)
-        else:
-            blobs.append(_blob(graded_episode))
-
-    # Step 2: decide eligibility once, now that every metric has run. Every
-    # count, the gate and the compatibility booleans derive from this.
-    scope = scope or EvaluationScope(
-        requirements_id=requirements.id, policy_id="default-decisions-v1"
-    )
-    n_episodes = len(graded_episodes) + len(blobs)
-    inventory = inventory or Inventory(loaded=n_episodes)
-    producer = producer or Producer(version="unknown")
-    producer = producer.model_copy(
-        update={"metrics": detector_versions(), "adapters": adapters}
-    )
-    findings = apply_calibration(findings, policies, run, scope, producer)
-    diagnostic_results = {}
-    diagnostics = None
-    if diagnostics_plan is not None:
-        from kalanos.analysis.diagnostics.runner import (
-            episode_diagnostics,
-            review_findings,
-        )
-
-        diagnostic_results = episode_diagnostics(
-            [a.episode for a in analysed],
-            diagnostics_plan,
-            tier,
-            findings,
-            policies,
-            {e.id: e for e in graded_episodes},
-        )
-        findings.extend(
-            review_findings([r for rs in diagnostic_results.values() for r in rs])
-        )
-        graded_episodes = [
-            with_coverage(e, requirements, diagnostic_results.get(e.id, []))
-            for e in graded_episodes
-        ]
-        summaries = [summarize(e, requirements) for e in graded_episodes]
-        ledgers = [e.coverage for e in graded_episodes]
-    cameras, camera_findings = compare_cameras(
-        (sample for summary in summaries for sample in summary.camera_samples),
-        grades_vision=grades_vision(requirements),
-        footage=footage,
-    )
-    findings.extend(camera_findings)
-    duplicates, duplicate_findings, near_duplicates, motion_variation = (
-        find_duplicate_episodes([s.id for s in summaries], fingerprints)
-    )
-    findings.extend(duplicate_findings)
-    dataset_warnings = [
-        w
-        for w in (near_duplicate_warning(near_duplicates, n_episodes),)
-        if w is not None
-    ]
-    decisions = decide_all(
-        summaries, findings, requirements=requirements, policy_id=scope.policy_id
-    )
-    graded_episodes = [
-        episode.model_copy(
-            update={
-                "eligibility": decisions[episode.id],
-                "score": episode.score.model_copy(
-                    update={
-                        "train_ready": decisions[episode.id].compatibility_train_ready
-                    }
-                ),
-            }
-        )
-        for episode in graded_episodes
-    ]
-    counts = counts_of(decisions.values(), inventory)
-    readiness = readiness_of(summaries, decisions, counts)
-    sufficiency = sufficiency_of(requirements, counts)
-    if diagnostics_plan is not None:
-        from kalanos.analysis.diagnostics.runner import finish_diagnostics
-
-        diagnostics = finish_diagnostics(
-            [a.episode for a in analysed],
-            diagnostics_plan,
-            diagnostic_results,
-            decisions,
-            tier,
-        )
-    if requirements.min_pass_windows:
-        from kalanos.analysis.diagnostics.validation import window_sufficiency
-
-        sufficiency = window_sufficiency(
-            sufficiency, diagnostics, decisions, inventory, requirements
-        )
-
-    # Step 3: the dataset rollup and the gate, which now only derives.
-    episode_scores = [s.score for s in summaries]
-    dataset_score = rollup(Level.DATASET, episode_scores, policy=policy).model_copy(
-        update={
-            "metrics": dataset_metric_rollups(summaries),
-            "family_tails": dataset_family_tails(episode_scores, policy=policy),
-        }
-    )
-    dataset_score, gate = apply_gate(
-        summaries,
-        findings,
-        dataset_score,
-        policy,
-        decisions=decisions,
-        readiness_score=readiness.score,
-        passing_quality=readiness.passing_quality,
-    )
-    # The dataset compatibility boolean derives from the counts and the
-    # inventory, whether or not the policy has a letter gate.
-    dataset_score = dataset_score.model_copy(
-        update={"train_ready": dataset_train_ready(counts)}
-    )
-
-    errors = [row for summary in summaries for row in summary.operational_errors]
-    if diagnostics:
-        errors.extend(
-            {
-                "episode_id": r.episode_id or "dataset",
-                "metric": f"diagnostics.{r.kind}.{r.id}",
-                "reason": r.reason or "diagnostic failed",
-            }
-            for r in diagnostics.results
-            if r.availability.value == "error"
-        )
-    if errors and run is not None:
-        run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
-    fields: dict[str, Any] = dict(
-        diagnostics=diagnostics,
-        operational_errors=errors,
+        builder.add(item)
+    return builder.finish(
         root=root,
-        coverage=report_coverage(ledgers, inventory),
-        score=dataset_score,
-        findings=sort_findings(findings),
-        skipped=list(skipped),
-        unresolved=list(unresolved),
-        policy_version=policy.schema_version,
-        family_weights=dict(policy.family_weights),
+        skipped=skipped,
+        unresolved=unresolved,
         duration_s=duration_s,
         source=source,
-        datasets=list(datasets),
-        categories=dictionary.category_groups,
-        mapping_overrides=list(mapping_overrides),
-        gate=gate,
-        readiness=readiness,
+        datasets=datasets,
+        mapping_overrides=mapping_overrides,
+        scope=scope,
         producer=producer,
         run=run,
-        scope=scope,
         inventory=inventory,
-        eligibility_counts=counts,
-        sufficiency=sufficiency,
-        binding_conflicts=list(binding_conflicts),
-        cameras=cameras,
-        duplicates=duplicates,
-        near_duplicates=near_duplicates,
-        motion_variation=motion_variation,
-        dataset_warnings=dataset_warnings,
-    )
-    if keep_episodes:
-        return Report(**fields, episodes=graded_episodes)
-
-    # Step 4: a header holding no episodes is not a valid `Report`,
-    # so it is built without validation and checked against the summaries instead.
-    header = Report.model_construct(**fields, episodes=[])
-    check_agreement(
-        header,
-        [
-            AgreementRow(
-                id=s.id,
-                eligibility=decisions[s.id],
-                train_ready=decisions[s.id].compatibility_train_ready,
-            )
-            for s in summaries
-        ],
-        ledgers,
-    )
-    return StreamedReport(
-        header=header,
-        blobs=blobs,
-        decisions=decisions,
-        card_rows=[
-            CardRow(
-                id=s.id,
-                source_paths=s.source_paths,
-                score=s.score.score,
-                eligibility=decisions[s.id],
-            )
-            for s in summaries
-            if decisions[s.id].status is not EligibilityStatus.PASS
-        ],
-        unmapped_types=frozenset(t for s in summaries for t in s.unmapped_types),
+        binding_conflicts=binding_conflicts,
     )

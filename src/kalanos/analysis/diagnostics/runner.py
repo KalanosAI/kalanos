@@ -7,14 +7,14 @@
 # Built-in
 import json
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 
 # Internal
 from kalanos.analysis.diagnostics.common import DiagnosticSpec, Unavailable
-from kalanos.analysis.diagnostics.dataset import run_dataset_diagnostics
+from kalanos.analysis.diagnostics.dataset import CohortInput, run_dataset_diagnostics
 from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.vision import vision
 from kalanos.analysis.diagnostics.windows import windows
@@ -147,128 +147,127 @@ def _graded_camera(
     return None
 
 
-def episode_diagnostics(
-    episodes: Sequence[Episode],
+def diagnose_episode(
+    episode: Episode,
     plan: DiagnosticPlan,
     tier: ExecutionTier,
     findings: Sequence[Finding],
-    policies: Mapping[str, Policy],
-    graded: Mapping[str, GradedEpisode],
-) -> dict[str, list[DiagnosticResult]]:
+    policy: Policy,
+    graded: GradedEpisode | None,
+    pending: Collection[str] = (),
+) -> list[DiagnosticResult]:
     """Run signal and visual work before windows, without changing source arrays.
 
     Parameters
     ----------
-    episodes : list[Episode]
-        The loaded episodes to run the diagnostics on.
+    episode : Episode
+        The loaded episode to run the diagnostics on.
     plan : DiagnosticPlan
         The diagnostics to run.
     tier : ExecutionTier
         The run's execution tier; the metadata tier skips every payload diagnostic.
-    findings : list[Finding]
-        The run's findings so far, which the window diagnostics anchor on.
-    policies : Mapping[str, Policy]
-        Each episode's policy, by id; its `diagnostic_reviews` set the review triggers.
-    graded : Mapping[str, GradedEpisode]
-        Each episode graded, by id; the vision diagnostic reads its camera reads.
+    findings : Sequence[Finding]
+        The episode's calibrated findings, which the window diagnostics anchor on.
+    policy : Policy
+        The episode's policy; its `diagnostic_reviews` set the review triggers.
+    graded : GradedEpisode or None
+        The episode graded; the vision diagnostic reads its camera reads.
+    pending : Collection[str]
+        Ids of findings whose consequence calibration may still change,
+        which the window diagnostics record without applying.
 
     Returns
     -------
-    dict[str, list[DiagnosticResult]]
-        Each episode's diagnostic results, by id.
+    list[DiagnosticResult]
+        The episode's diagnostic results.
     """
-    results = {}
-    for episode in episodes:
-        items = []
-        review = policies[episode.id].diagnostic_reviews
-        skip = tier.value == "metadata"
-        for kind, specs, operation in (
-            ("timing", plan.timing, timing),
-            ("tracking", plan.tracking, tracking),
-            ("motion", plan.motion, motion),
-        ):
-            for spec in specs:
-                # Motion specs select by `channel`; timing and tracking specs by `left`.
-                selector = (
-                    cast(MotionSpec, spec).channel
-                    if kind == "motion"
-                    else cast(TimingSpec, spec).left
-                )
-                items.append(
-                    execute(
-                        cast(Literal["timing", "tracking", "motion"], kind),
-                        spec,
-                        episode,
-                        partial(operation, episode, spec, review),
-                        skipped=skip,
-                        subject=selector.model_dump(),
-                    )
-                )
-        if plan.vision:
-            for stream in episode.streams:
-                if not is_camera_footage(stream.kind.value, stream.taxonomy_type):
-                    continue
-                subject = {
-                    "feature": stream.source_field,
-                    "instance": stream.instance,
-                    "source_path": str(stream.source_path),
-                }
-                identifier = "camera_" + content_digest(subject)[:16]
-                spec = SimpleNamespace(id=identifier)
-                camera = _graded_camera(graded.get(episode.id), stream)
-                frames = camera.frames if camera is not None else None
-                count = (
-                    camera.metrics.get("frame_count_vs_timebase") if camera else None
-                )
-                sharpness = camera.metrics.get("sharpness_score") if camera else None
-                items.append(
-                    execute(
-                        "vision",
-                        spec,
-                        episode,
-                        partial(
-                            vision,
-                            episode,
-                            stream,
-                            frames,
-                            identifier,
-                            review,
-                            segment_frames=count.evidence.get("present")
-                            if count is not None
-                            else None,
-                            reason=sharpness.evidence.get("reason")
-                            if frames is None and sharpness is not None
-                            else None,
-                        ),
-                        skipped=skip,
-                        subject=subject,
-                    )
-                )
-        extra = review_findings(items)
-        for spec in plan.windows:
+
+    items = []
+    review = policy.diagnostic_reviews
+    skip = tier.value == "metadata"
+    for kind, specs, operation in (
+        ("timing", plan.timing, timing),
+        ("tracking", plan.tracking, tracking),
+        ("motion", plan.motion, motion),
+    ):
+        for spec in specs:
+            # Motion specs select by `channel`; timing and tracking specs by `left`.
+            selector = (
+                cast(MotionSpec, spec).channel
+                if kind == "motion"
+                else cast(TimingSpec, spec).left
+            )
             items.append(
                 execute(
-                    "windows",
+                    cast(Literal["timing", "tracking", "motion"], kind),
                     spec,
                     episode,
-                    lambda spec=spec, episode=episode, extra=extra, items=items: (
-                        windows(
-                            episode,
-                            spec,
-                            [*findings, *extra],
-                            [r for r in items if r.kind == "vision"],
-                        )
-                    ),
+                    partial(operation, episode, spec, review),
                     skipped=skip,
-                    subject=spec.anchor.model_dump(),
+                    subject=selector.model_dump(),
                 )
             )
-        results[episode.id] = items
-    return results
+    if plan.vision:
+        for stream in episode.streams:
+            if not is_camera_footage(stream.kind.value, stream.taxonomy_type):
+                continue
+            subject = {
+                "feature": stream.source_field,
+                "instance": stream.instance,
+                "source_path": str(stream.source_path),
+            }
+            identifier = "camera_" + content_digest(subject)[:16]
+            spec = SimpleNamespace(id=identifier)
+            camera = _graded_camera(graded, stream)
+            frames = camera.frames if camera is not None else None
+            count = camera.metrics.get("frame_count_vs_timebase") if camera else None
+            sharpness = camera.metrics.get("sharpness_score") if camera else None
+            items.append(
+                execute(
+                    "vision",
+                    spec,
+                    episode,
+                    partial(
+                        vision,
+                        episode,
+                        stream,
+                        frames,
+                        identifier,
+                        review,
+                        segment_frames=count.evidence.get("present")
+                        if count is not None
+                        else None,
+                        reason=sharpness.evidence.get("reason")
+                        if frames is None and sharpness is not None
+                        else None,
+                    ),
+                    skipped=skip,
+                    subject=subject,
+                )
+            )
+    extra = review_findings(items)
+    for spec in plan.windows:
+        items.append(
+            execute(
+                "windows",
+                spec,
+                episode,
+                lambda spec=spec: windows(
+                    episode,
+                    spec,
+                    [*findings, *extra],
+                    [r for r in items if r.kind == "vision"],
+                    pending,
+                ),
+                skipped=skip,
+                subject=spec.anchor.model_dump(),
+            )
+        )
+    return items
 
 
 def finish_diagnostics(
-    episodes: Sequence[Episode],
+    cohort_inputs: Mapping[str, Mapping[str, CohortInput | BaseException]],
     plan: DiagnosticPlan,
     results: Mapping[str, list[DiagnosticResult]],
     decisions: Mapping[str, EpisodeEligibility],
@@ -293,7 +292,7 @@ def finish_diagnostics(
         )
 
     dataset = run_dataset_diagnostics(
-        episodes,
+        cohort_inputs,
         plan.cohorts,
         {k: v.status.value for k, v in decisions.items()},
         execute_dataset,

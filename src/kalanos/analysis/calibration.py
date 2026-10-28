@@ -161,6 +161,58 @@ def evaluate(
     }
 
 
+def _calibrated(finding: Finding, entry: MetricPolicy) -> bool:
+    """Whether calibration decides a finding's consequence from the run context.
+
+    Parameters
+    ----------
+    finding : Finding
+        A finding.
+    entry : MetricPolicy
+        The policy entry of the finding's metric.
+
+    Returns
+    -------
+    bool
+        True for a critical finding of a blocking metric on the statistical route.
+    """
+
+    return (
+        finding.severity == Severity.CRITICAL
+        and (entry.consequence or Consequence.BLOCK) == Consequence.BLOCK
+        and (
+            finding.metric_id == "integrity.snr_db"
+            or (entry.route or BlockingRoute.STATISTICAL) == BlockingRoute.STATISTICAL
+        )
+    )
+
+
+def may_promote(finding: Finding, policy: Policy) -> bool:
+    """Whether calibration may still make a finding a block, given the run context.
+
+    For any other finding, `apply_calibration` gives the same `consequence` and `id`
+    whatever the run, scope and producer,
+    so it can be calibrated before the run context is known.
+
+    Parameters
+    ----------
+    finding : Finding
+        A finding.
+    policy : Policy
+        The policy of the finding's episode.
+
+    Returns
+    -------
+    bool
+        True when `apply_calibration` evaluates the finding
+        and the policy has a calibration manifest for its metric.
+    """
+
+    return _calibrated(finding, policy.metrics[finding.metric_id]) and any(
+        m.metric_id == finding.metric_id for m in policy.calibration_manifests
+    )
+
+
 def apply_calibration(
     findings: list[Finding],
     policies: dict[str, Policy],
@@ -183,15 +235,7 @@ def apply_calibration(
             "metric": f.metric_id,
         }
         updates: dict[str, Any] = {"id": content_digest(key)}
-        if (
-            f.severity == Severity.CRITICAL
-            and (entry.consequence or Consequence.BLOCK) == Consequence.BLOCK
-            and (
-                f.metric_id == "integrity.snr_db"
-                or (entry.route or BlockingRoute.STATISTICAL)
-                == BlockingRoute.STATISTICAL
-            )
-        ):
+        if _calibrated(f, entry):
             outcome = evaluate(
                 policy,
                 context_for(

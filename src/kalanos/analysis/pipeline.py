@@ -15,8 +15,7 @@ It never writes a file; its caller, such as the CLI, does that with
 
 # Built-in
 import logging
-from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Literal, overload
@@ -27,7 +26,12 @@ from upath import UPath
 # Internal
 from kalanos.analysis.adapters.discover import discover_adapters
 from kalanos.analysis.adapters.select import select_adapter
-from kalanos.analysis.bindings import binding_identity, check_matched, resolve_episodes
+from kalanos.analysis.bindings import (
+    binding_records,
+    check_matched,
+    identity_from_records,
+    resolve_episodes,
+)
 from kalanos.analysis.discovery.walk import walk_folder
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
@@ -52,7 +56,7 @@ from kalanos.analysis.models.provenance import (
 )
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
-from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.analysis.reporting.assemble import ReportBuilder
 from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.assets.bundle import RunConfiguration
 from kalanos.assets.dictionary import load_default_dictionary
@@ -106,7 +110,7 @@ def _qualify_ids(episodes: list[Episode], *, path: UPath, base: UPath) -> list[E
     Parameters
     ----------
     episodes : list[Episode]
-        Everything one adapter read from `path`.
+        Episodes one adapter read from `path`, as few as one at a time.
     path : UPath
         The candidate the adapter was invoked on.
     base : UPath
@@ -250,7 +254,7 @@ def run(
     run_info: RunInfo | None = None,
     keep_episodes: bool = True,
 ) -> Report | StreamedReport:
-    """Grade `root` end to end: walk, select an adapter, read, then assemble.
+    """Grade `root` end to end: walk, select an adapter, grade each episode as read.
 
     Parameters
     ----------
@@ -277,9 +281,9 @@ def run(
         Provenance to record on the report, when the caller built it.
     keep_episodes : bool
         Return a `Report` holding every graded episode.
-        Unset, each recording is let go of once graded,
-        and a `StreamedReport` holds the graded episodes as compressed JSON,
-        unless the configuration carries a diagnostics plan.
+        Unset, a `StreamedReport` holds the graded episodes as compressed JSON.
+        Either way, each recording is graded as soon as it is read
+        and let go of before the next is read.
 
     Returns
     -------
@@ -320,7 +324,19 @@ def run(
         )
     logger.info("discovered %d adapter(s)", len(discovery.adapters))
 
-    analysed: list[AnalysedEpisode] = []
+    tier = config.scope.tier if config else ExecutionTier.STANDARD
+    dictionary = load_default_dictionary()
+    builder = ReportBuilder(
+        policy=policy,
+        requirements=config.requirements if config else None,
+        tier=tier,
+        vision_samples=vision_samples,
+        full_frame_scan=full_frame_scan,
+        vision=vision,
+        diagnostics_plan=config.bundle.diagnostics if config else None,
+        keep_episodes=keep_episodes,
+    )
+    records: dict[str, dict] = {}
     datasets: list[DatasetInfo] = []
     unresolved: list[UnresolvedSource] = []
     claimed: list[UPath] = []
@@ -372,20 +388,64 @@ def run(
 
         episode_policy = with_declared_limits(policy, info)
 
-        # Step 5: read the path's episodes one at a time, keeping every episode
-        # the adapter yielded before it refused. Only a refusal the adapter
-        # raised about the input file is caught here — anything else, a
-        # ValidationError from our own models included, is a bug and propagates.
-        # The source's declaration is retained either way, so a refusal
-        # part-way through is reconciled against it like a clean read.
-        episodes: list[Episode] = []
+        # Step 5: read the path's episodes one at a time, grading each before
+        # the next is read, so only the current recording is held.
+        # The tier is set around the adapter's own calls alone. Grading runs
+        # outside it: `camera_sync_skew_ms` reads the tier, and grading under a
+        # metadata tier would change what it reports.
+        # Only a refusal the adapter raised about the input file is caught here,
+        # and only from the adapter's own calls — anything else, a ValidationError
+        # from our own models or a failure while grading included, is a bug and
+        # propagates. The source's declaration is retained either way, so a
+        # refusal part-way through is reconciled against it like a clean read.
         refusal: AdapterRefusal | None = None
-        with use_tier(config.scope.tier if config else ExecutionTier.STANDARD):
+        loaded = 0
+        reader: Iterator[Episode] | None = None
+        with use_tier(tier):
             try:
-                for episode in selection.adapter.episodes(candidate.path):
-                    episodes.append(episode)
+                reader = iter(selection.adapter.episodes(candidate.path))
             except AdapterRefusal as exc:
                 refusal = exc
+        while reader is not None:
+            with use_tier(tier):
+                try:
+                    raw = next(reader)
+                except StopIteration:
+                    break
+                except AdapterRefusal as exc:
+                    refusal = exc
+                    break
+            loaded += 1
+
+            # Step 6: an adapter's name for a recording is local to the file it
+            # read, so re-mint it against the walked root to keep it unique
+            # across the run.
+            [episode] = _qualify_ids([raw], path=candidate.path, base=base)
+            del raw
+            # A comprehension, so no loop variable keeps a stream of this episode.
+            fields = {
+                s.source_field for s in episode.streams if s.source_field is not None
+            }
+            seen |= fields
+            matched |= fields & by_feature.keys()
+            [episode] = resolve_episodes(
+                [episode],
+                dictionary=dictionary,
+                channels=channel_assertions,
+                overrides=overrides,
+                source_identity=str(candidate.path),
+                matched=matched_channels,
+            )
+            records.update(binding_records([episode]))
+            builder.add(
+                AnalysedEpisode(
+                    episode=episode,
+                    adapter=selection.name,
+                    adapter_confidence=selection.confidence,
+                    policy=episode_policy,
+                )
+            )
+            del episode
         datasets.append(info)
         # A directory an adapter selected belongs to that adapter whatever
         # the read produced — episodes, none, or a refusal. Offering its
@@ -397,7 +457,7 @@ def run(
             logger.info(
                 "%s: unresolved after %d episode(s): %s",
                 refusal.path,
-                len(episodes),
+                loaded,
                 refusal.reason,
             )
             unresolved.append(refusal.as_unresolved())
@@ -409,47 +469,20 @@ def run(
         # are counted as unresolved rather than silently dropped from the
         # denominator. More loaded than declared is noted, not a gap.
         if info.episode_count is not None:
-            if info.episode_count > len(episodes):
-                unresolved_episodes += info.episode_count - len(episodes)
+            if info.episode_count > loaded:
+                unresolved_episodes += info.episode_count - loaded
                 inventory_notes.append(
                     f"{candidate.path}: declared {info.episode_count} episodes, "
-                    f"loaded {len(episodes)}"
+                    f"loaded {loaded}"
                     + (" before the adapter refused" if refusal else "")
                 )
-            elif info.episode_count < len(episodes):
+            elif info.episode_count < loaded:
                 inventory_notes.append(
                     f"{candidate.path}: declared {info.episode_count} episodes, "
-                    f"loaded {len(episodes)} (more than declared)"
+                    f"loaded {loaded} (more than declared)"
                 )
-        if not episodes:
+        if not loaded:
             continue
-
-        # Step 6: an adapter's name for a recording is local to the file it read,
-        # so re-mint it against the walked root to keep it unique across the run.
-        episodes = _qualify_ids(episodes, path=candidate.path, base=base)
-        for episode in episodes:
-            for stream in episode.streams:
-                if stream.source_field is not None:
-                    seen.add(stream.source_field)
-                    if stream.source_field in by_feature:
-                        matched.add(stream.source_field)
-        episodes = resolve_episodes(
-            episodes,
-            dictionary=load_default_dictionary(),
-            channels=channel_assertions,
-            overrides=overrides,
-            source_identity=str(candidate.path),
-            matched=matched_channels,
-        )
-        analysed.extend(
-            AnalysedEpisode(
-                episode=episode,
-                adapter=selection.name,
-                adapter_confidence=selection.confidence,
-                policy=episode_policy,
-            )
-            for episode in episodes
-        )
         logger.info("%s: analysed by %s", candidate.path, selection.name)
 
     unmatched = [o for o in overrides if o.feature not in matched]
@@ -457,8 +490,8 @@ def run(
         raise _unmatched_override_error(unmatched, seen)
     check_matched(channel_assertions, matched_channels)
 
-    # Step 7: grade everything that made it through, and assemble the report.
-    logger.info("graded %d episode(s); %d unresolved", len(analysed), len(unresolved))
+    # Step 7: assemble the report from every episode graded.
+    logger.info("graded %d episode(s); %d unresolved", len(builder), len(unresolved))
     expected = (
         sum(d.episode_count for d in datasets if d.episode_count is not None)
         if any(d.episode_count is not None for d in datasets)
@@ -466,7 +499,7 @@ def run(
     )
     inventory = Inventory(
         expected=expected,
-        loaded=len(analysed),
+        loaded=len(builder),
         # `failed` is for episodes with identities. A refused source is not
         # one episode; it is listed as a source, and whatever it declared but
         # did not yield is in `unresolved`.
@@ -482,8 +515,8 @@ def run(
         run_info = run_info.model_copy(
             update={
                 "finished_at": datetime.now(timezone.utc),
-                "binding": binding_identity(
-                    [a.episode for a in analysed], config.binding_id if config else None
+                "binding": identity_from_records(
+                    records, config.binding_id if config else None
                 ),
                 "completion": (
                     RunCompletion.COMPLETE
@@ -492,25 +525,14 @@ def run(
                 ),
             }
         )
-    # Without a reference left here, each recording is freed once it is graded.
-    # The read loop's last batch holds every recording of a one-source dataset.
-    pending = analysed if keep_episodes else deque(analysed)
-    del analysed
-    episodes = []
-    return assemble_report(
+    return builder.finish(
         root=root,
-        analysed=pending,
-        policy=policy,
         skipped=skipped,
         unresolved=unresolved,
         duration_s=perf_counter() - start,
         source=source,
         datasets=datasets,
-        vision_samples=vision_samples,
-        full_frame_scan=full_frame_scan,
-        vision=vision,
         mapping_overrides=list(overrides),
-        requirements=config.requirements if config else None,
         scope=(
             config.scope.model_copy(update={"binding_id": run_info.binding.id})
             if config and run_info and run_info.binding
@@ -522,6 +544,4 @@ def run(
         run=run_info,
         inventory=inventory,
         binding_conflicts=config.conflicts if config else (),
-        diagnostics_plan=config.bundle.diagnostics if config else None,
-        keep_episodes=keep_episodes,
     )

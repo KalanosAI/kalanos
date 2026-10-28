@@ -1,6 +1,7 @@
 """Write a report's JSON one episode at a time.
 
 `write_report_stream` writes a report from its header and one episode dict at a time,
+and the header's diagnostic results one at a time too,
 so the whole report is never held as one dict.
 The reason-code table and the compact key table both depend on the whole document,
 so it makes two passes over the episodes: one to build the tables, one to write.
@@ -22,6 +23,7 @@ from pydantic_core import to_json
 # Internal
 from kalanos.analysis.models.compact_keys import TABLE_KEY as COMPACT_KEY
 from kalanos.analysis.models.compact_keys import KeyCounter
+from kalanos.analysis.models.diagnostics import DiagnosticsReport
 from kalanos.analysis.models.eligibility import EpisodeEligibility
 from kalanos.analysis.models.reason_codes import TABLE_KEY as REASONS_KEY
 from kalanos.analysis.models.reason_codes import ReasonCoder
@@ -189,13 +191,35 @@ def write_report_stream(
     # Step 1: the header in the order the whole dump would hold it.
     # An empty `episodes` is left out of the header by `omit_empty_defaults`,
     # so it is placed back by its position among the fields.
+    # The diagnostic results grow with the dataset, so they are dumped one at a time
+    # and placed back by their position among the diagnostics' fields.
+    # Left out when empty, they are written nowhere, as the whole dump leaves them out.
     head = omit_empty_defaults(
-        header, header.model_dump(mode="json", context={"raw_reasons": True})
+        header,
+        header.model_dump(
+            mode="json",
+            context={"raw_reasons": True},
+            exclude={"diagnostics": {"results"}},
+        ),
     )
     fields = list(Report.model_fields)
     cut = fields.index("episodes")
     before = [key for key in fields[:cut] if key in head]
     after = [key for key in fields[cut + 1 :] if key in head]
+    results = header.diagnostics.results if header.diagnostics is not None else []
+    diagnostics: dict[str, Any] = head.get("diagnostics") or {}
+    owned = list(DiagnosticsReport.model_fields)
+    split = owned.index("results")
+    ahead = [key for key in owned[:split] if key in diagnostics]
+    behind = [key for key in owned[split + 1 :] if key in diagnostics]
+
+    def diagnostic_results() -> Iterator[dict[str, Any]]:
+        """Dump each diagnostic result as the whole header dump would hold it."""
+
+        for r in results:
+            yield omit_empty_defaults(
+                r, r.model_dump(mode="json", context={"raw_reasons": True})
+            )
 
     # Step 2: build the reason-code table, and count keys over the coded document,
     # walking every part in document order.
@@ -208,35 +232,66 @@ def write_report_stream(
         if counter is not None:
             counter.count(coded)
 
+    def feed_member(key: str) -> None:
+        if key != "diagnostics" or not results:
+            feed({key: head[key]})
+            return
+        feed({key: {k: diagnostics[k] for k in ahead}})
+        if counter is not None:
+            counter.count({"results": None})
+        for result in diagnostic_results():
+            feed(result)
+        feed({k: diagnostics[k] for k in behind})
+
     for key in before:
-        feed({key: head[key]})
+        feed_member(key)
     for episode in episodes():
         feed(episode)
         n_episodes += 1
     for key in after:
-        feed({key: head[key]})
+        feed_member(key)
     if counter is not None:
         counter.count({REASONS_KEY: None})
         if n_episodes:
             counter.count({"episodes": None})
 
     # Step 3: write the document, a top-level member at a time.
+    def name(key: str) -> bytes:
+        aliased = counter.walk({key: None}) if counter is not None else {key: None}
+        return _json(next(iter(aliased)))
+
     def member(key: str, value: Any) -> bytes:
-        pair = {key: value}
+        pair = coder.walk({key: value})
         if counter is not None:
             pair = counter.walk(pair)
         # A one-member object, without its braces, is `"key":value`.
         return _json(pair)[1:-1]
+
+    def write_member(key: str) -> None:
+        if key != "diagnostics" or not results:
+            out.write(b"," + member(key, head[key]))
+            return
+        out.write(b"," + name(key) + b":{")
+        out.write(b",".join(member(k, diagnostics[k]) for k in ahead))
+        out.write((b"," if ahead else b"") + name("results") + b":[")
+        for k, result in enumerate(diagnostic_results()):
+            coded = coder.walk(result)
+            if counter is not None:
+                coded = counter.walk(coded)
+            out.write((b"," if k else b"") + _json(coded))
+        out.write(b"]")
+        for k in behind:
+            out.write(b"," + member(k, diagnostics[k]))
+        out.write(b"}")
 
     out.write(b"{")
     if counter is not None:
         out.write(_json(COMPACT_KEY) + b":" + _json(counter.table()) + b",")
     out.write(member(REASONS_KEY, coder.table()))
     for key in before:
-        out.write(b"," + member(key, coder.walk(head[key])))
+        write_member(key)
     if n_episodes:
-        name = counter.walk({"episodes": None}) if counter is not None else None
-        out.write(b"," + _json(next(iter(name)) if name else "episodes") + b":[")
+        out.write(b"," + name("episodes") + b":[")
         for k, episode in enumerate(episodes()):
             coded = coder.walk(episode)
             if counter is not None:
@@ -244,5 +299,5 @@ def write_report_stream(
             out.write((b"," if k else b"") + _json(coded))
         out.write(b"]")
     for key in after:
-        out.write(b"," + member(key, coder.walk(head[key])))
+        write_member(key)
     out.write(b"}")
