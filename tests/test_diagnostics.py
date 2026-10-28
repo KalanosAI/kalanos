@@ -763,6 +763,7 @@ def test_a_cohort_raises_from_its_stored_inputs(case, message):
         if case != "missing" or e.id == "a"
     }
     if case == "task":
+        assert isinstance(inputs["b"], BaseException)
         assert inputs["b"].__traceback__ is None
 
     with pytest.raises(Unavailable) as excinfo:
