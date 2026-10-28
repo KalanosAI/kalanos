@@ -281,10 +281,9 @@ def run(
         Provenance to record on the report, when the caller built it.
     keep_episodes : bool
         Return a `Report` holding every graded episode.
-        Unset, a `StreamedReport` holds the graded episodes as compressed JSON,
-        unless the configuration carries a diagnostics plan.
+        Unset, a `StreamedReport` holds the graded episodes as compressed JSON.
         Either way, each recording is graded as soon as it is read
-        and let go of before the next is read, unless a diagnostics plan needs it.
+        and let go of before the next is read.
 
     Returns
     -------

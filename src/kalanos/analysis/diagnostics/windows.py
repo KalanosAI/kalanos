@@ -8,7 +8,7 @@
 import bisect
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from fractions import Fraction
 
 # Internal
@@ -79,8 +79,14 @@ def windows(
     spec: WindowSpec,
     findings: Sequence[Finding] = (),
     visual: Sequence[DiagnosticResult] = (),
+    pending: Collection[str] = (),
 ) -> DiagnosticResult:
-    """Count complete history/future windows on a declared grid, with bounded probes."""
+    """Count complete history/future windows on a declared grid, with bounded probes.
+
+    A finding whose id is in `pending` does not set a window's status yet:
+    its id is listed under the window's `pending` key,
+    for `resolve_windows` to apply once the finding is calibrated.
+    """
     anchor, _ = select(episode, spec.anchor)
     _, _, at = axis(anchor, exact=True)
     rate = Fraction(str(spec.sample_rate_hz))
@@ -151,7 +157,7 @@ def windows(
     for index in range(min(total, budget)):
         start = index * spec.stride
         grid = [(start + i) / rate for i in range(length)]
-        states, reasons, consumed = ["pass"], [], []
+        states, reasons, consumed, waiting = ["pass"], [], [], set()
         for modality, stream, rows, times, good, channels, max_age in prepared:
             chosen = []
             for time in grid:
@@ -185,24 +191,28 @@ def windows(
                     and finding.consequence.value in ("block", "review")
                     and overlap_finding(finding, stream, used, channels)
                 ):
+                    if finding.id in pending:
+                        waiting.add(finding.id)
+                        continue
                     states.append(
                         "blocked" if finding.consequence.value == "block" else "review"
                     )
                     reasons.append(f"finding:{finding.id or finding.metric_id}")
         status = max(states, key=_PRIORITY.__getitem__)
         counts[status] += 1
-        records.append(
-            {
-                "grid_start": start,
-                "anchor_grid_index": start + spec.history_steps - 1,
-                "grid_end_exclusive": start + length,
-                "start_s_relative": float(grid[0]),
-                "end_s_relative": float(grid[-1]),
-                "status": status,
-                "reasons": sorted(set(reasons)),
-                "consumed": consumed,
-            }
-        )
+        record = {
+            "grid_start": start,
+            "anchor_grid_index": start + spec.history_steps - 1,
+            "grid_end_exclusive": start + length,
+            "start_s_relative": float(grid[0]),
+            "end_s_relative": float(grid[-1]),
+            "status": status,
+            "reasons": sorted(set(reasons)),
+            "consumed": consumed,
+        }
+        if waiting:
+            record["pending"] = sorted(waiting)
+        records.append(record)
     out = result(
         "windows",
         spec,
@@ -229,3 +239,62 @@ def windows(
             "window/probe budget reached; unevaluated candidates remain unknown"
         )
     return out
+
+
+def resolve_windows(
+    result: DiagnosticResult, findings: Sequence[Finding]
+) -> DiagnosticResult:
+    """Apply calibrated findings to the windows that listed them as pending.
+
+    Parameters
+    ----------
+    result : DiagnosticResult
+        A windows result, possibly holding windows with a `pending` key.
+    findings : Sequence[Finding]
+        The run's calibrated findings.
+
+    Returns
+    -------
+    DiagnosticResult
+        A copy without `pending` keys,
+        each such window's status, reasons and count updated as `windows` would have,
+        or `result` itself when no window is pending.
+    """
+
+    records = result.evidence.get("windows", [])
+    if not any("pending" in r for r in records):
+        return result
+    calibrated = {
+        f.id: f
+        for f in findings
+        if f.episode_id == result.episode_id
+        and f.consequence.value in ("block", "review")
+    }
+    counts = dict(result.measurements["counts"])
+    resolved = []
+    for record in records:
+        if "pending" not in record:
+            resolved.append(record)
+            continue
+        matched = [calibrated[i] for i in record["pending"] if i in calibrated]
+        states = [record["status"]] + [
+            "blocked" if f.consequence.value == "block" else "review" for f in matched
+        ]
+        status = max(states, key=_PRIORITY.__getitem__)
+        counts[record["status"]] -= 1
+        counts[status] += 1
+        resolved.append(
+            {
+                **{k: v for k, v in record.items() if k != "pending"},
+                "status": status,
+                "reasons": sorted(
+                    {*record["reasons"], *(f"finding:{f.id}" for f in matched)}
+                ),
+            }
+        )
+    return result.model_copy(
+        update={
+            "measurements": {**result.measurements, "counts": counts},
+            "evidence": {**result.evidence, "windows": resolved},
+        }
+    )

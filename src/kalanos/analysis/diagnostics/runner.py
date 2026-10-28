@@ -257,56 +257,13 @@ def diagnose_episode(
                     spec,
                     [*findings, *extra],
                     [r for r in items if r.kind == "vision"],
+                    pending,
                 ),
                 skipped=skip,
                 subject=spec.anchor.model_dump(),
             )
         )
     return items
-
-
-def episode_diagnostics(
-    episodes: Sequence[Episode],
-    plan: DiagnosticPlan,
-    tier: ExecutionTier,
-    findings: Sequence[Finding],
-    policies: Mapping[str, Policy],
-    graded: Mapping[str, GradedEpisode],
-) -> dict[str, list[DiagnosticResult]]:
-    """Run `diagnose_episode` on each episode.
-
-    Parameters
-    ----------
-    episodes : list[Episode]
-        The loaded episodes to run the diagnostics on.
-    plan : DiagnosticPlan
-        The diagnostics to run.
-    tier : ExecutionTier
-        The run's execution tier; the metadata tier skips every payload diagnostic.
-    findings : list[Finding]
-        The run's findings so far, which the window diagnostics anchor on.
-    policies : Mapping[str, Policy]
-        Each episode's policy, by id; its `diagnostic_reviews` set the review triggers.
-    graded : Mapping[str, GradedEpisode]
-        Each episode graded, by id; the vision diagnostic reads its camera reads.
-
-    Returns
-    -------
-    dict[str, list[DiagnosticResult]]
-        Each episode's diagnostic results, by id.
-    """
-
-    return {
-        episode.id: diagnose_episode(
-            episode,
-            plan,
-            tier,
-            [f for f in findings if f.episode_id == episode.id],
-            policies[episode.id],
-            graded.get(episode.id),
-        )
-        for episode in episodes
-    }
 
 
 def finish_diagnostics(
