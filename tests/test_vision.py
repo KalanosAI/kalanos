@@ -66,6 +66,8 @@ from kalanos.analysis.models.metrics import (
     StreamContext,
 )
 from kalanos.analysis.models.provenance import ExecutionTier
+from kalanos.analysis.models.report import CameraSummary, GradedEpisode
+from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.reporting.assemble import (
     grade_episode,
     grade_stream,
@@ -75,6 +77,7 @@ from kalanos.analysis.scoring.cameras import (
     _TOO_FEW_FOOTAGE,
     FootageVariation,
     camera_key,
+    camera_samples,
     compare_cameras,
 )
 from kalanos.analysis.scoring.score import score_episode
@@ -1853,6 +1856,29 @@ def test_a_payload_that_raises_still_grades_its_stream(monkeypatch):
     assert graded.frames is None
 
 
+def _compare(
+    episodes: list[GradedEpisode], **options
+) -> tuple[list[CameraSummary], list[Finding]]:
+    """Compare the cameras of graded episodes, through their camera samples.
+
+    Parameters
+    ----------
+    episodes : list[GradedEpisode]
+        The graded episodes.
+    **options
+        Passed on to `compare_cameras`.
+
+    Returns
+    -------
+    tuple of (list of CameraSummary, list of Finding)
+        What `compare_cameras` returns.
+    """
+
+    return compare_cameras(
+        [sample for e in episodes for sample in camera_samples(e)], **options
+    )
+
+
 def _visual_variation(streams: list[Stream]):
     """Grade each of `streams` as one episode; return the camera's visual variation."""
 
@@ -1868,9 +1894,7 @@ def _visual_variation(streams: list[Stream]):
         )[0]
         for index, stream in enumerate(streams)
     ]
-    (summary,), _findings = compare_cameras(
-        episodes, grades_vision=True, footage=footage
-    )
+    (summary,), _findings = _compare(episodes, grades_vision=True, footage=footage)
     return summary.visual_variation
 
 

@@ -47,6 +47,8 @@ class CoverageRow(BaseModel):
         return self
 
 
+# Every count here must stay a sum over episodes:
+# `assemble_report` merges episode ledgers in batches, which only sums can survive.
 class Coverage(BaseModel):
     metrics: list[CoverageRow] = Field(default_factory=list)
     capabilities: list[CoverageRow] = Field(default_factory=list)

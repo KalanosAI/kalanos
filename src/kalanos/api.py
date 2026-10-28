@@ -34,6 +34,7 @@ from kalanos.analysis.models.provenance import (
     SourceEvidence,
 )
 from kalanos.analysis.models.report import Report
+from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.source_identity import hash_local_source
 from kalanos.assets.bundle import prepare_configuration
 from kalanos.core.settings import get_settings
@@ -170,6 +171,68 @@ def grade(
     with where it came from.
     """
 
+    report = _grade(
+        path,
+        policy=policy,
+        dictionary=dictionary,
+        limits=limits,
+        vision_samples=vision_samples,
+        full_frame_scan=full_frame_scan,
+        mapping=mapping,
+        mapping_file=mapping_file,
+        sidecar=sidecar,
+        bundle=bundle,
+        tier=tier,
+        hash_source=hash_source,
+        keep_episodes=True,
+    )
+    # A kept run holds its episodes, so it is always a `Report`.
+    assert isinstance(report, Report)
+    return report
+
+
+def _grade(
+    path: str | os.PathLike[str] | UPath,
+    *,
+    policy: Policy | None = None,
+    dictionary: Dictionary | None = None,
+    limits: SourceLimits | None = None,
+    vision_samples: int | None = None,
+    full_frame_scan: bool | None = None,
+    mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    mapping_file: str | os.PathLike[str] | UPath | None = None,
+    sidecar: bool = True,
+    bundle: str | os.PathLike[str] | UPath | Bundle | None = None,
+    tier: ExecutionTier | None = None,
+    hash_source: bool = False,
+    keep_episodes: bool,
+) -> Report | StreamedReport:
+    """Grade a recording or a folder, as `grade` does, choosing how episodes are held.
+
+    Parameters
+    ----------
+    path, policy, dictionary, limits, vision_samples, full_frame_scan, mapping
+        As `grade` takes them.
+    mapping_file, sidecar, bundle, tier, hash_source
+        As `grade` takes them.
+    keep_episodes : bool
+        Return a `Report` holding every graded episode.
+        Unset, a `StreamedReport` holds them as compressed JSON,
+        unless the bundle carries a diagnostics plan.
+
+    Returns
+    -------
+    Report or StreamedReport
+        Every recording graded, plus every file skipped or refused, with its reason.
+
+    Raises
+    ------
+    SourceUnavailable, SourceTooLarge, NothingToGrade, AdapterTie
+        As `grade` raises them.
+    ValueError, MappingOverrideError, ConfigurationError, MixedWeights
+        As `grade` raises them.
+    """
+
     if vision_samples is not None and vision_samples < 1:
         raise ValueError(f"vision_samples must be at least 1; got {vision_samples}")
 
@@ -236,7 +299,7 @@ def grade(
     # so an empty report means the path itself held nothing.
     vision = config.vision
     try:
-        report = pipeline.run(
+        result = pipeline.run(
             root,
             policy=policy,
             source=source,
@@ -247,12 +310,15 @@ def grade(
             vision_samples=vision.sample_frames,
             full_frame_scan=vision.full_frame_scan,
             vision=vision,
+            keep_episodes=keep_episodes,
         )
     finally:
         # Remote video stays open across episodes; a later grade must not
         # read a file that changed since through a stale handle.
         close_remote_handles()
-    if not (report.episodes or report.skipped or report.unresolved):
+    report = result.header if isinstance(result, StreamedReport) else result
+    graded = result.blobs if isinstance(result, StreamedReport) else report.episodes
+    if not (graded or report.skipped or report.unresolved):
         raise NothingToGrade(f"{root} contains nothing to grade")
     if hash_source:
         source_after = hash_local_source(root)
@@ -262,4 +328,4 @@ def grade(
         # run_info above is never None, and pipeline.run threads it through unchanged
         assert report.run is not None
         report.run.source = source_after
-    return report
+    return result

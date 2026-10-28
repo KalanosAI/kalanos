@@ -80,7 +80,7 @@ def _run(*frames: pl.DataFrame):
     for episode, frame in zip(episodes, frames, strict=True):
         fingerprint = payload_fingerprint(frame, list(frame.columns))
         fingerprints[episode.id] = {key: fingerprint} if fingerprint else {}
-    return find_duplicate_episodes(episodes, fingerprints)
+    return find_duplicate_episodes([e.id for e in episodes], fingerprints)
 
 
 def _find(*frames: pl.DataFrame):

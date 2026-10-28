@@ -10,7 +10,8 @@ only the rows inside them follow the dataset.
 
 # Built-in
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 
 # External
 from rich.console import Console
@@ -20,6 +21,8 @@ from rich.text import Text
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card.sections import (
     CardContext,
+    CardRow,
+    card_rows,
     coverage,
     families,
     findings,
@@ -29,6 +32,7 @@ from kalanos.analysis.reporting.card.sections import (
     needs_attention,
     not_analysed,
     title,
+    unmapped_types,
 )
 from kalanos.analysis.reporting.card.theme import ASCII, UNICODE
 
@@ -77,6 +81,8 @@ def render_terminal(
     color: bool = False,
     width: int | None = None,
     report_path: str | None = None,
+    episodes: Sequence[CardRow] | None = None,
+    unmapped: AbstractSet[str] | None = None,
 ) -> str:
     """Render a Report as a report card for the terminal.
 
@@ -92,6 +98,12 @@ def render_terminal(
         `None` falls back to a fixed default.
     report_path : str or None
         Where the full report was written, for the footer to point at.
+    episodes : Sequence[CardRow] or None
+        The episodes that did not pass, when `report` holds none of its episodes.
+        `None` reads them from `report.episodes`.
+    unmapped : AbstractSet[str] or None
+        The unmapped stream types, when `report` holds none of its episodes.
+        `None` reads them from `report.episodes`.
 
     Returns
     -------
@@ -103,6 +115,10 @@ def render_terminal(
         theme=UNICODE if color else ASCII,
         width=max(width or _DEFAULT_WIDTH, _MIN_WIDTH),
         report_path=report_path,
+        episodes=tuple(card_rows(report.episodes) if episodes is None else episodes),
+        unmapped_types=frozenset(
+            unmapped_types(report.episodes) if unmapped is None else unmapped
+        ),
     )
     buffer = io.StringIO()
     console = Console(

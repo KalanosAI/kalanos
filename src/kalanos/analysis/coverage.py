@@ -511,8 +511,25 @@ def episode_coverage(
     )
 
 
-def report_coverage(episodes: list[GradedEpisode], inventory: Inventory) -> Coverage:
-    coverages = [e.coverage for e in episodes if e.coverage is not None]
+def report_coverage(
+    ledgers: Iterable[Coverage | None], inventory: Inventory
+) -> Coverage:
+    """Merge every episode's coverage ledger into the dataset's.
+
+    Parameters
+    ----------
+    ledgers : Iterable[Coverage or None]
+        Each episode's ledger; an episode without one adds nothing.
+    inventory : Inventory
+        Which episodes were expected, loaded and failed.
+
+    Returns
+    -------
+    Coverage
+        The merged rows and counts, with the inventory's gaps.
+    """
+
+    coverages = [c for c in ledgers if c is not None]
     return Coverage(
         metrics=merge_rows(r for c in coverages for r in c.metrics),
         capabilities=merge_rows(r for c in coverages for r in c.capabilities),

@@ -39,6 +39,96 @@ class UnsupportedEncoding(ValueError):
     """A compact report declares an encoding version this kalanos can't read."""
 
 
+class KeyCounter:
+    """Counts keys across several parts of one document, then aliases each part.
+
+    Counting every part before aliasing any gives the aliases `encode_keys`
+    gives the whole document, without holding the parts together.
+    """
+
+    def __init__(self) -> None:
+        """Start with no keys counted."""
+
+        self._counts: Counter[str] = Counter()
+        self._aliases: dict[str, str] | None = None
+
+    def count(self, value: Any) -> None:
+        """Count every key in one part of the document, at every depth.
+
+        Parameters
+        ----------
+        value : Any
+            A part of a dumped report.
+
+        Raises
+        ------
+        RuntimeError
+            If a part was already aliased, which fixed the table.
+        """
+
+        if self._aliases is not None:
+            raise RuntimeError("keys counted after the key table was fixed")
+        match value:
+            case dict():
+                self._counts.update(value.keys())
+                for v in value.values():
+                    self.count(v)
+            case list():
+                for v in value:
+                    self.count(v)
+
+    def keys(self) -> list[str]:
+        """Every key counted, most frequent first, ties by key.
+
+        Returns
+        -------
+        list[str]
+            The key whose alias is `alias(i)` at index `i`.
+        """
+
+        return sorted(self._counts, key=lambda k: (-self._counts[k], k))
+
+    def table(self) -> dict[str, Any]:
+        """The key table a compact report holds under `_compact`.
+
+        Returns
+        -------
+        dict[str, Any]
+            The encoding version and `keys()`.
+        """
+
+        return {"version": COMPACT_VERSION, "keys": self.keys()}
+
+    def walk(self, value: Any) -> Any:
+        """Replace every key in one counted part of the document with its alias.
+
+        Parameters
+        ----------
+        value : Any
+            A part of the document whose keys were all counted. Left unchanged.
+
+        Returns
+        -------
+        Any
+            A copy of `value` with every key at every depth replaced by its alias.
+        """
+
+        if self._aliases is None:
+            self._aliases = {key: alias(i) for i, key in enumerate(self.keys())}
+        aliases = self._aliases
+
+        def walk(value: Any) -> Any:
+            match value:
+                case dict():
+                    return {aliases[k]: walk(v) for k, v in value.items()}
+                case list():
+                    return [walk(v) for v in value]
+                case _:
+                    return value
+
+        return walk(value)
+
+
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
@@ -107,33 +197,9 @@ def encode_keys(data: dict[str, Any]) -> dict[str, Any]:
     if TABLE_KEY in data:
         raise ValueError(f"a report to encode must not hold {TABLE_KEY!r}")
 
-    counts: Counter[str] = Counter()
-
-    def count(value: Any) -> None:
-        match value:
-            case dict():
-                counts.update(value.keys())
-                for v in value.values():
-                    count(v)
-            case list():
-                for v in value:
-                    count(v)
-
-    count(data)
-    keys = sorted(counts, key=lambda k: (-counts[k], k))
-    aliases = {key: alias(i) for i, key in enumerate(keys)}
-
-    def walk(value: Any) -> Any:
-        match value:
-            case dict():
-                return {aliases[k]: walk(v) for k, v in value.items()}
-            case list():
-                return [walk(v) for v in value]
-            case _:
-                return value
-
-    table = {"version": COMPACT_VERSION, "keys": keys}
-    return {TABLE_KEY: table, **walk(data)}
+    counter = KeyCounter()
+    counter.count(data)
+    return {TABLE_KEY: counter.table(), **counter.walk(data)}
 
 
 def _table_keys(data: dict[str, Any]) -> list[str]:

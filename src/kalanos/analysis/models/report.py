@@ -20,6 +20,7 @@ and a path is a real filesystem path.
 # Built-in
 import math
 from collections import Counter
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Literal
 
@@ -1050,7 +1051,8 @@ class Report(BaseModel):
         handler : SerializerFunctionWrapHandler
             Pydantic's own serializer for this model.
         info : SerializationInfo
-            The dump's settings; only JSON mode is coded.
+            The dump's settings; only JSON mode is coded,
+            and not when the context holds `raw_reasons`.
 
         Returns
         -------
@@ -1060,7 +1062,10 @@ class Report(BaseModel):
         """
 
         data = handler(self)
-        return encode_reasons(data) if info.mode_is_json() else data
+        # The streaming writer codes the header and the episodes with one table,
+        # so it needs the header's texts uncoded.
+        raw = isinstance(info.context, dict) and info.context.get("raw_reasons")
+        return encode_reasons(data) if info.mode_is_json() and not raw else data
 
     @model_validator(mode="wrap")
     @classmethod
@@ -1090,130 +1095,182 @@ class Report(BaseModel):
     def _decisions_agree(self) -> "Report":
         """Refuse a report whose surfaces could disagree about an episode.
 
-        Every episode carries an eligibility; its compatibility `train_ready`
-        mirrors it exactly; the gate's failing list is exactly the blocked
-        episodes; the counts partition the episodes plus the failed ones;
-        and every index in `duplicates` names an episode.
+        See `check_agreement`.
         """
 
-        episode_ids = [e.id for e in self.episodes]
-        if len(episode_ids) != len(set(episode_ids)):
-            raise ValueError("duplicate episode ids")
-        near = self.duplicates.near
-        indices = [
-            *(k for group in self.duplicates.exact for k in group),
-            *near.episode,
-            *(k for partners in near.partners for k in partners),
-        ]
-        if any(not 0 <= k < len(episode_ids) for k in indices):
-            raise ValueError("duplicates names an episode index outside episodes")
-        if self.coverage is not None:
-            from kalanos.analysis.coverage import report_coverage
-
-            if self.inventory is None or any(e.coverage is None for e in self.episodes):
-                raise ValueError("coverage requires episode ledgers and inventory")
-            if self.coverage != report_coverage(self.episodes, self.inventory):
-                raise ValueError("report coverage does not reconcile with episodes")
-        if self.diagnostics is not None:
-            from kalanos.analysis.models.provenance import content_digest
-
-            if self.diagnostics.plan_digest != content_digest(
-                self.diagnostics.plan.model_dump(mode="json")
-            ):
-                raise ValueError(
-                    "diagnostic plan digest disagrees with its configuration"
+        check_agreement(
+            self,
+            [
+                AgreementRow(
+                    id=e.id, eligibility=e.eligibility, train_ready=e.score.train_ready
                 )
-            if any(
-                r.episode_id is not None and r.episode_id not in episode_ids
-                for r in self.diagnostics.results
-            ):
-                raise ValueError("diagnostic result names an episode not in the report")
-            keys = [(r.episode_id, r.kind, r.id) for r in self.diagnostics.results]
-            if len(keys) != len(set(keys)):
-                raise ValueError("duplicate diagnostic result addresses")
-        ids = [f.id for f in self.findings if f.id is not None]
-        if len(ids) != len(set(ids)):
-            raise ValueError("duplicate finding ids")
-        for episode in self.episodes:
-            if episode.eligibility is None:
-                raise ValueError(f"episode {episode.id!r} has no eligibility")
-            expected = episode.eligibility.compatibility_train_ready
-            if episode.score.train_ready != expected:
-                raise ValueError(
-                    f"episode {episode.id!r}: train_ready={episode.score.train_ready} "
-                    f"contradicts eligibility {episode.eligibility.status.value!r}"
-                )
-        blocked = {
-            e.id
-            for e in self.episodes
-            if e.eligibility is not None
-            and e.eligibility.status == EligibilityStatus.BLOCKED
-        }
-        if self.gate is not None:
-            listed = {item.episode_id for item in self.gate.failing_episodes}
-            if listed != blocked:
-                raise ValueError(
-                    "gate.failing_episodes is not the set of blocked episodes"
-                )
-        if self.eligibility_counts is not None:
-            counts = self.eligibility_counts
-            failed = len(self.inventory.failed) if self.inventory else 0
-            gap = self.inventory.unresolved if self.inventory else 0
-            if counts.total != len(self.episodes) + failed + gap:
-                raise ValueError(
-                    "eligibility_counts.total does not cover the inventory"
-                )
-            tally = Counter(
-                e.eligibility.status.value
                 for e in self.episodes
-                if e.eligibility is not None
-            )
-            tally["unknown"] += failed + gap
-            for field, status in (
-                ("pass_count", "pass"),
-                ("blocked", "blocked"),
-                ("review", "review"),
-                ("unknown", "unknown"),
-            ):
-                if getattr(counts, field) != tally[status]:
-                    raise ValueError(
-                        f"eligibility_counts.{field} disagrees with episode "
-                        "decisions and failed/unresolved inventory"
-                    )
-            expected_share = (
-                counts.pass_count / counts.total
-                if counts.inventory_complete and counts.total
-                else None
-            )
-            if counts.confirmed_eligible_share is not None and (
-                expected_share is None
-                or not math.isclose(
-                    counts.confirmed_eligible_share,
-                    expected_share,
-                    rel_tol=0,
-                    abs_tol=1e-12,
-                )
-            ):
-                raise ValueError("confirmed_eligible_share disagrees with the counts")
-            if self.inventory is not None and (
-                counts.inventory_complete != self.inventory.complete
-            ):
-                raise ValueError(
-                    "eligibility_counts and inventory disagree on completeness"
-                )
-            # The dataset compatibility boolean is a function of the counts.
-            expected_ready = (
-                False
-                if counts.blocked
-                else True
-                if counts.inventory_complete
-                and counts.total
-                and counts.pass_count == counts.total
-                else None
-            )
-            if self.score.train_ready != expected_ready:
-                raise ValueError(
-                    f"dataset train_ready={self.score.train_ready} contradicts the "
-                    f"eligibility counts (expected {expected_ready})"
-                )
+            ],
+            [e.coverage for e in self.episodes],
+        )
         return self
+
+
+class AgreementRow(BaseModel):
+    """What `check_agreement` reads of one episode.
+
+    Attributes
+    ----------
+    id : str
+        The episode's id.
+    eligibility : EpisodeEligibility or None
+        Its decision.
+    train_ready : bool or None
+        Its score's compatibility `train_ready`.
+    """
+
+    id: str
+    eligibility: EpisodeEligibility | None
+    train_ready: bool | None
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def check_agreement(
+    report: Report,
+    rows: Sequence[AgreementRow],
+    ledgers: Sequence[AnalysisCoverage | None],
+) -> None:
+    """Refuse a report whose surfaces could disagree about an episode.
+
+    Every episode carries an eligibility; its compatibility `train_ready`
+    mirrors it exactly; the gate's failing list is exactly the blocked
+    episodes; the counts partition the episodes plus the failed ones;
+    and every index in `duplicates` names an episode.
+
+    Parameters
+    ----------
+    report : Report
+        The report; its own `episodes` are not read.
+    rows : Sequence[AgreementRow]
+        Its episodes, in report order.
+    ledgers : Sequence[Coverage or None]
+        Its episodes' coverage ledgers,
+        or merges of them by `report_coverage`, which merges associatively.
+
+    Raises
+    ------
+    ValueError
+        If any of those surfaces disagree.
+    """
+
+    episode_ids = [e.id for e in rows]
+    if len(episode_ids) != len(set(episode_ids)):
+        raise ValueError("duplicate episode ids")
+    near = report.duplicates.near
+    indices = [
+        *(k for group in report.duplicates.exact for k in group),
+        *near.episode,
+        *(k for partners in near.partners for k in partners),
+    ]
+    if any(not 0 <= k < len(episode_ids) for k in indices):
+        raise ValueError("duplicates names an episode index outside episodes")
+    if report.coverage is not None:
+        from kalanos.analysis.coverage import report_coverage
+
+        if report.inventory is None or any(c is None for c in ledgers):
+            raise ValueError("coverage requires episode ledgers and inventory")
+        if report.coverage != report_coverage(ledgers, report.inventory):
+            raise ValueError("report coverage does not reconcile with episodes")
+    if report.diagnostics is not None:
+        from kalanos.analysis.models.provenance import content_digest
+
+        if report.diagnostics.plan_digest != content_digest(
+            report.diagnostics.plan.model_dump(mode="json")
+        ):
+            raise ValueError("diagnostic plan digest disagrees with its configuration")
+        if any(
+            r.episode_id is not None and r.episode_id not in episode_ids
+            for r in report.diagnostics.results
+        ):
+            raise ValueError("diagnostic result names an episode not in the report")
+        keys = [(r.episode_id, r.kind, r.id) for r in report.diagnostics.results]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate diagnostic result addresses")
+    ids = [f.id for f in report.findings if f.id is not None]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate finding ids")
+    for row in rows:
+        if row.eligibility is None:
+            raise ValueError(f"episode {row.id!r} has no eligibility")
+        expected = row.eligibility.compatibility_train_ready
+        if row.train_ready != expected:
+            raise ValueError(
+                f"episode {row.id!r}: train_ready={row.train_ready} "
+                f"contradicts eligibility {row.eligibility.status.value!r}"
+            )
+    blocked = {
+        e.id
+        for e in rows
+        if e.eligibility is not None
+        and e.eligibility.status == EligibilityStatus.BLOCKED
+    }
+    if report.gate is not None:
+        listed = {item.episode_id for item in report.gate.failing_episodes}
+        if listed != blocked:
+            raise ValueError("gate.failing_episodes is not the set of blocked episodes")
+    if report.eligibility_counts is not None:
+        counts = report.eligibility_counts
+        failed = len(report.inventory.failed) if report.inventory else 0
+        gap = report.inventory.unresolved if report.inventory else 0
+        if counts.total != len(rows) + failed + gap:
+            raise ValueError("eligibility_counts.total does not cover the inventory")
+        tally = Counter(
+            e.eligibility.status.value for e in rows if e.eligibility is not None
+        )
+        tally["unknown"] += failed + gap
+        for field, status in (
+            ("pass_count", "pass"),
+            ("blocked", "blocked"),
+            ("review", "review"),
+            ("unknown", "unknown"),
+        ):
+            if getattr(counts, field) != tally[status]:
+                raise ValueError(
+                    f"eligibility_counts.{field} disagrees with episode "
+                    "decisions and failed/unresolved inventory"
+                )
+        expected_share = (
+            counts.pass_count / counts.total
+            if counts.inventory_complete and counts.total
+            else None
+        )
+        if counts.confirmed_eligible_share is not None and (
+            expected_share is None
+            or not math.isclose(
+                counts.confirmed_eligible_share,
+                expected_share,
+                rel_tol=0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("confirmed_eligible_share disagrees with the counts")
+        if report.inventory is not None and (
+            counts.inventory_complete != report.inventory.complete
+        ):
+            raise ValueError(
+                "eligibility_counts and inventory disagree on completeness"
+            )
+        # The dataset compatibility boolean is a function of the counts.
+        expected_ready = (
+            False
+            if counts.blocked
+            else True
+            if counts.inventory_complete
+            and counts.total
+            and counts.pass_count == counts.total
+            else None
+        )
+        if report.score.train_ready != expected_ready:
+            raise ValueError(
+                f"dataset train_ready={report.score.train_ready} contradicts the "
+                f"eligibility counts (expected {expected_ready})"
+            )

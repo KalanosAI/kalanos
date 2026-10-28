@@ -473,7 +473,7 @@ def test_grade_publish_with_operational_errors_still_sends_then_exits_two(
     broken = graded.model_copy(
         update={"operational_errors": [{"stage": "test", "error": "failed"}]}
     )
-    monkeypatch.setattr(api, "grade", lambda *args, **kwargs: broken)
+    monkeypatch.setattr(api, "_grade", lambda *args, **kwargs: broken)
 
     result = _run(
         "grade", str(CSV_FIXTURE), "--publish", "--api-key", KEY, "--name", "acme/set"
