@@ -10,6 +10,7 @@ so that a second command reuses the pipeline rather than reimplementing part of 
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import importlib.metadata
 import io
 import json
 import logging
@@ -1210,6 +1211,25 @@ def new_metric(
     print(f"Next: pip install -e {written} && pytest {written}")
 
 
+def _print_version(value: bool) -> None:
+    """Print the installed kalanos version and exit, when `--version` is given.
+
+    Parameters
+    ----------
+    value : bool
+        Whether `--version` was passed.
+
+    Raises
+    ------
+    typer.Exit
+        Always when `value` is true, so no subcommand runs after the version.
+    """
+
+    if value:
+        print(f"kalanos {importlib.metadata.version('kalanos')}")
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     verbosity: Annotated[
@@ -1221,6 +1241,15 @@ def main(
             help="How much of the run to report on stderr.",
         ),
     ] = None,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_print_version,
+            is_eager=True,
+            help="Print the installed kalanos version and exit.",
+        ),
+    ] = False,
 ) -> None:
     """Anchor the command group, and configure logging before any subcommand runs.
 
@@ -1233,6 +1262,8 @@ def main(
     verbosity : Verbosity or None
         Overrides `Settings.verbosity` for this invocation.
         `None` falls back to the settings default.
+    version : bool
+        Handled eagerly by `_print_version`, which exits before this body runs.
     """
 
     configure_logging(verbosity if verbosity is not None else get_settings().verbosity)
