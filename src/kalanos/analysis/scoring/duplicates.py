@@ -53,7 +53,6 @@ from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
     DatasetWarning,
     DuplicateEpisodes,
-    GradedEpisode,
     NearDuplicateSummary,
     NearPairs,
     Variation,
@@ -810,7 +809,7 @@ def _finding(
 
 
 def find_duplicate_episodes(
-    episodes: Sequence[GradedEpisode],
+    episode_ids: Sequence[str],
     fingerprints: Mapping[str, Mapping[StreamKey, PayloadFingerprint]],
 ) -> tuple[DuplicateEpisodes, list[Finding], NearDuplicateSummary | None, Variation]:
     """Pair the episodes whose numeric payloads are identical or nearly so.
@@ -841,8 +840,8 @@ def find_duplicate_episodes(
 
     Parameters
     ----------
-    episodes : Sequence[GradedEpisode]
-        Every graded episode, which sets the order of pairs and findings,
+    episode_ids : Sequence[str]
+        Every graded episode's id, which sets the order of pairs and findings,
         and whose positions the pairs' indices are.
         `Report.episodes` must keep this order.
     fingerprints : Mapping
@@ -862,14 +861,14 @@ def find_duplicate_episodes(
     """
 
     # Step 1: each taking part episode's fingerprints, grouped by what they hold.
-    order = {episode.id: index for index, episode in enumerate(episodes)}
+    order = {episode_id: index for index, episode_id in enumerate(episode_ids)}
     groups: dict[tuple, list[tuple[str, dict[StreamKey, PayloadFingerprint]]]] = {}
-    for episode in episodes:
-        prints = dict(fingerprints.get(episode.id, {}))
+    for episode_id in episode_ids:
+        prints = dict(fingerprints.get(episode_id, {}))
         if not any(p.varies for p in prints.values()):
             continue
         signature = tuple(sorted((key, tuple(p.channels)) for key, p in prints.items()))
-        groups.setdefault(signature, []).append((episode.id, prints))
+        groups.setdefault(signature, []).append((episode_id, prints))
 
     # Each group's episodes by its earliest one, which comes first.
     copies: dict[str, list[str]] = {}

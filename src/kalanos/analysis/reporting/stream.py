@@ -11,7 +11,9 @@ so it makes two passes over the episodes: one to build the tables, one to write.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
-from collections.abc import Callable, Iterable
+import zlib
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 # External
@@ -20,10 +22,96 @@ from pydantic_core import to_json
 # Internal
 from kalanos.analysis.models.compact_keys import TABLE_KEY as COMPACT_KEY
 from kalanos.analysis.models.compact_keys import KeyCounter
+from kalanos.analysis.models.eligibility import EpisodeEligibility
 from kalanos.analysis.models.reason_codes import TABLE_KEY as REASONS_KEY
 from kalanos.analysis.models.reason_codes import ReasonCoder
 from kalanos.analysis.models.report import GradedEpisode, Report
+from kalanos.analysis.reporting.card.sections import CardRow
 from kalanos.analysis.reporting.omit import omit_empty_defaults
+
+
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+@dataclass
+class StreamedReport:
+    """A graded run whose episodes are held as compressed JSON, not as models.
+
+    Grading a large dataset into a `Report` holds every graded episode as a model,
+    several times the size of its JSON.
+    This holds each as the zlib-compressed JSON of its model,
+    and the few values the card and the exit code read of it.
+
+    Attributes
+    ----------
+    header : Report
+        Every field of the report but `episodes`, which is empty.
+        It was not validated as a `Report`, since it holds no episodes;
+        `check_agreement` checked it against the episodes instead.
+    blobs : list[bytes]
+        Each graded episode's `model_dump_json`, compressed, in report order,
+        before its eligibility was decided.
+    decisions : dict[str, EpisodeEligibility]
+        Each episode's eligibility, by id.
+    card_rows : list[CardRow]
+        What the card reads of the episodes that did not pass.
+    unmapped_types : frozenset[str]
+        Every stream type no mapping typed, across the episodes.
+    """
+
+    header: Report
+    blobs: list[bytes]
+    decisions: dict[str, EpisodeEligibility]
+    card_rows: list[CardRow]
+    unmapped_types: frozenset[str]
+
+    def graded_episodes(self) -> Iterator[GradedEpisode]:
+        """Rebuild each graded episode, with its decision, in report order.
+
+        Yields
+        ------
+        GradedEpisode
+            The episode as a `Report` would hold it.
+        """
+
+        for blob in self.blobs:
+            episode = GradedEpisode.model_validate_json(zlib.decompress(blob))
+            decision = self.decisions[episode.id]
+            yield episode.model_copy(
+                update={
+                    "eligibility": decision,
+                    "score": episode.score.model_copy(
+                        update={"train_ready": decision.compatibility_train_ready}
+                    ),
+                }
+            )
+
+    def episodes(self) -> Iterator[dict[str, Any]]:
+        """Dump each episode as `episode_data` does, one at a time.
+
+        Yields
+        ------
+        dict[str, Any]
+            The episode's JSON-mode dict, reason texts uncoded.
+        """
+
+        for episode in self.graded_episodes():
+            yield episode_data(episode)
+
+    def write(self, out: BinaryIO, *, compact: bool = False) -> None:
+        """Write the report's JSON, as `render_json` would write the whole `Report`.
+
+        Parameters
+        ----------
+        out : BinaryIO
+            Where the JSON goes.
+        compact : bool
+            Replace every key with a short alias, as `render_compact_json` does.
+        """
+
+        write_report_stream(self.header, self.episodes, out, compact=compact)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀

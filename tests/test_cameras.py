@@ -16,14 +16,16 @@ from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.report import (
     CameraFrame,
     CameraFrames,
+    CameraSummary,
     GradedEpisode,
     GradedStream,
     round_nrmse,
 )
-from kalanos.analysis.models.scoring import ScoreResult
+from kalanos.analysis.models.scoring import Finding, ScoreResult
 from kalanos.analysis.scoring.cameras import (
     _TOO_FEW_FOOTAGE,
     FootageVariation,
+    camera_samples,
     compare_cameras,
 )
 
@@ -145,6 +147,29 @@ def _camera(
     ]
 
 
+def _compare(
+    episodes: list[GradedEpisode], **options
+) -> tuple[list[CameraSummary], list[Finding]]:
+    """Compare the cameras of graded episodes, through their camera samples.
+
+    Parameters
+    ----------
+    episodes : list[GradedEpisode]
+        The graded episodes.
+    **options
+        Passed on to `compare_cameras`.
+
+    Returns
+    -------
+    tuple of (list of CameraSummary, list of Finding)
+        What `compare_cameras` returns.
+    """
+
+    return compare_cameras(
+        [sample for e in episodes for sample in camera_samples(e)], **options
+    )
+
+
 def _vectors(count: int, length: int, seed: int = 42) -> list:
     """`count` seeded uniform vectors in [0, 1] of `length` float32 values."""
 
@@ -184,7 +209,7 @@ def test_a_blurred_episode_is_flagged_against_its_camera():
     variances = [*CLEAN_VARIANCES]
     variances[3] = 20.3
 
-    _summaries, findings = compare_cameras(
+    _summaries, findings = _compare(
         _camera(variances, CLEAN_LEVELS), grades_vision=True
     )
 
@@ -199,9 +224,7 @@ def test_a_dimmed_episode_carries_both_findings():
     variances, levels = [*CLEAN_VARIANCES], [*CLEAN_LEVELS]
     variances[6], levels[6] = 26.4, 46.2
 
-    _summaries, findings = compare_cameras(
-        _camera(variances, levels), grades_vision=True
-    )
+    _summaries, findings = _compare(_camera(variances, levels), grades_vision=True)
 
     assert sorted((f.metric_id, f.episode_id) for f in findings) == [
         ("vision.blur_vs_camera", "episode_6"),
@@ -212,7 +235,7 @@ def test_a_dimmed_episode_carries_both_findings():
 def test_clean_episodes_raise_nothing():
     """A camera's natural spread across episodes is no outlier."""
 
-    summaries, findings = compare_cameras(
+    summaries, findings = _compare(
         _camera(CLEAN_VARIANCES, CLEAN_LEVELS), grades_vision=True
     )
 
@@ -226,7 +249,7 @@ def test_fewer_than_five_episodes_are_not_compared():
     variances = [*CLEAN_VARIANCES[:4]]
     variances[0] = 20.3
 
-    summaries, findings = compare_cameras(
+    summaries, findings = _compare(
         _camera(variances, CLEAN_LEVELS[:4]), grades_vision=True
     )
 
@@ -244,7 +267,7 @@ def test_a_camera_exposed_one_way_in_every_episode_is_described_not_flagged(
 ):
     """A simulator rendering on white, or a camera always dark, is a trait."""
 
-    summaries, findings = compare_cameras(
+    summaries, findings = _compare(
         _camera(CLEAN_VARIANCES, [level] * 10, **shares), grades_vision=True
     )
 
@@ -259,7 +282,7 @@ def test_a_value_measured_in_too_few_episodes_is_named():
     for episode in episodes[:1]:
         del episode.streams[0].metrics["exposure_level"]
 
-    summaries, _findings = compare_cameras(episodes, grades_vision=True)
+    summaries, _findings = _compare(episodes, grades_vision=True)
 
     assert summaries[0].compared
     assert summaries[0].exposure_level is not None
@@ -273,8 +296,8 @@ def test_the_consequence_follows_the_scope():
     variances[3] = 20.3
     episodes = _camera(variances, CLEAN_LEVELS)
 
-    _s, graded = compare_cameras(episodes, grades_vision=True)
-    _s, reported = compare_cameras(episodes, grades_vision=False)
+    _s, graded = _compare(episodes, grades_vision=True)
+    _s, reported = _compare(episodes, grades_vision=False)
 
     assert [(f.severity.value, f.consequence.value) for f in graded] == [
         ("critical", "review")
@@ -299,7 +322,7 @@ def test_cameras_are_keyed_by_source_field_before_taxonomy_type():
         )
     ]
 
-    summaries, _findings = compare_cameras(episodes, grades_vision=True)
+    summaries, _findings = _compare(episodes, grades_vision=True)
 
     assert sorted(s.camera for s in summaries) == [
         f"{CAMERA}[left]",
@@ -325,7 +348,7 @@ def test_only_the_identical_pair_is_flagged():
     """Two episodes hashing alike repeat each other's footage;
     a third sharing a prefix does not."""
 
-    summaries, findings = compare_cameras(
+    summaries, findings = _compare(
         _hashed(["a", "b", "c"], ["a", "b", "c"], ["a", "b", "d"]),
         grades_vision=True,
     )
@@ -340,7 +363,7 @@ def test_only_the_identical_pair_is_flagged():
 def test_a_constant_camera_is_not_repeated_footage():
     """A camera showing one frame throughout cannot tell its episodes apart."""
 
-    summaries, findings = compare_cameras(
+    summaries, findings = _compare(
         _hashed(["a", "a", "a"], ["a", "a", "a"]), grades_vision=True
     )
 
@@ -356,7 +379,7 @@ def test_an_incomplete_read_is_not_compared():
         CLEAN_VARIANCES[1], CLEAN_LEVELS[1], luma=["a", "b", "c"], missing_rows=[2]
     )
 
-    _summaries, findings = compare_cameras(episodes, grades_vision=True)
+    _summaries, findings = _compare(episodes, grades_vision=True)
 
     assert findings == []
 
@@ -426,7 +449,7 @@ def test_a_camera_counts_once_per_episode():
 def test_without_footage_there_is_no_visual_variation():
     """The camera pass sets no visual variation when nothing gathered the footage."""
 
-    summaries, _findings = compare_cameras(
+    summaries, _findings = _compare(
         _camera(CLEAN_VARIANCES, CLEAN_LEVELS), grades_vision=True
     )
 

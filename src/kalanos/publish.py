@@ -205,11 +205,12 @@ def check_name(report: dict[str, Any], name: str | None) -> str | None:
 
 
 def publish_report(
-    report: dict[str, Any],
+    report: dict[str, Any] | None,
     *,
     api_key: str,
     name: str | None,
     hub_url: str,
+    body: bytes | None = None,
 ) -> Published:
     """Send `report` to the hub and return what it accepted.
 
@@ -219,14 +220,18 @@ def publish_report(
 
     Parameters
     ----------
-    report : dict
-        The report, sent unchanged.
+    report : dict or None
+        The report, sent unchanged. Not read when `body` is given.
     api_key : str
         A key `check_key` accepted.
     name : str or None
         `ORG/NAME` for a local dataset, sent only when given.
     hub_url : str
         A URL `check_hub_url` returned.
+    body : bytes or None
+        The whole request body, `{"report": ..., "name": ...}` already serialized,
+        sent instead of one built from `report` and `name`.
+        It lets a report too large to hold as a dict be sent as written.
 
     Raises
     ------
@@ -234,12 +239,14 @@ def publish_report(
         When the hub refused the report or could not be reached.
     """
 
-    body: dict[str, Any] = {"report": report}
-    if name is not None:
-        body["name"] = name
+    if body is None:
+        message: dict[str, Any] = {"report": report}
+        if name is not None:
+            message["name"] = name
+        body = json.dumps(message).encode("utf-8")
     request = urllib.request.Request(
         f"{hub_url}/api/reports",
-        data=json.dumps(body).encode("utf-8"),
+        data=body,
         method="POST",
         headers={
             "Authorization": f"Bearer {api_key}",

@@ -10,6 +10,7 @@ so that a second command reuses the pipeline rather than reimplementing part of 
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 import json
 import logging
 import os
@@ -51,6 +52,7 @@ from kalanos.analysis.reporting.families import (
 )
 from kalanos.analysis.reporting.flagged import flagged_rows
 from kalanos.analysis.reporting.render import render_compact_json, render_json
+from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.bundle import load_bundle, load_bundle_policy
 from kalanos.assets.mapping import parse_map_argument
@@ -493,7 +495,9 @@ def grade(
         # Entering the status replaces sys.stderr with a proxy that prints log
         # records above the spinner, so the handler is pointed at it afterwards.
         with progress, logging_to(sys.stderr):
-            result = api.grade(
+            # Only a JSON report can be written an episode at a time,
+            # so any other format grades into a `Report` that holds every episode.
+            result = api._grade(
                 path,
                 limits=limits,
                 mapping=mapping,
@@ -504,10 +508,13 @@ def grade(
                 vision_samples=vision_samples,
                 full_frame_scan=True if full_frame_scan else None,
                 hash_source=hash_source,
+                keep_episodes=report is not None and report.suffix.lower() != ".json",
             )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
+    streamed = result if isinstance(result, StreamedReport) else None
+    header = result.header if isinstance(result, StreamedReport) else result
 
     # Step 2: write the report file, if asked, before anything reaches stdout,
     # so a failed write leaves stdout empty rather than a half card.
@@ -517,23 +524,35 @@ def grade(
             report if report.is_absolute() else get_settings().reports_dir / report
         )
         try:
-            write_report(result, destination, compact=compact)
+            if isinstance(result, StreamedReport):
+                with destination.open("wb") as out:
+                    result.write(out, compact=compact)
+            else:
+                write_report(result, destination, compact=compact)
         except (ValueError, OSError) as exc:
             print(f"kalanos: {exc}", file=sys.stderr)
             raise typer.Exit(code=2) from exc
 
     # Step 3: stdout is the model for a caller that wants to pipe it onward,
     # or the report card for a person reading the terminal.
-    if as_json:
-        print(render_compact_json(result) if compact else render_json(result))
+    if as_json and isinstance(result, StreamedReport):
+        # Text already printed sits in the text layer's buffer; it goes out first.
+        sys.stdout.flush()
+        result.write(sys.stdout.buffer, compact=compact)
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+    elif as_json:
+        print(render_compact_json(header) if compact else render_json(header))
     else:
         width = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
         print(
             render_terminal(
-                result,
+                header,
                 color=use_color,
                 width=width,
                 report_path=str(destination) if destination is not None else None,
+                episodes=streamed.card_rows if streamed is not None else None,
+                unmapped=streamed.unmapped_types if streamed is not None else None,
             )
         )
 
@@ -541,7 +560,12 @@ def grade(
     # A report with operational errors still goes: the hub decides what it can publish.
     if credentials is not None:
         hub, key = credentials
-        payload = json.loads(render_json(result))
+        # `check_name` reads only the source, so a streamed report needs no dump here.
+        payload = (
+            {"source": header.source.model_dump(mode="json") if header.source else None}
+            if streamed is not None
+            else json.loads(render_json(header))
+        )
         try:
             name = check_name(payload, name)
         except PublishError as exc:
@@ -553,11 +577,20 @@ def grade(
                     file=sys.stderr,
                 )
             raise typer.Exit(code=2) from exc
-        if compact:
+        body = None
+        if streamed is not None:
+            buffer = io.BytesIO()
+            buffer.write(b'{"report":')
+            streamed.write(buffer, compact=compact)
+            if name is not None:
+                buffer.write(b',"name":' + json.dumps(name).encode("utf-8"))
+            buffer.write(b"}")
+            body = buffer.getvalue()
+        elif compact:
             payload = encode_keys(payload)
         try:
             published = publish_report(
-                report=payload, api_key=key, name=name, hub_url=hub
+                report=payload, api_key=key, name=name, hub_url=hub, body=body
             )
         except PublishError as exc:
             print(f"kalanos: {exc}", file=sys.stderr)
@@ -567,16 +600,16 @@ def grade(
     # Step 4: the decision gate, from the one place decisions live. An
     # incomplete audit fails the default gate; operational errors already
     # left with exit 2 above, so this never masks one.
-    if result.operational_errors:
+    if header.operational_errors:
         print(
             "kalanos: analysis encountered operational errors; "
             "inspect the saved report",
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
-    for warning in gate_warnings(result, gate_on):
+    for warning in gate_warnings(header, gate_on):
         print(f"kalanos: {warning}", file=sys.stderr)
-    if failing_statuses(result, gate_on):
+    if failing_statuses(header, gate_on):
         raise typer.Exit(code=1)
 
 

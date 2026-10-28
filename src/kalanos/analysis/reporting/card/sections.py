@@ -10,6 +10,7 @@ or no lines at all when it has nothing to say about this report.
 
 # Built-in
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 # External
@@ -25,6 +26,7 @@ from kalanos.analysis.models.eligibility import (
     Consequence,
     EligibilityReason,
     EligibilityStatus,
+    EpisodeEligibility,
     ReasonKind,
     SufficiencyStatus,
 )
@@ -68,6 +70,28 @@ Cell = Text | str
 
 
 @dataclass(frozen=True)
+class CardRow:
+    """What the card reads of one episode that did not pass.
+
+    Attributes
+    ----------
+    id : str
+        The episode's id.
+    source_paths : list[UPath]
+        The files it was read from.
+    score : float or None
+        Its quality score.
+    eligibility : EpisodeEligibility
+        Its decision.
+    """
+
+    id: str
+    source_paths: list[UPath]
+    score: float | None
+    eligibility: EpisodeEligibility
+
+
+@dataclass(frozen=True)
 class CardContext:
     """What every section needs besides the report.
 
@@ -79,11 +103,17 @@ class CardContext:
         The column count no line may exceed.
     report_path : str or None
         Where `--report` wrote the full report, when it did.
+    episodes : tuple[CardRow, ...]
+        Every episode that did not pass, in report order.
+    unmapped_types : frozenset[str]
+        Every stream type no mapping typed, across the episodes.
     """
 
     theme: Theme
     width: int
     report_path: str | None
+    episodes: tuple[CardRow, ...]
+    unmapped_types: frozenset[str]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -200,7 +230,7 @@ def _under_root(path: UPath, root: UPath) -> str:
     return path.name if str(relative) == "." else str(relative)
 
 
-def _episode_label(episode: GradedEpisode, root: UPath) -> str:
+def _episode_label(episode: CardRow, root: UPath) -> str:
     """Name an episode by the files it was read from, or by its id.
 
     An episode read out of a container shares its files with its siblings,
@@ -208,7 +238,7 @@ def _episode_label(episode: GradedEpisode, root: UPath) -> str:
 
     Parameters
     ----------
-    episode : GradedEpisode
+    episode : CardRow
         The episode to name.
     root : UPath
         The dataset root its source paths are shown relative to.
@@ -550,6 +580,55 @@ def flagged_channels(report: Report, ctx: CardContext) -> list[Text]:
     return lines
 
 
+def card_rows(episodes: Iterable[GradedEpisode]) -> list[CardRow]:
+    """What the card reads of the episodes that did not pass.
+
+    Parameters
+    ----------
+    episodes : Iterable[GradedEpisode]
+        The report's episodes.
+
+    Returns
+    -------
+    list[CardRow]
+        One row per decided episode that did not pass, in report order.
+    """
+
+    return [
+        CardRow(
+            id=episode.id,
+            source_paths=list(episode.source_paths),
+            score=episode.score.score,
+            eligibility=episode.eligibility,
+        )
+        for episode in episodes
+        if episode.eligibility is not None
+        and episode.eligibility.status is not EligibilityStatus.PASS
+    ]
+
+
+def unmapped_types(episodes: Iterable[GradedEpisode]) -> frozenset[str]:
+    """Every stream type no mapping typed, across some episodes.
+
+    Parameters
+    ----------
+    episodes : Iterable[GradedEpisode]
+        Graded episodes.
+
+    Returns
+    -------
+    frozenset[str]
+        The taxonomy types of their unmapped streams.
+    """
+
+    return frozenset(
+        stream.taxonomy_type
+        for episode in episodes
+        for stream in episode.streams
+        if stream.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
+    )
+
+
 def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
     """The episodes that did not pass, worst first, and why each did not.
 
@@ -569,9 +648,8 @@ def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
 
     flagged = [
         (episode, episode.eligibility)
-        for episode in report.episodes
-        if episode.eligibility is not None
-        and episode.eligibility.status is not EligibilityStatus.PASS
+        for episode in ctx.episodes
+        if episode.eligibility.status is not EligibilityStatus.PASS
     ]
     if not flagged:
         return []
@@ -579,15 +657,15 @@ def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
     flagged.sort(
         key=lambda pair: (
             _PRECEDENCE.index(pair[1].status),
-            pair[0].score.score is None,
-            pair[0].score.score or 0.0,
+            pair[0].score is None,
+            pair[0].score or 0.0,
         )
     )
 
     pairs: list[tuple[Cell, Cell]] = []
     for episode, eligibility in flagged[:_MAX_ROWS]:
         status = eligibility.status
-        score = "n/a" if episode.score.score is None else f"{episode.score.score:.1f}"
+        score = "n/a" if episode.score is None else f"{episode.score:.1f}"
         reasons = _distinct(
             [_reason_label(r) for r in eligibility.reasons if r.status is status]
         )
@@ -706,12 +784,7 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         pairs.append((row.key.replace("_", " "), _parts(*parts, sep=sep)))
 
     # Counted by type, since `--map` types a source field once for every episode.
-    unmapped = {
-        stream.taxonomy_type
-        for episode in report.episodes
-        for stream in episode.streams
-        if stream.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
-    }
+    unmapped = ctx.unmapped_types
     if unmapped:
         noun = "stream type" if len(unmapped) == 1 else "stream types"
         pairs.append(

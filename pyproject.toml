@@ -157,5 +157,6 @@ venv = ".venv"
 testpaths = ["tests"]
 markers = [
     "integration: builds the wheel and installs it into a real venv; needs network access to resolve dependencies and dominates suite runtime, so it is excluded by default — run explicitly with `-m integration`.",
+    "slow: takes over ten seconds; skip it with `-m 'not slow'`.",
 ]
 addopts = "-m 'not integration'"

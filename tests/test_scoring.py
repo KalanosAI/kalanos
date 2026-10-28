@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 # Internal
+from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.domain import Channel
 from kalanos.analysis.models.errors import ConfigurationError, MixedWeights
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
@@ -24,6 +25,7 @@ from kalanos.analysis.models.scoring import (
     ScoreResult,
     Severity,
 )
+from kalanos.analysis.reporting.assemble import summarize
 from kalanos.analysis.scoring.score import (
     dataset_family_tails,
     dataset_metric_rollups,
@@ -1585,7 +1587,9 @@ def test_dataset_metric_rollups_count_distinct_subjects():
         for episode_id in ("e0", "e1")
     ]
 
-    rollups = dataset_metric_rollups(episodes)
+    rollups = dataset_metric_rollups(
+        [summarize(e, RequirementsSection()) for e in episodes]
+    )
 
     missing = rollups["integrity.missing_pct"]
     assert missing.level == Level.CHANNEL

@@ -577,7 +577,7 @@ def test_operational_errors_are_retained_and_fail_with_exit_two(monkeypatch):
     monkeypatch.setattr("kalanos.analysis.diagnostics.runner.timing", broken)
     r = audit([episode(signal("command"), signal())], DiagnosticPlan(timing=[pair()]))
     assert r.operational_errors
-    monkeypatch.setattr("kalanos.cli.api.grade", lambda *a, **k: r)
+    monkeypatch.setattr("kalanos.cli.api._grade", lambda *a, **k: r)
     invoked = CliRunner().invoke(app, ["grade", "fixture.csv", "--json"])
     assert invoked.exit_code == 2
     assert r.eligibility_counts is not None

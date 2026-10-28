@@ -15,9 +15,11 @@ It never writes a file; its caller, such as the CLI, does that with
 
 # Built-in
 import logging
+from collections import deque
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from time import perf_counter
+from typing import Literal, overload
 
 # External
 from upath import UPath
@@ -51,6 +53,7 @@ from kalanos.analysis.models.provenance import (
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.assets.bundle import RunConfiguration
 from kalanos.assets.dictionary import load_default_dictionary
 
@@ -199,6 +202,7 @@ def _lies_under(path: UPath, claimed_root: UPath) -> bool:
     return True
 
 
+@overload
 def run(
     root: UPath,
     *,
@@ -211,7 +215,41 @@ def run(
     config: RunConfiguration | None = None,
     producer: Producer | None = None,
     run_info: RunInfo | None = None,
-) -> Report:
+    keep_episodes: Literal[True] = True,
+) -> Report: ...
+
+
+@overload
+def run(
+    root: UPath,
+    *,
+    policy: Policy,
+    source: SourceInfo | None = None,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    overrides: Sequence[MappingOverride] = (),
+    config: RunConfiguration | None = None,
+    producer: Producer | None = None,
+    run_info: RunInfo | None = None,
+    keep_episodes: bool,
+) -> Report | StreamedReport: ...
+
+
+def run(
+    root: UPath,
+    *,
+    policy: Policy,
+    source: SourceInfo | None = None,
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    overrides: Sequence[MappingOverride] = (),
+    config: RunConfiguration | None = None,
+    producer: Producer | None = None,
+    run_info: RunInfo | None = None,
+    keep_episodes: bool = True,
+) -> Report | StreamedReport:
     """Grade `root` end to end: walk, select an adapter, read, then assemble.
 
     Parameters
@@ -237,10 +275,15 @@ def run(
         under the built-in `numeric-core` scope.
     producer, run_info : Producer, RunInfo or None
         Provenance to record on the report, when the caller built it.
+    keep_episodes : bool
+        Return a `Report` holding every graded episode.
+        Unset, each recording is let go of once graded,
+        and a `StreamedReport` holds the graded episodes as compressed JSON,
+        unless the configuration carries a diagnostics plan.
 
     Returns
     -------
-    Report
+    Report or StreamedReport
         Every recording an adapter read, graded and rolled up, alongside
         every file skipped or that never made it through to grading.
 
@@ -449,9 +492,14 @@ def run(
                 ),
             }
         )
+    # Without a reference left here, each recording is freed once it is graded.
+    # The read loop's last batch holds every recording of a one-source dataset.
+    pending = analysed if keep_episodes else deque(analysed)
+    del analysed
+    episodes = []
     return assemble_report(
         root=root,
-        analysed=analysed,
+        analysed=pending,
         policy=policy,
         skipped=skipped,
         unresolved=unresolved,
@@ -475,4 +523,5 @@ def run(
         inventory=inventory,
         binding_conflicts=config.conflicts if config else (),
         diagnostics_plan=config.bundle.diagnostics if config else None,
+        keep_episodes=keep_episodes,
     )
