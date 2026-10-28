@@ -29,6 +29,115 @@ TABLE_KEY = "reason_codes"
 REASON_KEYS = frozenset({"reason", "reasons", "detail"})
 
 
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+class ReasonCoder:
+    """Codes reason texts across several parts of one document, sharing one table.
+
+    Codes are given in order of first appearance across every `walk` call,
+    so walking a document's parts in document order
+    gives the codes `encode_reasons` gives the whole document.
+
+    Attributes
+    ----------
+    codes : dict[str, int]
+        Each reason text seen so far, mapped to its code.
+    """
+
+    def __init__(self) -> None:
+        """Start with an empty table."""
+
+        self.codes: dict[str, int] = {}
+
+    def table(self) -> list[str]:
+        """The reason texts seen so far, in code order.
+
+        Returns
+        -------
+        list[str]
+            The text whose code is `i` at index `i`.
+        """
+
+        return list(self.codes)
+
+    def walk(self, value: Any) -> Any:
+        """Replace every reason text in one part of a dumped report with its code.
+
+        Parameters
+        ----------
+        value : Any
+            A part of a report dumped in JSON mode. Left unchanged.
+
+        Returns
+        -------
+        Any
+            A copy of `value` with every reason text replaced by its code.
+
+        Raises
+        ------
+        TypeError
+            If a number or a boolean sits under a reason key,
+            since it would read back as a code.
+        """
+
+        match value:
+            case dict():
+                return {
+                    k: self._reason(k, v) if k in REASON_KEYS else self.walk(v)
+                    for k, v in value.items()
+                }
+            case list():
+                return [self.walk(v) for v in value]
+            case _:
+                return value
+
+    def _code(self, text: str) -> int:
+        """The code of `text`, given the next free one on its first appearance."""
+
+        return self.codes.setdefault(text, len(self.codes))
+
+    def _reason(self, key: str, value: Any) -> Any:
+        """Code the value under one reason key.
+
+        Parameters
+        ----------
+        key : str
+            The reason key.
+        value : Any
+            Its value.
+
+        Returns
+        -------
+        Any
+            `value` with its texts coded; a `reasons` map has its keys coded.
+
+        Raises
+        ------
+        TypeError
+            If `value` is a number or a boolean.
+        """
+
+        match value:
+            case None:
+                return None
+            case str():
+                return self._code(value)
+            case bool() | int() | float():
+                raise TypeError(f"a reason must be text, got {value!r} under {key!r}")
+            case list():
+                return [
+                    self.walk(v) if isinstance(v, dict) else self._reason(key, v)
+                    for v in value
+                ]
+            case dict() if key == "reasons":
+                return {str(self._code(k)): self.walk(v) for k, v in value.items()}
+            case _:
+                return self.walk(value)
+
+
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
@@ -56,42 +165,9 @@ def encode_reasons(data: dict[str, Any]) -> dict[str, Any]:
         since it would read back as a code.
     """
 
-    codes: dict[str, int] = {}
-
-    def code(text: str) -> int:
-        return codes.setdefault(text, len(codes))
-
-    def reason(key: str, value: Any) -> Any:
-        match value:
-            case None:
-                return None
-            case str():
-                return code(value)
-            case bool() | int() | float():
-                raise TypeError(f"a reason must be text, got {value!r} under {key!r}")
-            case list():
-                return [
-                    walk(v) if isinstance(v, dict) else reason(key, v) for v in value
-                ]
-            case dict() if key == "reasons":
-                return {str(code(k)): walk(v) for k, v in value.items()}
-            case _:
-                return walk(value)
-
-    def walk(value: Any) -> Any:
-        match value:
-            case dict():
-                return {
-                    k: reason(k, v) if k in REASON_KEYS else walk(v)
-                    for k, v in value.items()
-                }
-            case list():
-                return [walk(v) for v in value]
-            case _:
-                return value
-
-    coded = walk(data)
-    return {TABLE_KEY: list(codes), **coded}
+    coder = ReasonCoder()
+    coded = coder.walk(data)
+    return {TABLE_KEY: coder.table(), **coded}
 
 
 def decode_reasons(data: dict[str, Any]) -> dict[str, Any]:

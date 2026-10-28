@@ -5,20 +5,18 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 from collections import Counter
-from typing import Any
 
 # External
 import yaml
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
-from pydantic_core import to_json
 
 from kalanos.analysis.coverage import coverage_lines
 from kalanos.analysis.diagnostics.previews import tracking_preview
 from kalanos.analysis.diagnostics.runner import diagnostic_lines
 
 # Internal
-from kalanos.analysis.models.compact_keys import encode_keys
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.scoring import Finding, ScoreResult
@@ -30,6 +28,7 @@ from kalanos.analysis.reporting.families import (
 )
 from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import reporter
+from kalanos.analysis.reporting.stream import episode_data, write_report_stream
 from kalanos.analysis.reporting.summary import finding_groups
 
 
@@ -176,22 +175,30 @@ def _stream_finding_counts(
     )
 
 
-def _json_data(report: Report) -> dict[str, Any]:
-    """Dump a Report as the JSON document a report file holds.
+def _stream_json(report: Report, *, compact: bool) -> str:
+    """Write a Report's JSON through the streaming writer, into a string.
 
     Parameters
     ----------
     report : Report
-        The report to dump.
+        The report to render.
+    compact : bool
+        Replace every key with a short alias.
 
     Returns
     -------
-    dict[str, Any]
-        The report in JSON mode, with its reason codes,
-        and without the empty values that defaults restore.
+    str
+        The report as JSON text.
     """
 
-    return omit_empty_defaults(report, report.model_dump(mode="json"))
+    buffer = io.BytesIO()
+    write_report_stream(
+        report.model_copy(update={"episodes": []}),
+        lambda: (episode_data(e) for e in report.episodes),
+        buffer,
+        compact=compact,
+    )
+    return buffer.getvalue().decode()
 
 
 @reporter(name="json", extensions=(".json",))
@@ -213,9 +220,7 @@ def render_json(report: Report) -> str:
         `Report.model_validate_json` reads it back.
     """
 
-    # inf_nan_mode="null" writes NaN as null, as model_dump_json does.
-    # The default writes a bare NaN token, which is not valid JSON.
-    return to_json(_json_data(report), inf_nan_mode="null").decode()
+    return _stream_json(report, compact=False)
 
 
 def render_compact_json(report: Report) -> str:
@@ -234,7 +239,7 @@ def render_compact_json(report: Report) -> str:
         `kalanos.load_report` reads it back.
     """
 
-    return to_json(encode_keys(_json_data(report)), inf_nan_mode="null").decode()
+    return _stream_json(report, compact=True)
 
 
 @reporter(name="yaml", extensions=(".yaml", ".yml"))

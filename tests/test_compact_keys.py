@@ -19,6 +19,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.models.compact_keys import (
     TABLE_KEY,
+    KeyCounter,
     UnsupportedEncoding,
     alias,
     decode_keys,
@@ -133,6 +134,23 @@ def test_the_table_comes_first_and_orders_keys_by_count_then_key():
     # x appears 4 times, y twice, a and b once each.
     assert encoded[TABLE_KEY] == {"version": 1, "keys": ["x", "y", "a", "b"]}
     assert encoded["3"] == [{"0": 1}, {"0": 2}, {"0": 3}]
+
+
+def test_a_counter_over_the_parts_aliases_as_the_whole_document_does():
+    parts = [{"b": [{"x": 1}, {"x": 2}]}, {"a": {"x": 0, "y": 1}}, {"y": 2}]
+    whole = encode_keys({k: v for part in parts for k, v in part.items()})
+    counter = KeyCounter()
+    for part in parts:
+        counter.count(part)
+
+    walked = [counter.walk(part) for part in parts]
+
+    assert counter.table() == whole[TABLE_KEY]
+    assert {k: v for part in walked for k, v in part.items()} == {
+        k: v for k, v in whole.items() if k != TABLE_KEY
+    }
+    with pytest.raises(RuntimeError, match="fixed"):
+        counter.count({"z": 1})
 
 
 def test_aliases_are_unique_and_case_sensitive():

@@ -20,6 +20,7 @@ from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.reason_codes import (
     REASON_KEYS,
     TABLE_KEY,
+    ReasonCoder,
     decode_reasons,
     encode_reasons,
 )
@@ -159,6 +160,23 @@ def test_encode_then_decode_restores_every_shape():
     assert decode_reasons(encoded) == original
     assert TABLE_KEY not in decode_reasons(encoded)
     assert original == before
+
+
+def test_a_coder_over_the_parts_codes_as_the_whole_document_does():
+    parts = [
+        {"reason": "b"},
+        {"coverage": {"reasons": {"a": 1, "b": 2}}},
+        {"episodes": [{"detail": "c"}, {"reasons": ["a", "d"]}]},
+    ]
+    whole = encode_reasons({k: v for part in parts for k, v in part.items()})
+    coder = ReasonCoder()
+
+    coded = [coder.walk(part) for part in parts]
+
+    assert coder.table() == whole[TABLE_KEY] == ["b", "a", "c", "d"]
+    assert {k: v for part in coded for k, v in part.items()} == {
+        k: v for k, v in whole.items() if k != TABLE_KEY
+    }
 
 
 @pytest.mark.parametrize("data", [{"reason": 3}, {"reasons": [3, "a"]}])

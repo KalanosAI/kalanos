@@ -1050,7 +1050,8 @@ class Report(BaseModel):
         handler : SerializerFunctionWrapHandler
             Pydantic's own serializer for this model.
         info : SerializationInfo
-            The dump's settings; only JSON mode is coded.
+            The dump's settings; only JSON mode is coded,
+            and not when the context holds `raw_reasons`.
 
         Returns
         -------
@@ -1060,7 +1061,10 @@ class Report(BaseModel):
         """
 
         data = handler(self)
-        return encode_reasons(data) if info.mode_is_json() else data
+        # The streaming writer codes the header and the episodes with one table,
+        # so it needs the header's texts uncoded.
+        raw = isinstance(info.context, dict) and info.context.get("raw_reasons")
+        return encode_reasons(data) if info.mode_is_json() and not raw else data
 
     @model_validator(mode="wrap")
     @classmethod
