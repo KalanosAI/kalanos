@@ -39,6 +39,7 @@ from kalanos.analysis.models.eligibility import (
 from kalanos.analysis.models.provenance import Inventory
 from kalanos.analysis.models.report import GradedEpisode, PayloadStatus
 from kalanos.analysis.models.scoring import Finding
+from kalanos.analysis.models.summaries import EpisodeSummary
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -85,10 +86,26 @@ def _finding_reasons(findings: Iterable[Finding]) -> list[EligibilityReason]:
     return reasons
 
 
-def _requirement_reasons(
+def requirement_reasons(
     episode: GradedEpisode, requirements: RequirementsSection
 ) -> list[EligibilityReason]:
-    """Unknown reasons: a required family graded nothing, or a binding is unresolved."""
+    """Unknown reasons: a required family graded nothing, or a binding is unresolved.
+
+    They read the episode alone, never its findings,
+    so they are taken once the episode is graded and its coverage recorded.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        The episode, graded, with its coverage ledger.
+    requirements : RequirementsSection
+        What a pass needs under this scope.
+
+    Returns
+    -------
+    list[EligibilityReason]
+        Every requirement the episode leaves unknown.
+    """
 
     reasons = []
     if episode.score.score is None:
@@ -219,6 +236,41 @@ def _requirement_reasons(
     return reasons
 
 
+def _decide(
+    reasons: list[EligibilityReason],
+    findings: Iterable[Finding],
+    *,
+    requirements: RequirementsSection,
+    policy_id: str,
+) -> EpisodeEligibility:
+    """Decide one episode from its findings and its requirement reasons.
+
+    Parameters
+    ----------
+    reasons : list[EligibilityReason]
+        The episode's `requirement_reasons`.
+    findings : Iterable[Finding]
+        This episode's findings only.
+    requirements : RequirementsSection
+        What a pass needs under this scope.
+    policy_id : str
+        The decision policy that assigned the findings' consequences.
+
+    Returns
+    -------
+    EpisodeEligibility
+        The status by precedence over every reason, all reasons kept.
+    """
+
+    every = _finding_reasons(findings) + list(reasons)
+    return EpisodeEligibility(
+        status=worst_status([r.status for r in every]),
+        scope_id=requirements.id,
+        policy_id=policy_id,
+        reasons=every,
+    )
+
+
 def eligibility_of(
     episode: GradedEpisode,
     findings: Iterable[Finding],
@@ -245,30 +297,46 @@ def eligibility_of(
         The status by precedence over every reason, all reasons kept.
     """
 
-    reasons = _finding_reasons(findings) + _requirement_reasons(episode, requirements)
-    return EpisodeEligibility(
-        status=worst_status([r.status for r in reasons]),
-        scope_id=requirements.id,
+    return _decide(
+        requirement_reasons(episode, requirements),
+        findings,
+        requirements=requirements,
         policy_id=policy_id,
-        reasons=reasons,
     )
 
 
 def decide_all(
-    episodes: Sequence[GradedEpisode],
+    episodes: Sequence[EpisodeSummary],
     findings: Sequence[Finding],
     *,
     requirements: RequirementsSection,
     policy_id: str,
 ) -> dict[str, EpisodeEligibility]:
-    """Decide every graded episode, keyed by episode id."""
+    """Decide every graded episode, keyed by episode id.
+
+    Parameters
+    ----------
+    episodes : Sequence[EpisodeSummary]
+        Every graded episode's summary, its requirement reasons taken.
+    findings : Sequence[Finding]
+        Every finding in the run.
+    requirements : RequirementsSection
+        What a pass needs under this scope.
+    policy_id : str
+        The decision policy that assigned the findings' consequences.
+
+    Returns
+    -------
+    dict[str, EpisodeEligibility]
+        Each episode's decision, in episode order.
+    """
 
     by_episode: dict[str, list[Finding]] = defaultdict(list)
     for finding in findings:
         by_episode[finding.episode_id].append(finding)
     return {
-        episode.id: eligibility_of(
-            episode,
+        episode.id: _decide(
+            episode.requirement_reasons,
             by_episode.get(episode.id, []),
             requirements=requirements,
             policy_id=policy_id,
@@ -304,7 +372,7 @@ def counts_of(
 
 
 def readiness_of(
-    episodes: Sequence[GradedEpisode],
+    episodes: Sequence[EpisodeSummary],
     decisions: dict[str, EpisodeEligibility],
     counts: EligibilityCounts,
 ) -> Readiness:
@@ -417,5 +485,6 @@ __all__ = [
     "eligibility_of",
     "finding_key",
     "readiness_of",
+    "requirement_reasons",
     "sufficiency_of",
 ]

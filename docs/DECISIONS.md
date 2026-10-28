@@ -108,4 +108,4 @@ An explicit Python `policy=` argument wins over a bundle's `policy` section. Oth
 
 ## Reading older reports
 
-`kalanos inspect REPORT.json` reads schema 6.3, 6.4 and 6.5 reports without modifying them, names the schema and SHA-256, lists episodes whose `score.train_ready` and gate listing contradict each other, and lists the schema-7 fields the file cannot supply (producer, run, clock provenance, defect intervals, eligibility). It never synthesises them.
+`kalanos inspect REPORT.json` reads schema 6.3, 6.4 and 6.5 reports without modifying them, names the schema and SHA-256, lists episodes whose `score.train_ready` and gate listing contradict each other, and lists the fields a current report records that the file cannot supply (producer, run, clock provenance, defect intervals, eligibility). It never synthesises them.

@@ -6,6 +6,8 @@
 
 # Built-in
 import csv
+import json
+import math
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -24,6 +26,7 @@ from kalanos.analysis.models.discovery import SkipReason
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.schema import RefusalCode
+from kalanos.analysis.scoring.cameras import _TOO_FEW_FOOTAGE
 from kalanos.cli import app
 from kalanos.core.settings import get_settings
 
@@ -52,13 +55,15 @@ runner = CliRunner()
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def _grade(path: Path | UPath) -> Report:
+def _grade(path: Path | UPath, *options: str) -> Report:
     """Invoke `kalanos grade <path> --json` and parse the resulting report.
 
     Parameters
     ----------
     path : Path or UPath
         A recording or a folder of them, passed straight to `grade`.
+    *options : str
+        Further command-line options for `grade`.
 
     Returns
     -------
@@ -66,7 +71,7 @@ def _grade(path: Path | UPath) -> Report:
         The parsed model behind the run's stdout.
     """
 
-    result = runner.invoke(app, ["grade", str(path), "--json"])
+    result = runner.invoke(app, ["grade", str(path), "--json", *options])
     assert result.exit_code in (0, 1), result.output or repr(result.exception)
     return Report.model_validate_json(result.stdout)
 
@@ -277,10 +282,9 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
 
     report = _grade(tmp_path)
 
-    assert [(d.episodes, d.tier) for d in report.duplicates] == [
-        (["run_a.csv", "run_b.csv"], "exact"),
-        (["run_a.csv", "run_c.csv"], "exact"),
-    ]
+    assert [
+        [report.episodes[k].id for k in group] for group in report.duplicates.exact
+    ] == [["run_a.csv", "run_b.csv", "run_c.csv"]]
     flagged = [
         f.episode_id
         for f in report.findings
@@ -290,10 +294,57 @@ def test_a_copied_recording_is_flagged_as_an_exact_duplicate(tmp_path):
     assert {e.eligibility.status.value for e in report.episodes if e.eligibility} == {
         "review"
     }
-    assert (
-        Report.model_validate_json(report.model_dump_json()).duplicates
-        == report.duplicates
-    )
+    assert report.motion_variation is not None
+    assert report.motion_variation.value == 0.0
+    assert report.motion_variation.episodes == 3
+    loaded = Report.model_validate_json(report.model_dump_json())
+    assert loaded.duplicates == report.duplicates
+    assert loaded.near_duplicates == report.near_duplicates
+    assert loaded.motion_variation == report.motion_variation
+    # A 7.2.0 report has no near-duplicate summary, lists one object per pair,
+    # and still loads into the current encoding.
+    older = report.model_dump(mode="json", exclude={"near_duplicates"})
+    older["schema_version"] = "7.2.0"
+    older["duplicates"] = [
+        {
+            "episodes": ["run_a.csv", copy],
+            "tier": "exact",
+            "nrmse": 0.0,
+            "footage_identical": False,
+            "cameras": [],
+        }
+        for copy in ("run_b.csv", "run_c.csv")
+    ]
+    reloaded = Report.model_validate_json(json.dumps(older))
+    assert reloaded.near_duplicates is None
+    assert reloaded.duplicates == report.duplicates
+
+
+def test_re_runs_of_one_motion_get_one_dataset_warning(tmp_path):
+    """Five recordings of one motion, each slightly shifted, saturate the near tier:
+    the report carries one dataset warning and no near finding."""
+
+    pytest.importorskip("numpy")
+
+    rows = 200
+    for k in range(5):
+        lines = ["t_ms,joint_0,joint_1,joint_2"]
+        for i in range(rows):
+            values = (
+                math.sin(2 * math.pi * (j + 1) * i / (rows - 1) + 1e-4 * k)
+                for j in range(3)
+            )
+            lines.append(f"{i * 10}," + ",".join(f"{v:.6f}" for v in values))
+        (tmp_path / f"run_{k}.csv").write_text("\n".join(lines) + "\n")
+
+    report = _grade(tmp_path)
+
+    assert report.near_duplicates is not None and report.near_duplicates.saturated
+    assert [w.code for w in report.dataset_warnings] == ["near_duplicates_saturated"]
+    assert "5 of 5 episodes" in report.dataset_warnings[0].message
+    assert not [
+        f for f in report.findings if f.metric_id == "integrity.near_duplicate_episode"
+    ]
 
 
 def test_the_graded_episode_names_the_adapter_that_read_it(single_file_report):
@@ -405,6 +456,27 @@ def test_the_lerobot_fixtures_episodes_carry_the_winning_adapters_bid():
     assert len(report.episodes) == 2
     for episode in report.episodes:
         assert episode.adapter_confidence == pytest.approx(CONFIDENCE)
+
+
+def test_each_lerobot_camera_reports_its_visual_variation():
+    """Verify each camera states how much its footage changes, through a JSON report.
+
+    The fixture's episodes hold 8 and 6 frames, so the default 10 samples
+    read every frame of each and the two sample different counts;
+    at 6 samples both read 6 and compare.
+    """
+
+    report = _grade(LEROBOT_FIXTURE, "--vision-samples", "6")
+
+    assert report.cameras
+    for camera in report.cameras:
+        variation = camera.visual_variation
+        assert variation is not None and variation.value is not None
+        assert variation.episodes == len(report.episodes) == 2
+
+    for camera in _grade(LEROBOT_FIXTURE).cameras:
+        assert camera.visual_variation is not None
+        assert camera.visual_variation.reason == _TOO_FEW_FOOTAGE
 
 
 def test_the_lerobot_v2_0_fixture_grades_end_to_end():

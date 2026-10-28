@@ -20,11 +20,21 @@ and a path is a real filesystem path.
 # Built-in
 import math
 from collections import Counter
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Literal
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
@@ -35,7 +45,7 @@ from kalanos.analysis.models.coverage import Availability, CoverageRow
 from kalanos.analysis.models.coverage import Coverage as AnalysisCoverage
 
 # Internal
-from kalanos.analysis.models.diagnostics import DiagnosticResult, DiagnosticsReport
+from kalanos.analysis.models.diagnostics import DiagnosticsReport
 from kalanos.analysis.models.dictionary import CategoryGroup
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import (
@@ -59,6 +69,11 @@ from kalanos.analysis.models.metrics import MetricResult
 from kalanos.analysis.models.paths import AnyPath
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import Inventory, Producer, RunInfo
+from kalanos.analysis.models.reason_codes import (
+    TABLE_KEY,
+    decode_reasons,
+    encode_reasons,
+)
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
@@ -69,7 +84,29 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "7.2.0"
+CURRENT_SCHEMA_VERSION = "8.0.0"
+
+# Significant digits a stored near-duplicate distance keeps.
+# The near limit, 0.02, is exact at 4 digits,
+# so a distance within it never rounds above it.
+NRMSE_DIGITS = 4
+
+
+def round_nrmse(value: float) -> float:
+    """`value` rounded to `NRMSE_DIGITS` significant digits.
+
+    Parameters
+    ----------
+    value : float
+        A normalized RMSE.
+
+    Returns
+    -------
+    float
+        The rounded value.
+    """
+
+    return float(f"{value:.{NRMSE_DIGITS}g}")
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -420,7 +457,6 @@ class GradedEpisode(BaseModel):
     split: str | None = None
     eligibility: EpisodeEligibility | None = None
     coverage: AnalysisCoverage | None = None
-    diagnostics: list[DiagnosticResult] = Field(default_factory=list)
 
 
 class FailingEpisode(BaseModel):
@@ -484,6 +520,32 @@ class DatasetTrait(BaseModel):
     n_with_finding: int
 
 
+class Variation(BaseModel):
+    """How much a set of episodes differ from each other.
+
+    It is descriptive: it feeds no score, gate or eligibility decision,
+    and no threshold marks a value as low.
+    A value compares episodes within one dataset, not two datasets.
+    The field that holds it says which distance it measures
+    and which episodes it covers.
+
+    Attributes
+    ----------
+    value : float or None
+        The root mean square, over every pair of covered episodes, of their distance.
+        Rounded to `NRMSE_DIGITS` significant digits.
+        `None` when it is unavailable, with the reason in `reason`.
+    episodes : int
+        The episodes covered.
+    reason : str or None
+        Why `value` is `None`; `None` when there is a value.
+    """
+
+    value: float | None = None
+    episodes: int
+    reason: str | None = None
+
+
 class CameraSummary(BaseModel):
     """One camera compared across the episodes it appears in.
 
@@ -510,6 +572,15 @@ class CameraSummary(BaseModel):
     repeated_footage : list of list of str
         Each group of episodes whose camera's sampled frames hash identically,
         in episode order.
+    visual_variation : Variation or None
+        How much the camera's footage changes between episodes:
+        the distance is the RMS difference of two episodes' sampled gray frames,
+        each average-pooled to 16x16 and scaled to 0-1.
+        It covers the largest group of episodes whose read decoded every sampled frame,
+        with the same number of frames.
+        Motion in view, such as an arm crossing it, counts as change.
+        It compares episodes within this camera.
+        `None` in a report written before the field existed.
     """
 
     camera: str
@@ -525,31 +596,160 @@ class CameraSummary(BaseModel):
     blur_outliers: list[str] = Field(default_factory=list)
     exposure_outliers: list[str] = Field(default_factory=list)
     repeated_footage: list[list[str]] = Field(default_factory=list)
+    visual_variation: Variation | None = None
 
 
-class DuplicateEpisodes(BaseModel):
-    """Two episodes whose numeric payloads are identical or nearly so.
+class NearPairs(BaseModel):
+    """The listed pairs of episodes within the near-duplicate limit.
+
+    A pair is stored once, under its earlier episode,
+    and only episodes with a later partner have an entry.
+    Episodes are indices into `Report.episodes`.
 
     Attributes
     ----------
-    episodes : list[str]
-        The pair, in episode order.
-    tier : {"exact", "near"}
-        `exact` when every payload hashes identically,
-        `near` when the resampled trajectories lie within the near-duplicate limit.
-    nrmse : float
-        The normalized RMSE between the two trajectories, 0.0 for an exact pair.
-    footage_identical : bool
-        Whether the pair also repeats its camera footage exactly.
-    cameras : list[str]
-        The cameras whose footage the pair repeats exactly.
+    episode : list[int]
+        The earlier episode of each entry's pairs, ascending.
+    partners : list[list[int]]
+        The later episodes near `episode[k]`, ascending, each greater than `episode[k]`.
+    nrmse : list[list[float]]
+        The normalized RMSE of each pair, aligned with `partners`,
+        to `NRMSE_DIGITS` significant digits.
     """
 
-    episodes: list[str]
-    tier: Literal["exact", "near"]
-    nrmse: float
-    footage_identical: bool = False
-    cameras: list[str] = Field(default_factory=list)
+    episode: list[int] = Field(default_factory=list)
+    partners: list[list[int]] = Field(default_factory=list)
+    nrmse: list[list[float]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _aligned(self) -> "NearPairs":
+        """Refuse lists that do not line up, or pairs not stored once in index order.
+
+        Returns
+        -------
+        NearPairs
+            The validated pairs.
+
+        Raises
+        ------
+        ValueError
+            If the lists differ in length, an entry is empty,
+            or the indices are not strictly ascending as documented.
+        """
+
+        if not len(self.episode) == len(self.partners) == len(self.nrmse):
+            raise ValueError("near pairs: episode, partners and nrmse differ in length")
+        previous = -1
+        for first, partners, distances in zip(
+            self.episode, self.partners, self.nrmse, strict=True
+        ):
+            if not partners or len(partners) != len(distances):
+                raise ValueError(
+                    f"near pairs of episode {first}: partners and nrmse "
+                    "must be non-empty and of equal length"
+                )
+            if first <= previous:
+                raise ValueError("near pairs: episodes are not strictly ascending")
+            if any(b <= a for a, b in zip([first, *partners], partners, strict=False)):
+                raise ValueError(
+                    f"near pairs of episode {first}: partners must be strictly "
+                    "ascending and later than the episode"
+                )
+            previous = first
+        return self
+
+
+class DuplicateEpisodes(BaseModel):
+    """The episodes whose numeric payloads are identical or nearly so.
+
+    Episodes are indices into `Report.episodes`.
+    Which pairs also repeat their camera footage is read from
+    `Report.cameras[].repeated_footage`.
+
+    Attributes
+    ----------
+    exact : list[list[int]]
+        Each group of episodes whose payloads hash identically, earliest first,
+        the groups ordered by their earliest episode.
+        The earliest episode stands for its group in `near`.
+    near : NearPairs
+        Every listed near pair, each with its normalized RMSE.
+    """
+
+    exact: list[list[int]] = Field(default_factory=list)
+    near: NearPairs = Field(default_factory=NearPairs)
+
+
+class NearDuplicateSummary(BaseModel):
+    """How many episode pairs the near-duplicate search found, over the whole dataset.
+
+    Copies that hash identically are compared once, through the earliest of them,
+    so the episode and pair counts are over those representatives.
+
+    Attributes
+    ----------
+    limit : float
+        The largest normalized RMSE at which a pair counts as near.
+    max_partners : int
+        The most near partners each episode keeps in `Report.duplicates`
+        when `pairs_listed` is less than `pairs_near`.
+        A near finding lists no partner; its pairs are in `Report.duplicates.near`.
+    episodes_compared : int
+        The representatives the near search compared.
+    pairs_compared : int
+        The pairs among them, summed over the groups of episodes
+        that hold the same streams and channels.
+    pairs_near : int
+        Of those, the pairs within `limit` whose row counts also agree.
+    pairs_listed : int
+        The near pairs in `Report.duplicates.near`, each stored once:
+        every one of `pairs_near`,
+        or, when there are too many to list, those among the nearest
+        `max_partners` of either episode.
+    episodes_with_partner : int
+        The episodes, copies included, with at least one near partner.
+    median_nearest_nrmse : float or None
+        The median, over representatives with a near partner,
+        of the distance to their nearest one.
+        `None` when `pairs_near` is 0.
+    saturated : bool
+        Whether more than half the compared pairs are near,
+        and there are more near pairs than compared episodes.
+        The limit then does not separate copies from re-runs in this dataset,
+        so no near-duplicate finding is emitted;
+        the exact tier still applies, and `Report.duplicates` keeps the nearest pairs.
+    """
+
+    limit: float
+    max_partners: int
+    episodes_compared: int
+    pairs_compared: int
+    pairs_near: int
+    pairs_listed: int
+    episodes_with_partner: int
+    median_nearest_nrmse: float | None
+    saturated: bool
+
+
+class DatasetWarning(BaseModel):
+    """A warning about the dataset as a whole, which belongs to no episode.
+
+    It is descriptive: it feeds no score, gate or eligibility decision.
+
+    Attributes
+    ----------
+    code : {"near_duplicates_saturated"}
+        What the warning is about.
+        `near_duplicates_saturated`: the near tier is saturated
+        (see `NearDuplicateSummary.saturated`),
+        so no episode carries a near-duplicate finding;
+        the counts are in `Report.near_duplicates`.
+    message : str
+        The warning, stated for a reader.
+    """
+
+    code: Literal["near_duplicates_saturated"]
+    message: str
 
 
 class NotObservable(BaseModel):
@@ -699,14 +899,44 @@ class Report(BaseModel):
     cameras : list[CameraSummary]
         Each camera compared across the episodes it appears in:
         descriptive, and the source of the cross-episode vision findings.
-    duplicates : list[DuplicateEpisodes]
-        Each pair of episodes whose numeric payloads are identical or nearly so.
-        Identical episodes pair only with the first of them,
-        which also stands for them in a near pair.
+    duplicates : DuplicateEpisodes
+        The episodes whose numeric payloads are identical or nearly so,
+        as indices into `episodes`.
+        Identical episodes form one group, whose first episode
+        also stands for them in a near pair.
+        Every near pair is listed, unless there are too many:
+        `near_duplicates.pairs_listed` then falls short of `pairs_near`.
+        A report written before this encoding listed one object per pair,
+        and is converted on load.
+    near_duplicates : NearDuplicateSummary or None
+        How many pairs the near-duplicate search found, and whether that many
+        leaves the near tier uninformative for this dataset.
+        `None` when the search did not run: numpy is missing,
+        or no group of comparable episodes holds two
+        that differ in their payloads and could be resampled
+        (every value finite, at least 2 rows).
+    motion_variation : Variation or None
+        How much the episodes' trajectories differ from each other,
+        from the same resampled trajectories the near-duplicate search compares.
+        The distance is their normalized RMSE, the one the near-duplicate tier measures.
+        The channels are scaled by their spread over the covered episodes.
+        It covers, exact copies included, the largest group of episodes
+        that hold the same numeric streams and channels and could be resampled
+        (every value finite, at least 2 rows).
+        Episodes whose every channel is constant take no part.
+        `episodes` is 0 when numpy is missing.
+        `None` in a report written before the field existed.
+    dataset_warnings : list[DatasetWarning]
+        Warnings about the dataset as a whole, which belong to no episode.
+        Descriptive: they have no effect on any score.
 
     Letter grades (`score.grade`, `gate.cap`, `gate.uncapped_grade`) are
     compatibility fields only and drive no decision. The headline is
     `eligibility_counts` and `readiness`.
+
+    A JSON-mode dump stores each reason text once, in a first key `reason_codes`,
+    and every `reason`, `reasons` and `detail` value holds its index there
+    (see `reason_codes`). Validation reads the codes back as text.
     """
 
     diagnostics: DiagnosticsReport | None = None
@@ -736,129 +966,311 @@ class Report(BaseModel):
     sufficiency: Sufficiency | None = None
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
-    duplicates: list[DuplicateEpisodes] = Field(default_factory=list)
+    duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
+    near_duplicates: NearDuplicateSummary | None = None
+    motion_variation: Variation | None = None
+    dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _duplicates_from_pairs(cls, data: Any) -> Any:
+        """Convert the one-object-per-pair `duplicates` of reports 7.0.0 to 7.3.0.
+
+        Those reports named both episodes of each pair by id.
+        Each pair becomes indices into `episodes`: an exact pair joins
+        the group of its first episode, and a near pair is stored under
+        its earlier episode with its distance rounded as a fresh report's is.
+        The footage fields are dropped, since `cameras` holds the same facts.
+
+        Parameters
+        ----------
+        data : Any
+            The raw input to the model.
+
+        Returns
+        -------
+        Any
+            `data`, with `duplicates` converted when it was a dict holding a list there.
+
+        Raises
+        ------
+        ValueError
+            If a pair is malformed or names an episode that is not in `episodes`.
+        """
+
+        if not isinstance(data, dict) or not isinstance(data.get("duplicates"), list):
+            return data
+        index = {
+            episode["id"]: k
+            for k, episode in enumerate(data.get("episodes") or [])
+            if isinstance(episode, dict) and "id" in episode
+        }
+        exact: dict[int, list[int]] = {}
+        near: dict[int, list[tuple[int, float]]] = {}
+        for pair in data["duplicates"]:
+            try:
+                names, tier = pair["episodes"], pair["tier"]
+                nrmse = pair["nrmse"] if tier == "near" else 0.0
+            except (KeyError, TypeError):
+                raise ValueError(f"duplicates: malformed pair {pair!r}") from None
+            if tier not in ("exact", "near") or len(names) != 2:
+                raise ValueError(f"duplicates: malformed pair {pair!r}")
+            unknown = [name for name in names if name not in index]
+            if unknown:
+                raise ValueError(
+                    f"duplicates: pair names episode {unknown[0]!r}, "
+                    "which is not in the report"
+                )
+            a, b = index[names[0]], index[names[1]]
+            if tier == "exact":
+                exact.setdefault(a, [a]).append(b)
+            else:
+                lo, hi = min(a, b), max(a, b)
+                near.setdefault(lo, []).append((hi, round_nrmse(nrmse)))
+        rows = [(lo, sorted(near[lo])) for lo in sorted(near)]
+        return {
+            **data,
+            "duplicates": {
+                "exact": [sorted(exact[first]) for first in sorted(exact)],
+                "near": {
+                    "episode": [lo for lo, _found in rows],
+                    "partners": [[hi for hi, _d in found] for _lo, found in rows],
+                    "nrmse": [[d for _hi, d in found] for _lo, found in rows],
+                },
+            },
+        }
+
+    @model_serializer(mode="wrap")
+    def _write_reason_codes(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict[str, Any]:
+        """Code every reason text when dumping to JSON.
+
+        Parameters
+        ----------
+        handler : SerializerFunctionWrapHandler
+            Pydantic's own serializer for this model.
+        info : SerializationInfo
+            The dump's settings; only JSON mode is coded,
+            and not when the context holds `raw_reasons`.
+
+        Returns
+        -------
+        dict[str, Any]
+            The dumped report, led by `reason_codes` in JSON mode,
+            otherwise as Pydantic dumps it.
+        """
+
+        data = handler(self)
+        # The streaming writer codes the header and the episodes with one table,
+        # so it needs the header's texts uncoded.
+        raw = isinstance(info.context, dict) and info.context.get("raw_reasons")
+        return encode_reasons(data) if info.mode_is_json() and not raw else data
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _read_reason_codes(
+        cls, data: Any, handler: ModelWrapValidatorHandler["Report"]
+    ) -> "Report":
+        """Turn reason codes back into text before validating.
+
+        Parameters
+        ----------
+        data : Any
+            The input, coded when it is a dict holding `reason_codes`.
+        handler : ModelWrapValidatorHandler[Report]
+            Pydantic's own validator for this model.
+
+        Returns
+        -------
+        Report
+            The validated report, holding reason texts.
+        """
+
+        if isinstance(data, dict) and TABLE_KEY in data:
+            return handler(decode_reasons(data))
+        return handler(data)
 
     @model_validator(mode="after")
     def _decisions_agree(self) -> "Report":
         """Refuse a report whose surfaces could disagree about an episode.
 
-        Every episode carries an eligibility; its compatibility `train_ready`
-        mirrors it exactly; the gate's failing list is exactly the blocked
-        episodes; and the counts partition the episodes plus the failed ones.
+        See `check_agreement`.
         """
 
-        episode_ids = [e.id for e in self.episodes]
-        if len(episode_ids) != len(set(episode_ids)):
-            raise ValueError("duplicate episode ids")
-        if self.coverage is not None:
-            from kalanos.analysis.coverage import report_coverage
-
-            if self.inventory is None or any(e.coverage is None for e in self.episodes):
-                raise ValueError("coverage requires episode ledgers and inventory")
-            if self.coverage != report_coverage(self.episodes, self.inventory):
-                raise ValueError("report coverage does not reconcile with episodes")
-        if self.diagnostics is not None:
-            from kalanos.analysis.models.provenance import content_digest
-
-            if self.diagnostics.plan_digest != content_digest(
-                self.diagnostics.plan.model_dump(mode="json")
-            ):
-                raise ValueError(
-                    "diagnostic plan digest disagrees with its configuration"
+        check_agreement(
+            self,
+            [
+                AgreementRow(
+                    id=e.id, eligibility=e.eligibility, train_ready=e.score.train_ready
                 )
-            recorded = [r for r in self.diagnostics.results if r.episode_id is not None]
-            if recorded != [r for e in self.episodes for r in e.diagnostics]:
-                raise ValueError("diagnostic report does not reconcile with episodes")
-            keys = [(r.episode_id, r.kind, r.id) for r in self.diagnostics.results]
-            if len(keys) != len(set(keys)):
-                raise ValueError("duplicate diagnostic result addresses")
-        elif any(e.diagnostics for e in self.episodes):
-            raise ValueError(
-                "episode diagnostics require an identified diagnostic report"
-            )
-        ids = [f.id for f in self.findings if f.id is not None]
-        if len(ids) != len(set(ids)):
-            raise ValueError("duplicate finding ids")
-        for episode in self.episodes:
-            if episode.eligibility is None:
-                raise ValueError(f"episode {episode.id!r} has no eligibility")
-            expected = episode.eligibility.compatibility_train_ready
-            if episode.score.train_ready != expected:
-                raise ValueError(
-                    f"episode {episode.id!r}: train_ready={episode.score.train_ready} "
-                    f"contradicts eligibility {episode.eligibility.status.value!r}"
-                )
-        blocked = {
-            e.id
-            for e in self.episodes
-            if e.eligibility is not None
-            and e.eligibility.status == EligibilityStatus.BLOCKED
-        }
-        if self.gate is not None:
-            listed = {item.episode_id for item in self.gate.failing_episodes}
-            if listed != blocked:
-                raise ValueError(
-                    "gate.failing_episodes is not the set of blocked episodes"
-                )
-        if self.eligibility_counts is not None:
-            counts = self.eligibility_counts
-            failed = len(self.inventory.failed) if self.inventory else 0
-            gap = self.inventory.unresolved if self.inventory else 0
-            if counts.total != len(self.episodes) + failed + gap:
-                raise ValueError(
-                    "eligibility_counts.total does not cover the inventory"
-                )
-            tally = Counter(
-                e.eligibility.status.value
                 for e in self.episodes
-                if e.eligibility is not None
-            )
-            tally["unknown"] += failed + gap
-            for field, status in (
-                ("pass_count", "pass"),
-                ("blocked", "blocked"),
-                ("review", "review"),
-                ("unknown", "unknown"),
-            ):
-                if getattr(counts, field) != tally[status]:
-                    raise ValueError(
-                        f"eligibility_counts.{field} disagrees with episode "
-                        "decisions and failed/unresolved inventory"
-                    )
-            expected_share = (
-                counts.pass_count / counts.total
-                if counts.inventory_complete and counts.total
-                else None
-            )
-            if counts.confirmed_eligible_share is not None and (
-                expected_share is None
-                or not math.isclose(
-                    counts.confirmed_eligible_share,
-                    expected_share,
-                    rel_tol=0,
-                    abs_tol=1e-12,
-                )
-            ):
-                raise ValueError("confirmed_eligible_share disagrees with the counts")
-            if self.inventory is not None and (
-                counts.inventory_complete != self.inventory.complete
-            ):
-                raise ValueError(
-                    "eligibility_counts and inventory disagree on completeness"
-                )
-            # The dataset compatibility boolean is a function of the counts.
-            expected_ready = (
-                False
-                if counts.blocked
-                else True
-                if counts.inventory_complete
-                and counts.total
-                and counts.pass_count == counts.total
-                else None
-            )
-            if self.score.train_ready != expected_ready:
-                raise ValueError(
-                    f"dataset train_ready={self.score.train_ready} contradicts the "
-                    f"eligibility counts (expected {expected_ready})"
-                )
+            ],
+            [e.coverage for e in self.episodes],
+        )
         return self
+
+
+class AgreementRow(BaseModel):
+    """What `check_agreement` reads of one episode.
+
+    Attributes
+    ----------
+    id : str
+        The episode's id.
+    eligibility : EpisodeEligibility or None
+        Its decision.
+    train_ready : bool or None
+        Its score's compatibility `train_ready`.
+    """
+
+    id: str
+    eligibility: EpisodeEligibility | None
+    train_ready: bool | None
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def check_agreement(
+    report: Report,
+    rows: Sequence[AgreementRow],
+    ledgers: Sequence[AnalysisCoverage | None],
+) -> None:
+    """Refuse a report whose surfaces could disagree about an episode.
+
+    Every episode carries an eligibility; its compatibility `train_ready`
+    mirrors it exactly; the gate's failing list is exactly the blocked
+    episodes; the counts partition the episodes plus the failed ones;
+    and every index in `duplicates` names an episode.
+
+    Parameters
+    ----------
+    report : Report
+        The report; its own `episodes` are not read.
+    rows : Sequence[AgreementRow]
+        Its episodes, in report order.
+    ledgers : Sequence[Coverage or None]
+        Its episodes' coverage ledgers,
+        or merges of them by `report_coverage`, which merges associatively.
+
+    Raises
+    ------
+    ValueError
+        If any of those surfaces disagree.
+    """
+
+    episode_ids = [e.id for e in rows]
+    if len(episode_ids) != len(set(episode_ids)):
+        raise ValueError("duplicate episode ids")
+    near = report.duplicates.near
+    indices = [
+        *(k for group in report.duplicates.exact for k in group),
+        *near.episode,
+        *(k for partners in near.partners for k in partners),
+    ]
+    if any(not 0 <= k < len(episode_ids) for k in indices):
+        raise ValueError("duplicates names an episode index outside episodes")
+    if report.coverage is not None:
+        from kalanos.analysis.coverage import report_coverage
+
+        if report.inventory is None or any(c is None for c in ledgers):
+            raise ValueError("coverage requires episode ledgers and inventory")
+        if report.coverage != report_coverage(ledgers, report.inventory):
+            raise ValueError("report coverage does not reconcile with episodes")
+    if report.diagnostics is not None:
+        from kalanos.analysis.models.provenance import content_digest
+
+        if report.diagnostics.plan_digest != content_digest(
+            report.diagnostics.plan.model_dump(mode="json")
+        ):
+            raise ValueError("diagnostic plan digest disagrees with its configuration")
+        if any(
+            r.episode_id is not None and r.episode_id not in episode_ids
+            for r in report.diagnostics.results
+        ):
+            raise ValueError("diagnostic result names an episode not in the report")
+        keys = [(r.episode_id, r.kind, r.id) for r in report.diagnostics.results]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate diagnostic result addresses")
+    ids = [f.id for f in report.findings if f.id is not None]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate finding ids")
+    for row in rows:
+        if row.eligibility is None:
+            raise ValueError(f"episode {row.id!r} has no eligibility")
+        expected = row.eligibility.compatibility_train_ready
+        if row.train_ready != expected:
+            raise ValueError(
+                f"episode {row.id!r}: train_ready={row.train_ready} "
+                f"contradicts eligibility {row.eligibility.status.value!r}"
+            )
+    blocked = {
+        e.id
+        for e in rows
+        if e.eligibility is not None
+        and e.eligibility.status == EligibilityStatus.BLOCKED
+    }
+    if report.gate is not None:
+        listed = {item.episode_id for item in report.gate.failing_episodes}
+        if listed != blocked:
+            raise ValueError("gate.failing_episodes is not the set of blocked episodes")
+    if report.eligibility_counts is not None:
+        counts = report.eligibility_counts
+        failed = len(report.inventory.failed) if report.inventory else 0
+        gap = report.inventory.unresolved if report.inventory else 0
+        if counts.total != len(rows) + failed + gap:
+            raise ValueError("eligibility_counts.total does not cover the inventory")
+        tally = Counter(
+            e.eligibility.status.value for e in rows if e.eligibility is not None
+        )
+        tally["unknown"] += failed + gap
+        for field, status in (
+            ("pass_count", "pass"),
+            ("blocked", "blocked"),
+            ("review", "review"),
+            ("unknown", "unknown"),
+        ):
+            if getattr(counts, field) != tally[status]:
+                raise ValueError(
+                    f"eligibility_counts.{field} disagrees with episode "
+                    "decisions and failed/unresolved inventory"
+                )
+        expected_share = (
+            counts.pass_count / counts.total
+            if counts.inventory_complete and counts.total
+            else None
+        )
+        if counts.confirmed_eligible_share is not None and (
+            expected_share is None
+            or not math.isclose(
+                counts.confirmed_eligible_share,
+                expected_share,
+                rel_tol=0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("confirmed_eligible_share disagrees with the counts")
+        if report.inventory is not None and (
+            counts.inventory_complete != report.inventory.complete
+        ):
+            raise ValueError(
+                "eligibility_counts and inventory disagree on completeness"
+            )
+        # The dataset compatibility boolean is a function of the counts.
+        expected_ready = (
+            False
+            if counts.blocked
+            else True
+            if counts.inventory_complete
+            and counts.total
+            and counts.pass_count == counts.total
+            else None
+        )
+        if report.score.train_ready != expected_ready:
+            raise ValueError(
+                f"dataset train_ready={report.score.train_ready} contradicts the "
+                f"eligibility counts (expected {expected_ready})"
+            )

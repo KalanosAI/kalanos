@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.8.2"
+version = "0.9.0"
 description = "Grade robot training data before you train on it: a 0-100 readiness score, the blocking episodes to exclude, and the evidence behind every finding, for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -109,8 +109,8 @@ packages = ["src/kalanos"]
 # The sdist is an allowlist, not "everything git tracks": only what is needed to
 # build the wheel and run the tests from source. pyproject.toml, README.md and
 # LICENSE are always added by hatchling. Anything not listed here (scripts/,
-# .github/, uv.lock, local output) never reaches PyPI, except the explicit
-# release-check script included below for its metadata tests.
+# .github/, uv.lock, local output) never reaches PyPI, except the release-check
+# script and the report-size benchmark, included below for their tests.
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
@@ -119,6 +119,7 @@ include = [
     "/CONTRIBUTING.md",
     "/CITATION.cff",
     "/scripts/check_release.py",
+    "/scripts/report_size",
     "/SECURITY.md",
 ]
 
@@ -156,5 +157,6 @@ venv = ".venv"
 testpaths = ["tests"]
 markers = [
     "integration: builds the wheel and installs it into a real venv; needs network access to resolve dependencies and dominates suite runtime, so it is excluded by default — run explicitly with `-m integration`.",
+    "slow: takes over ten seconds; skip it with `-m 'not slow'`.",
 ]
 addopts = "-m 'not integration'"

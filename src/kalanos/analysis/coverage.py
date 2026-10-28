@@ -7,7 +7,7 @@
 # Built-in
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 # Internal
 from kalanos.analysis.metrics.registry import registered_metrics
@@ -18,6 +18,7 @@ from kalanos.analysis.models.binding import (
     RequirementsSection,
 )
 from kalanos.analysis.models.coverage import Availability, Coverage, CoverageRow
+from kalanos.analysis.models.diagnostics import DiagnosticResult
 from kalanos.analysis.models.domain import Stream
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import Inventory
@@ -157,6 +158,26 @@ def merge_rows(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
     return merged
 
 
+def rows_that_ran(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
+    """Keep the rows where some subject was computed, skipped or errored.
+
+    A stream records only the metrics that ran on it.
+    The episode ledger, merged from every row, still counts the rest.
+
+    Parameters
+    ----------
+    rows : iterable of CoverageRow
+        A stream's coverage rows.
+
+    Returns
+    -------
+    list of CoverageRow
+        The rows with a computed, skipped or errored subject, in input order.
+    """
+
+    return [r for r in rows if r.computed + r.skipped + r.error > 0]
+
+
 def _sampled(stream):
     """A camera stream's `CORE_METRICS` results when all computed, else `None`.
 
@@ -264,8 +285,28 @@ def vision_metric_frames(streams: list[GradedStream]) -> tuple[int, int] | None:
 
 
 def episode_coverage(
-    episode: GradedEpisode, requirements: RequirementsSection
+    episode: GradedEpisode,
+    requirements: RequirementsSection,
+    diagnostics: Sequence[DiagnosticResult] = (),
 ) -> Coverage:
+    """Build the coverage ledger of one graded episode.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        The graded episode.
+    requirements : RequirementsSection
+        The requirements that decide which rows are eligible.
+    diagnostics : sequence of DiagnosticResult
+        The episode's diagnostic results, as stored in `Report.diagnostics.results`.
+        Empty when the run has no diagnostic plan.
+
+    Returns
+    -------
+    Coverage
+        The episode's metric, capability and dimension rows.
+    """
+
     metrics = merge_rows(
         [r for s in episode.streams for r in s.coverage]
         + metric_rows(Level.EPISODE, [("episode", episode.metrics)])
@@ -293,13 +334,12 @@ def episode_coverage(
         )
         for s in episode.streams
     )
-    diagnostic_results = episode.diagnostics
     metrics += [
         row(f"diagnostics.{r.kind}.{r.id}", "episode", [(r.availability, r.reason)])
-        for r in diagnostic_results
+        for r in diagnostics
     ]
     by_kind = {
-        kind: [r for r in diagnostic_results if r.kind == kind]
+        kind: [r for r in diagnostics if r.kind == kind]
         for kind in ("timing", "tracking", "motion", "vision", "windows")
     }
 
@@ -471,8 +511,25 @@ def episode_coverage(
     )
 
 
-def report_coverage(episodes: list[GradedEpisode], inventory: Inventory) -> Coverage:
-    coverages = [e.coverage for e in episodes if e.coverage is not None]
+def report_coverage(
+    ledgers: Iterable[Coverage | None], inventory: Inventory
+) -> Coverage:
+    """Merge every episode's coverage ledger into the dataset's.
+
+    Parameters
+    ----------
+    ledgers : Iterable[Coverage or None]
+        Each episode's ledger; an episode without one adds nothing.
+    inventory : Inventory
+        Which episodes were expected, loaded and failed.
+
+    Returns
+    -------
+    Coverage
+        The merged rows and counts, with the inventory's gaps.
+    """
+
+    coverages = [c for c in ledgers if c is not None]
     return Coverage(
         metrics=merge_rows(r for c in coverages for r in c.metrics),
         capabilities=merge_rows(r for c in coverages for r in c.capabilities),

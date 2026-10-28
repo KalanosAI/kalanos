@@ -29,7 +29,9 @@ The three share one decode:
 - every frame is measured and dropped, so a full scan runs in flat memory.
 
 `camera_frames` publishes the shared read as evidence,
-which the `vision` diagnostic reads.
+which the `vision` diagnostic reads,
+and `footage_vector` publishes the sampled frames, pooled,
+for the cross-episode comparison of a camera's footage.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -60,7 +62,6 @@ from kalanos.analysis.adapters.video import (
     SegmentPackets,
     VideoPayload,
 )
-from kalanos.analysis.diagnostics.previews import png_thumbnail
 from kalanos.analysis.execution import reads_numeric_payloads
 from kalanos.analysis.localization import support_for
 from kalanos.analysis.metrics.registry import metric
@@ -146,6 +147,9 @@ _DIM_P95 = 40
 # rda's thumbnail side for frame differences,
 # reached by averaging 2x2 blocks of the shared 128x128 decode.
 _FREEZE_SIZE = 64
+# The side the footage-variation vector pools each sampled frame to,
+# measured on six LeRobot datasets (docs/METRICS.md, "Across episodes").
+_VARIATION_SIZE = 16
 # A shorter repeat is a frame-rate conversion or a dropped grab (rda).
 _FREEZE_MIN_S = 0.5
 # Frames differing by less than this are one frame, however clean the camera (rda).
@@ -248,6 +252,9 @@ class _Frames:
     evidence_positions : list of int
         The positions a sampled read would measure,
         equal to `requested` unless the read is a full scan.
+    pooled : dict of int to numpy.ndarray
+        Each decoded evidence frame's `_VARIATION_SIZE` block mean
+        of its `_SAMPLE_SIZE` gray image, scaled to 0-1, keyed by position.
     stopped : tuple of (Availability, str) or None
         Why the read stopped early, `None` when it ran to the end.
     """
@@ -269,6 +276,7 @@ class _Frames:
     luma_sha256: list[str]
     requested: list[int]
     evidence_positions: list[int]
+    pooled: "dict[int, np.ndarray]"
     stopped: tuple[Availability, str] | None = None
 
 
@@ -525,6 +533,7 @@ def _read(
     assert numpy is not None
 
     wanted = set(sampled)
+    evidence_set = set(evidence)
     kept: dict[str, list[float]] = {
         name: []
         for name in (
@@ -541,6 +550,7 @@ def _read(
     pts: list[float | None] = []
     shapes: list[tuple[int, int]] = []
     hashes: list[str] = []
+    pooled: dict[int, np.ndarray] = {}
     stopped: tuple[Availability, str] | None = None
     counts = [0] * len(windows)
     diffs: list[list[float]] = [[] for _ in windows]
@@ -582,6 +592,11 @@ def _read(
                     # one at or below the dark level crushed black.
                     kept["white_share"].append(float((frame >= bright_level).mean()))
                     kept["dark_share"].append(float((frame <= dark_level).mean()))
+
+                # Only the frames a sample measures are pooled,
+                # so a full scan's vector matches a sampled read's.
+                if index in evidence_set:
+                    pooled[index] = _thumbnail(frame, _VARIATION_SIZE) / 255
 
                 thumbnail = _thumbnail(frame)
                 if position == previous_position and previous is not None:
@@ -626,30 +641,34 @@ def _read(
         luma_sha256=hashes,
         requested=list(sampled),
         evidence_positions=list(evidence),
+        pooled=pooled,
         stopped=stopped,
         **kept,
     )
 
 
-def _thumbnail(frame: "np.ndarray") -> "np.ndarray":
-    """Average a `(_SAMPLE_SIZE, _SAMPLE_SIZE)` gray frame down to a freeze thumbnail.
+def _thumbnail(frame: "np.ndarray", size: int = _FREEZE_SIZE) -> "np.ndarray":
+    """Average a `(_SAMPLE_SIZE, _SAMPLE_SIZE)` gray frame down to a thumbnail.
 
     Parameters
     ----------
     frame : numpy.ndarray
         The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
+    size : int
+        The thumbnail's side, a divisor of `_SAMPLE_SIZE`:
+        `_FREEZE_SIZE` for freezes, `_VARIATION_SIZE` for footage variation.
 
     Returns
     -------
     numpy.ndarray
-        The `(_FREEZE_SIZE, _FREEZE_SIZE)` float32 mean of each block of pixels.
+        The `(size, size)` float32 mean of each block of pixels.
     """
 
     numpy = load_numpy()
     assert numpy is not None
 
-    factor = _SAMPLE_SIZE // _FREEZE_SIZE
-    return frame.reshape(_FREEZE_SIZE, factor, _FREEZE_SIZE, factor).mean(
+    factor = _SAMPLE_SIZE // size
+    return frame.reshape(size, factor, size, factor).mean(
         axis=(1, 3), dtype=numpy.float32
     )
 
@@ -1973,12 +1992,40 @@ def camera_frames(ctx: StreamContext) -> CameraFrames | None:
     )
 
 
-def thumbnail(payload: SampledFrames, index: int, size: int) -> str | None:
-    """A base64 PNG preview of one frame, or `None` when it cannot be decoded."""
+def footage_vector(ctx: StreamContext) -> "np.ndarray | None":
+    """Return the stream's sampled frames, pooled, as one vector.
 
-    # A preview is decoration: no failure to produce one may abort the grade.
+    Called after `camera_frames` on the same stream,
+    it reads the cache that filled and decodes nothing more.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream the vision metrics read.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Each frame a sampled read measures, in order,
+        as its `_VARIATION_SIZE` block mean on a 0-1 scale,
+        flattened to one float32 vector;
+        `None` when the stream was not read as camera footage,
+        or the read missed any of those frames.
+    """
+
+    # `camera_frames` has already logged the same failure.
     try:
-        return png_thumbnail(payload.rgb_frame(index), size)
+        frames = _frames(ctx)
     except Exception:
-        logger.warning("no preview of frame %d", index, exc_info=True)
         return None
+    if isinstance(frames, MetricResult):
+        return None
+    if any(index not in frames.pooled for index in frames.evidence_positions):
+        return None
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    return numpy.concatenate(
+        [frames.pooled[index].ravel() for index in frames.evidence_positions]
+    ).astype(numpy.float32)

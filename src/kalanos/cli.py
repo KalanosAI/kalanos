@@ -10,6 +10,7 @@ so that a second command reuses the pipeline rather than reimplementing part of 
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 import json
 import logging
 import os
@@ -34,6 +35,7 @@ from kalanos.analysis.models.binding import (
     Bundle,
     RequirementsSection,
 )
+from kalanos.analysis.models.compact_keys import encode_keys
 from kalanos.analysis.models.discovery import SourceLimits
 from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.errors import KalanosError
@@ -49,7 +51,8 @@ from kalanos.analysis.reporting.families import (
     format_lowest,
 )
 from kalanos.analysis.reporting.flagged import flagged_rows
-from kalanos.analysis.reporting.render import render_json
+from kalanos.analysis.reporting.render import render_compact_json, render_json
+from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.bundle import load_bundle, load_bundle_policy
 from kalanos.assets.mapping import parse_map_argument
@@ -163,6 +166,16 @@ def grade(
         typer.Option(
             "--json",
             help="Print the Report model to stdout instead of the report card.",
+        ),
+    ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            "--compact",
+            help=(
+                "Write the report JSON with short key aliases and one key table, "
+                "for machines. Applies to --report, --json and --publish."
+            ),
         ),
     ] = False,
     color: Annotated[
@@ -348,6 +361,10 @@ def grade(
         stdout is decided by `as_json` either way.
     as_json : bool
         Print the Report model to stdout instead of the report card.
+    compact : bool
+        Replace every key of the report JSON with a short alias,
+        in the `report` file, on stdout with `as_json`, and in the `publish` payload.
+        `report`, when given, must end in `.json`.
     color : bool or None
         Style the card with color and Unicode, or print it as plain ASCII.
         `None` styles it only when stdout is a terminal and `NO_COLOR` is unset.
@@ -434,6 +451,18 @@ def grade(
     if not publish and name is not None:
         print("kalanos: --name needs --publish", file=sys.stderr)
         raise typer.Exit(code=2)
+    if compact and report is None and not as_json and not publish:
+        print(
+            "kalanos: --compact needs --report FILE.json, --json or --publish",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
+    if compact and report is not None and report.suffix.lower() != ".json":
+        print(
+            "kalanos: --compact writes JSON; --report must end in .json",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
     # (hub_url, api_key), set exactly when `publish` is.
     credentials: tuple[str, str] | None = None
     if publish:
@@ -466,7 +495,9 @@ def grade(
         # Entering the status replaces sys.stderr with a proxy that prints log
         # records above the spinner, so the handler is pointed at it afterwards.
         with progress, logging_to(sys.stderr):
-            result = api.grade(
+            # Only a JSON report can be written an episode at a time,
+            # so any other format grades into a `Report` that holds every episode.
+            result = api._grade(
                 path,
                 limits=limits,
                 mapping=mapping,
@@ -477,10 +508,13 @@ def grade(
                 vision_samples=vision_samples,
                 full_frame_scan=True if full_frame_scan else None,
                 hash_source=hash_source,
+                keep_episodes=report is not None and report.suffix.lower() != ".json",
             )
     except KalanosError as exc:
         print(f"kalanos: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
+    streamed = result if isinstance(result, StreamedReport) else None
+    header = result.header if isinstance(result, StreamedReport) else result
 
     # Step 2: write the report file, if asked, before anything reaches stdout,
     # so a failed write leaves stdout empty rather than a half card.
@@ -490,23 +524,35 @@ def grade(
             report if report.is_absolute() else get_settings().reports_dir / report
         )
         try:
-            write_report(result, destination)
+            if isinstance(result, StreamedReport):
+                with destination.open("wb") as out:
+                    result.write(out, compact=compact)
+            else:
+                write_report(result, destination, compact=compact)
         except (ValueError, OSError) as exc:
             print(f"kalanos: {exc}", file=sys.stderr)
             raise typer.Exit(code=2) from exc
 
     # Step 3: stdout is the model for a caller that wants to pipe it onward,
     # or the report card for a person reading the terminal.
-    if as_json:
-        print(render_json(result))
+    if as_json and isinstance(result, StreamedReport):
+        # Text already printed sits in the text layer's buffer; it goes out first.
+        sys.stdout.flush()
+        result.write(sys.stdout.buffer, compact=compact)
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+    elif as_json:
+        print(render_compact_json(header) if compact else render_json(header))
     else:
         width = shutil.get_terminal_size().columns if sys.stdout.isatty() else None
         print(
             render_terminal(
-                result,
+                header,
                 color=use_color,
                 width=width,
                 report_path=str(destination) if destination is not None else None,
+                episodes=streamed.card_rows if streamed is not None else None,
+                unmapped=streamed.unmapped_types if streamed is not None else None,
             )
         )
 
@@ -514,7 +560,12 @@ def grade(
     # A report with operational errors still goes: the hub decides what it can publish.
     if credentials is not None:
         hub, key = credentials
-        payload = json.loads(render_json(result))
+        # `check_name` reads only the source, so a streamed report needs no dump here.
+        payload = (
+            {"source": header.source.model_dump(mode="json") if header.source else None}
+            if streamed is not None
+            else json.loads(render_json(header))
+        )
         try:
             name = check_name(payload, name)
         except PublishError as exc:
@@ -526,9 +577,20 @@ def grade(
                     file=sys.stderr,
                 )
             raise typer.Exit(code=2) from exc
+        body = None
+        if streamed is not None:
+            buffer = io.BytesIO()
+            buffer.write(b'{"report":')
+            streamed.write(buffer, compact=compact)
+            if name is not None:
+                buffer.write(b',"name":' + json.dumps(name).encode("utf-8"))
+            buffer.write(b"}")
+            body = buffer.getvalue()
+        elif compact:
+            payload = encode_keys(payload)
         try:
             published = publish_report(
-                report=payload, api_key=key, name=name, hub_url=hub
+                report=payload, api_key=key, name=name, hub_url=hub, body=body
             )
         except PublishError as exc:
             print(f"kalanos: {exc}", file=sys.stderr)
@@ -538,16 +600,16 @@ def grade(
     # Step 4: the decision gate, from the one place decisions live. An
     # incomplete audit fails the default gate; operational errors already
     # left with exit 2 above, so this never masks one.
-    if result.operational_errors:
+    if header.operational_errors:
         print(
             "kalanos: analysis encountered operational errors; "
             "inspect the saved report",
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
-    for warning in gate_warnings(result, gate_on):
+    for warning in gate_warnings(header, gate_on):
         print(f"kalanos: {warning}", file=sys.stderr)
-    if failing_statuses(result, gate_on):
+    if failing_statuses(header, gate_on):
         raise typer.Exit(code=1)
 
 
@@ -713,6 +775,9 @@ def inspect(
             if r.score is not None
             else "readiness undefined: " + "; ".join(r.reasons)
         )
+    if episode is None:
+        for w in loaded.dataset_warnings:
+            console.print(f"warning {w.message}", markup=False)
     if loaded.score.families:
         console.print(
             "families "
@@ -790,7 +855,9 @@ def inspect(
 def publish(
     report: Annotated[
         Path,
-        typer.Argument(help="A report JSON written by `kalanos grade --report`."),
+        typer.Argument(
+            help="A report JSON written by `kalanos grade --report`, full or compact."
+        ),
     ],
     api_key: Annotated[
         str | None,

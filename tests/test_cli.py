@@ -12,6 +12,7 @@ form is pinned here rather than left to a default.
 
 # Built-in
 import csv
+import json
 from importlib import resources
 from pathlib import Path
 
@@ -24,8 +25,10 @@ from typer.testing import CliRunner
 # `--fail-on blocked,unknown`) trips; the fixture corpus has blocked episodes,
 # so a rendering test accepts either completed-audit exit. Exit 2 stays an error.
 # Internal
+from kalanos import api
 from kalanos.analysis.metrics import vision
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.compact_keys import TABLE_KEY, decode_keys
+from kalanos.analysis.models.report import DatasetWarning, Report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.families import (
     family_scores,
@@ -276,6 +279,87 @@ def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
     assert runner.invoke(app, ["inspect", str(destination)]).exit_code == 0
 
 
+def test_report_json_is_full_without_compact(tmp_path):
+    """Verify --report x.json alone writes the full format, without a key table."""
+
+    destination = tmp_path / "report.json"
+
+    runner.invoke(app, ["grade", str(CSV_FIXTURE), "--report", str(destination)])
+
+    assert TABLE_KEY not in json.loads(destination.read_text())
+
+
+def test_report_compact_writes_only_the_compact_file(tmp_path):
+    """Verify --compact writes the --report path as compact JSON, and nothing else."""
+
+    destination = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app, ["grade", str(CSV_FIXTURE), "--report", str(destination), "--compact"]
+    )
+
+    assert result.exit_code in (0, 1), result.stderr
+    assert destination.read_text().startswith('{"_compact":')
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_full_and_compact_reports_coexist_and_read_alike(tmp_path):
+    """Verify two runs leave both files, and inspect and compare read them alike."""
+
+    full = tmp_path / "full.json"
+    compact = tmp_path / "compact.json"
+
+    # Hashing the source makes the two runs comparable.
+    grade_args = ["grade", str(CSV_FIXTURE), "--hash-source", "--report"]
+    runner.invoke(app, [*grade_args, str(full)])
+    runner.invoke(app, [*grade_args, str(compact), "--compact"])
+
+    assert TABLE_KEY not in json.loads(full.read_text())
+    assert next(iter(json.loads(compact.read_text()))) == TABLE_KEY
+    inspected = [runner.invoke(app, ["inspect", str(p)]) for p in (full, compact)]
+    assert inspected[0].exit_code == inspected[1].exit_code == 0
+    assert inspected[0].stdout == inspected[1].stdout
+    compared = [
+        runner.invoke(app, ["compare", str(full), str(p)]) for p in (full, compact)
+    ]
+    assert compared[0].exit_code == compared[1].exit_code == 0
+    assert compared[0].stdout == compared[1].stdout
+    assert json.loads(compared[1].stdout)["metric_changes"] == []
+
+
+@pytest.mark.parametrize(
+    ("flags", "reason"),
+    [
+        (["--report", "report.yaml"], "--report must end in .json"),
+        ([], "--compact needs --report FILE.json, --json or --publish"),
+    ],
+    ids=["yaml", "alone"],
+)
+def test_compact_refuses_output_it_cannot_apply_to(monkeypatch, flags, reason):
+    """Verify --compact without a JSON output exits 2 before grading."""
+
+    def fail(*args, **kwargs):
+        pytest.fail("grade ran")
+
+    monkeypatch.setattr(api, "grade", fail)
+
+    result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--compact", *flags])
+
+    assert result.exit_code == 2
+    assert reason in result.stderr
+
+
+def test_json_compact_prints_the_compact_model():
+    """Verify --json --compact prints one compact document that decodes to the model."""
+
+    result = runner.invoke(app, ["grade", str(CSV_FIXTURE), "--json", "--compact"])
+
+    assert result.exit_code in (0, 1), result.stderr
+    assert result.stdout.startswith('{"_compact":')
+    report = Report.model_validate(decode_keys(json.loads(result.stdout)))
+    assert report.episodes
+
+
 def test_report_yaml_writes_a_file_that_parses_back_into_the_model(tmp_path):
     """Verify --report x.yaml writes a file that parses back into the model."""
 
@@ -410,6 +494,31 @@ def test_inspect_prints_the_card_flagged_rows_and_an_episode_worst(tmp_path):
     ]
     assert episode_flagged
     assert all("· worst " in line for line in episode_flagged)
+
+
+def test_inspect_prints_dataset_warnings(tmp_path):
+    """Verify `inspect` prints a dataset warning once in the dataset view,
+    and not in one episode's view."""
+
+    message = "5 of 5 episodes have a near-identical partner."
+    report = grade(CSV_FIXTURE).model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="near_duplicates_saturated", message=message)
+            ]
+        }
+    )
+    json_path = tmp_path / "report.json"
+    write_report(report, json_path)
+
+    dataset = runner.invoke(app, ["inspect", str(json_path)])
+    one = runner.invoke(
+        app, ["inspect", str(json_path), "--episode", report.episodes[0].id]
+    )
+
+    assert dataset.exit_code == 0 and one.exit_code == 0
+    assert dataset.stdout.splitlines().count(f"warning {message}") == 1
+    assert message not in one.stdout
 
 
 def _card_rows(text: str) -> list[str]:

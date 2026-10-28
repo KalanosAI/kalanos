@@ -26,6 +26,9 @@ from urllib.parse import urlsplit
 # External
 import certifi
 
+# Internal
+from kalanos.analysis.models.compact_keys import is_compact, key_aliases
+
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
@@ -152,7 +155,8 @@ def load_report(path: Path) -> dict[str, Any]:
     Raises
     ------
     PublishError
-        When `path` can't be read, isn't JSON, or holds something other than an object.
+        When `path` can't be read, isn't JSON, holds something other than an object,
+        or is a compact report whose key table can't be read.
     """
 
     try:
@@ -163,6 +167,11 @@ def load_report(path: Path) -> dict[str, Any]:
         raise PublishError(f"{path} is not JSON: {exc}") from exc
     if not isinstance(report, dict):
         raise PublishError(f"{path} does not hold a report")
+    if is_compact(report):
+        try:
+            key_aliases(report)
+        except ValueError as exc:
+            raise PublishError(f"{path}: {exc}") from exc
     return report
 
 
@@ -183,8 +192,11 @@ def check_name(report: dict[str, Any], name: str | None) -> str | None:
             f"--name {name!r} is not ORG/NAME: letters, digits, '.', '_' or '-', "
             "up to 64 each"
         )
-    source = report.get("source")
-    repo_id = source.get("repo_id") if isinstance(source, dict) else None
+    keys = key_aliases(report) if is_compact(report) else {}
+    source = report.get(keys.get("source", "source"))
+    repo_id = (
+        source.get(keys.get("repo_id", "repo_id")) if isinstance(source, dict) else None
+    )
     if name is None and not repo_id:
         raise PublishError(
             "this report is of a local dataset; pass --name ORG/NAME to publish it"
@@ -193,11 +205,12 @@ def check_name(report: dict[str, Any], name: str | None) -> str | None:
 
 
 def publish_report(
-    report: dict[str, Any],
+    report: dict[str, Any] | None,
     *,
     api_key: str,
     name: str | None,
     hub_url: str,
+    body: bytes | None = None,
 ) -> Published:
     """Send `report` to the hub and return what it accepted.
 
@@ -207,14 +220,18 @@ def publish_report(
 
     Parameters
     ----------
-    report : dict
-        The report, sent unchanged.
+    report : dict or None
+        The report, sent unchanged. Not read when `body` is given.
     api_key : str
         A key `check_key` accepted.
     name : str or None
         `ORG/NAME` for a local dataset, sent only when given.
     hub_url : str
         A URL `check_hub_url` returned.
+    body : bytes or None
+        The whole request body, `{"report": ..., "name": ...}` already serialized,
+        sent instead of one built from `report` and `name`.
+        It lets a report too large to hold as a dict be sent as written.
 
     Raises
     ------
@@ -222,12 +239,14 @@ def publish_report(
         When the hub refused the report or could not be reached.
     """
 
-    body: dict[str, Any] = {"report": report}
-    if name is not None:
-        body["name"] = name
+    if body is None:
+        message: dict[str, Any] = {"report": report}
+        if name is not None:
+            message["name"] = name
+        body = json.dumps(message).encode("utf-8")
     request = urllib.request.Request(
         f"{hub_url}/api/reports",
-        data=json.dumps(body).encode("utf-8"),
+        data=body,
         method="POST",
         headers={
             "Authorization": f"Bearer {api_key}",

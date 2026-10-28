@@ -12,16 +12,23 @@ and hands each level exactly what the stage below expects.
 
 # Built-in
 import logging
-from collections.abc import Sequence
-from typing import cast
+import zlib
+from collections import deque
+from collections.abc import Iterable, Sequence
+from typing import Any, Literal, cast, overload
 
 # External
+from pydantic_core import to_json
 from upath import UPath
 
 # Internal
-from kalanos.analysis.adapters.video import SampledFrames
 from kalanos.analysis.calibration import apply_calibration
-from kalanos.analysis.coverage import episode_coverage, report_coverage, stream_rows
+from kalanos.analysis.coverage import (
+    episode_coverage,
+    report_coverage,
+    rows_that_ran,
+    stream_rows,
+)
 from kalanos.analysis.identities import adapter_versions, detector_versions
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -31,8 +38,8 @@ from kalanos.analysis.metrics.registry import (
 from kalanos.analysis.metrics.vision import (
     camera_format,
     camera_frames,
+    footage_vector,
     is_camera_footage,
-    thumbnail,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
 from kalanos.analysis.models.binding import (
@@ -42,10 +49,12 @@ from kalanos.analysis.models.binding import (
     EvaluationScope,
     RequirementsSection,
 )
-from kalanos.analysis.models.diagnostics import VisionSpec
+from kalanos.analysis.models.coverage import Coverage
+from kalanos.analysis.models.diagnostics import DiagnosticResult, VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
-from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.domain import UNMAPPED_TAXONOMY_PREFIX, Episode, Stream
+from kalanos.analysis.models.eligibility import EligibilityStatus
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
     DEFAULT_VISION_SAMPLES,
@@ -53,8 +62,6 @@ from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
     Level,
-    MetricResult,
-    MetricStatus,
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
@@ -66,6 +73,7 @@ from kalanos.analysis.models.provenance import (
     RunInfo,
 )
 from kalanos.analysis.models.report import (
+    AgreementRow,
     AnalysedEpisode,
     GradedChannel,
     GradedEpisode,
@@ -73,14 +81,24 @@ from kalanos.analysis.models.report import (
     PayloadStatus,
     Report,
     StreamEvaluation,
+    check_agreement,
 )
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.models.scoring import Finding, FindingLocation
-from kalanos.analysis.scoring.cameras import compare_cameras
+from kalanos.analysis.models.summaries import EpisodeSummary
+from kalanos.analysis.reporting.card.sections import CardRow
+from kalanos.analysis.reporting.stream import StreamedReport
+from kalanos.analysis.scoring.cameras import (
+    FootageVariation,
+    camera_key,
+    camera_samples,
+    compare_cameras,
+)
 from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
     StreamKey,
     find_duplicate_episodes,
+    near_duplicate_warning,
     payload_fingerprint,
 )
 from kalanos.analysis.scoring.eligibility import (
@@ -88,12 +106,14 @@ from kalanos.analysis.scoring.eligibility import (
     dataset_train_ready,
     decide_all,
     readiness_of,
+    requirement_reasons,
     sufficiency_of,
 )
-from kalanos.analysis.scoring.gate import apply_gate
+from kalanos.analysis.scoring.gate import apply_gate, gate_counts
 from kalanos.analysis.scoring.score import (
     dataset_family_tails,
     dataset_metric_rollups,
+    metric_subjects,
     rollup,
     score_episode,
     score_metrics,
@@ -108,44 +128,14 @@ from kalanos.assets.dictionary import load_default_dictionary
 
 logger = logging.getLogger(__name__)
 
-# The vision metrics that point at a worst frame, and the evidence key that names it.
-_THUMBNAIL_INDEX = {
-    "sharpness_score": "worst_index",
-    "exposure_shift_pct": "worst_index",
-    "frozen_frame_pct": "first_run_index",
-}
+# Episode coverage ledgers held before they are merged into one.
+# A ledger outweighs the episode's compressed JSON, so a run keeps few of them.
+_LEDGERS_HELD = 64
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
-
-
-def _attach_thumbnails(
-    stream_metrics: dict[str, MetricResult], stream_ctx: StreamContext
-) -> dict[str, MetricResult]:
-    """Add the worst frame's thumbnail to each vision result graded warning or worse."""
-
-    payload = stream_ctx.payload
-    if not isinstance(payload, SampledFrames):
-        return stream_metrics
-    attached = dict(stream_metrics)
-    for name, key in _THUMBNAIL_INDEX.items():
-        result = attached.get(name)
-        if result is None or result.status not in (
-            MetricStatus.WARNING,
-            MetricStatus.CRITICAL,
-        ):
-            continue
-        index = result.evidence.get(key)
-        if index is None:
-            continue
-        image = thumbnail(payload, index, stream_ctx.vision.preview_size)
-        if image is not None:
-            attached[name] = result.model_copy(
-                update={"evidence": {**result.evidence, "thumbnail_png_base64": image}}
-            )
-    return attached
 
 
 def grade_stream(
@@ -161,6 +151,7 @@ def grade_stream(
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[StreamKey, PayloadFingerprint] | None = None,
+    footage: FootageVariation | None = None,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -190,6 +181,9 @@ def grade_stream(
         When given, receives the stream's payload fingerprint under its `StreamKey`,
         for the duplicate-episode pass; the key's last element counts
         the episode's earlier streams at the same place.
+    footage : FootageVariation or None
+        When given and the stream is camera footage,
+        receives its pooled sampled frames, for the camera's visual variation.
 
     Returns
     -------
@@ -231,7 +225,6 @@ def grade_stream(
         location=location,
     )
     findings.extend(stream_findings)
-    stream_metrics = _attach_thumbnails(stream_metrics, stream_ctx)
 
     # Step 2: fetch the payload only when there is a channel to grade with it,
     # and only when the execution tier reads payloads at all. Whatever
@@ -322,35 +315,39 @@ def grade_stream(
         Level.STREAM, [*(gc.score for gc in graded_channels), own_score], policy=policy
     )
     is_camera = is_camera_footage(stream.kind.value, stream.taxonomy_type)
-    return (
-        GradedStream(
-            taxonomy_type=stream.taxonomy_type,
-            kind=stream.kind.value,
-            source_path=str(stream.source_path),
-            coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
-            instance=stream.instance,
-            attribution=stream.attribution,
-            category=category,
-            mapping_source=stream.mapping_source,
-            score=stream_score,
-            metrics=stream_metrics,
-            channels=graded_channels,
-            source_field=stream.source_field,
-            source_identity=stream.source_identity,
-            declared_channels=stream.channels if not graded_channels else [],
-            clock=stream.clock,
-            clock_info=stream.clock_info,
-            source_order=stream.source_order,
-            evaluation=evaluation,
-            frames=camera_frames(stream_ctx) if is_camera else None,
-            video_format=camera_format(
-                stream, reads_payloads=tier != ExecutionTier.METADATA
-            )
-            if is_camera
-            else None,
-        ),
-        findings,
+    graded_stream = GradedStream(
+        taxonomy_type=stream.taxonomy_type,
+        kind=stream.kind.value,
+        source_path=str(stream.source_path),
+        coverage=stream_rows(stream, graded_channels, stream_metrics, evaluation),
+        instance=stream.instance,
+        attribution=stream.attribution,
+        category=category,
+        mapping_source=stream.mapping_source,
+        score=stream_score,
+        metrics=stream_metrics,
+        channels=graded_channels,
+        source_field=stream.source_field,
+        source_identity=stream.source_identity,
+        declared_channels=stream.channels if not graded_channels else [],
+        clock=stream.clock,
+        clock_info=stream.clock_info,
+        source_order=stream.source_order,
+        evaluation=evaluation,
+        frames=camera_frames(stream_ctx) if is_camera else None,
+        video_format=camera_format(
+            stream, reads_payloads=tier != ExecutionTier.METADATA
+        )
+        if is_camera
+        else None,
     )
+    # After `camera_frames`, so the vector comes from the read it cached;
+    # a read it could not publish is not tried again.
+    if footage is not None and is_camera:
+        read = graded_stream.frames is not None
+        vector = footage_vector(stream_ctx) if read else None
+        footage.add(episode_id, camera_key(graded_stream), vector)
+    return graded_stream, findings
 
 
 def grade_episode(
@@ -365,6 +362,7 @@ def grade_episode(
     vision: VisionSpec | None = None,
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] | None = None,
+    footage: FootageVariation | None = None,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -389,6 +387,9 @@ def grade_episode(
     fingerprints : dict or None
         When given, receives the episode's stream fingerprints under its id,
         for the duplicate-episode pass.
+    footage : FootageVariation or None
+        When given, receives the pooled sampled frames of each camera stream,
+        for the cameras' visual variation.
 
     Returns
     -------
@@ -419,6 +420,7 @@ def grade_episode(
             vision=vision,
             tier=tier,
             fingerprints=stream_prints,
+            footage=footage,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -495,6 +497,124 @@ def scope_policy(policy: Policy, requirements: RequirementsSection) -> Policy:
     return policy.model_copy(update={"metrics": metrics})
 
 
+def with_coverage(
+    episode: GradedEpisode,
+    requirements: RequirementsSection,
+    diagnostic_results: Sequence[DiagnosticResult] = (),
+) -> GradedEpisode:
+    """Record an episode's coverage ledger and trim its streams' rows to those that ran.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode.
+    requirements : RequirementsSection
+        What a pass needs under this scope.
+    diagnostic_results : Sequence[DiagnosticResult]
+        The episode's diagnostic results, when a diagnostics plan ran.
+
+    Returns
+    -------
+    GradedEpisode
+        A copy carrying its ledger, its streams' coverage trimmed.
+    """
+
+    return episode.model_copy(
+        update={
+            "coverage": episode_coverage(episode, requirements, diagnostic_results),
+            # Trim after episode_coverage, which merges the full rows.
+            "streams": [
+                s.model_copy(update={"coverage": rows_that_ran(s.coverage)})
+                for s in episode.streams
+            ],
+        }
+    )
+
+
+def summarize(
+    episode: GradedEpisode, requirements: RequirementsSection
+) -> EpisodeSummary:
+    """Take what every dataset-level step reads of one graded episode.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode carrying its coverage ledger.
+    requirements : RequirementsSection
+        What a pass needs under this scope.
+
+    Returns
+    -------
+    EpisodeSummary
+        The episode's summary.
+    """
+
+    errors = [
+        {"episode_id": episode.id, "metric": row.key, "reason": "; ".join(row.reasons)}
+        for row in (episode.coverage.metrics if episode.coverage else [])
+        if row.error
+    ]
+    return EpisodeSummary(
+        id=episode.id,
+        source_paths=episode.source_paths,
+        first_task=next((t for t in (episode.tasks or []) if t.strip()), None),
+        score=episode.score,
+        requirement_reasons=requirement_reasons(episode, requirements),
+        camera_samples=camera_samples(episode),
+        gate_counts=gate_counts(episode),
+        metric_subjects=metric_subjects(episode),
+        operational_errors=errors,
+        unmapped_types=frozenset(
+            stream.taxonomy_type
+            for stream in episode.streams
+            if stream.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
+        ),
+    )
+
+
+def _merged(ledgers: list[Coverage | None]) -> list[Coverage | None]:
+    """Merge coverage ledgers into one, which merges with others as they would.
+
+    `report_coverage` sums rows by key and frame counts,
+    so merging a merge gives what merging every ledger at once gives.
+    The inventory's own fields are set again by the final merge.
+
+    Parameters
+    ----------
+    ledgers : list[Coverage or None]
+        Episode ledgers, or merges of them.
+
+    Returns
+    -------
+    list[Coverage or None]
+        One merged ledger.
+    """
+
+    return [report_coverage(ledgers, Inventory())]
+
+
+def _blob(episode: GradedEpisode) -> bytes:
+    """Compress one graded episode's JSON, to be read back as the same model.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode.
+
+    Returns
+    -------
+    bytes
+        Its JSON-mode dump, zlib-compressed at level 1.
+    """
+
+    # `model_dump_json` writes NaN as null, which reads back as None,
+    # and `omit_empty_defaults` then leaves the field out where NaN was written.
+    # Bare NaN and Infinity tokens read back as the floats they were.
+    data = to_json(episode.model_dump(mode="json"), inf_nan_mode="constants")
+    return zlib.compress(data, 1)
+
+
+@overload
 def assemble_report(
     *,
     root: UPath,
@@ -516,7 +636,59 @@ def assemble_report(
     inventory: Inventory | None = None,
     binding_conflicts: Sequence[BindingConflict] = (),
     diagnostics_plan=None,
-) -> Report:
+    keep_episodes: Literal[True] = True,
+) -> Report: ...
+
+
+@overload
+def assemble_report(
+    *,
+    root: UPath,
+    analysed: Sequence[AnalysedEpisode],
+    policy: Policy,
+    skipped: Sequence[SkippedSource] = (),
+    unresolved: Sequence[UnresolvedSource] = (),
+    duration_s: float | None = None,
+    source: SourceInfo | None = None,
+    datasets: Sequence[DatasetInfo] = (),
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    mapping_overrides: Sequence[MappingOverride] = (),
+    requirements: RequirementsSection | None = None,
+    scope: EvaluationScope | None = None,
+    producer: Producer | None = None,
+    run: RunInfo | None = None,
+    inventory: Inventory | None = None,
+    binding_conflicts: Sequence[BindingConflict] = (),
+    diagnostics_plan=None,
+    keep_episodes: bool,
+) -> Report | StreamedReport: ...
+
+
+def assemble_report(
+    *,
+    root: UPath,
+    analysed: Sequence[AnalysedEpisode],
+    policy: Policy,
+    skipped: Sequence[SkippedSource] = (),
+    unresolved: Sequence[UnresolvedSource] = (),
+    duration_s: float | None = None,
+    source: SourceInfo | None = None,
+    datasets: Sequence[DatasetInfo] = (),
+    vision_samples: int = DEFAULT_VISION_SAMPLES,
+    full_frame_scan: bool = False,
+    vision: VisionSpec | None = None,
+    mapping_overrides: Sequence[MappingOverride] = (),
+    requirements: RequirementsSection | None = None,
+    scope: EvaluationScope | None = None,
+    producer: Producer | None = None,
+    run: RunInfo | None = None,
+    inventory: Inventory | None = None,
+    binding_conflicts: Sequence[BindingConflict] = (),
+    diagnostics_plan=None,
+    keep_episodes: bool = True,
+) -> Report | StreamedReport:
     """Grade every analysed Episode and assemble the run's Report.
 
     Parameters
@@ -527,6 +699,8 @@ def assemble_report(
         One entry per recording an adapter read: the canonical episode,
         the name of the adapter that read it, and the policy to grade it against,
         which may carry a per-deployment limit the run's own `policy` does not.
+        Without `keep_episodes`, a `deque` is emptied as its episodes are graded,
+        so each recording's payloads can be let go of.
     policy : Policy
         The loaded grading policy. Distinct from each `AnalysedEpisode`'s own `policy`:
         this is what the dataset-level rollup and `Report.policy_version` grade against.
@@ -559,10 +733,15 @@ def assemble_report(
         is the whole inventory.
     binding_conflicts : Sequence[BindingConflict]
         Mapping disagreements the resolver recorded.
+    keep_episodes : bool
+        Return a `Report` holding every graded episode.
+        Unset, each graded episode is held only as compressed JSON,
+        and a `StreamedReport` is returned,
+        unless a diagnostics plan is set: its diagnostics read across episodes.
 
     Returns
     -------
-    Report
+    Report or StreamedReport
         Every analysed episode, graded and rolled up to a Dataset-level score,
         alongside every skipped and unresolved file with its reason or evidence.
     """
@@ -575,10 +754,26 @@ def assemble_report(
     tier = scope.tier if scope is not None else ExecutionTier.STANDARD
     requirements = requirements or RequirementsSection()
     policy = scope_policy(policy, requirements)
+    keep_episodes = keep_episodes or diagnostics_plan is not None
+    policies = {item.episode.id: item.policy for item in analysed}
+    adapters = adapter_versions(item.adapter for item in analysed)
+
+    # Step 1: grade every episode. Without a diagnostics plan its coverage is final
+    # as soon as it is graded, so it is summarized then;
+    # without `keep_episodes`, it is then held only as compressed JSON.
+    if keep_episodes:
+        items: Iterable[AnalysedEpisode] = analysed
+    else:
+        queue = analysed if isinstance(analysed, deque) else deque(analysed)
+        items = (queue.popleft() for _ in range(len(queue)))
     graded_episodes: list[GradedEpisode] = []
+    blobs: list[bytes] = []
+    summaries: list[EpisodeSummary] = []
+    ledgers: list[Coverage | None] = []
     findings: list[Finding] = []
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] = {}
-    for item in analysed:
+    footage = FootageVariation()
+    for item in items:
         graded_episode, episode_findings = grade_episode(
             item.episode,
             adapter=item.adapter,
@@ -590,30 +785,32 @@ def assemble_report(
             vision=vision,
             tier=tier,
             fingerprints=fingerprints,
+            footage=footage,
         )
-        graded_episodes.append(graded_episode)
         findings.extend(episode_findings)
+        if diagnostics_plan is None:
+            graded_episode = with_coverage(graded_episode, requirements)
+            summaries.append(summarize(graded_episode, requirements))
+            ledgers.append(graded_episode.coverage)
+            if len(ledgers) >= _LEDGERS_HELD:
+                ledgers = _merged(ledgers)
+        if keep_episodes:
+            graded_episodes.append(graded_episode)
+        else:
+            blobs.append(_blob(graded_episode))
 
-    # Step 1: decide eligibility once, now that every metric has run. Every
+    # Step 2: decide eligibility once, now that every metric has run. Every
     # count, the gate and the compatibility booleans derive from this.
     scope = scope or EvaluationScope(
         requirements_id=requirements.id, policy_id="default-decisions-v1"
     )
-    inventory = inventory or Inventory(loaded=len(graded_episodes))
+    n_episodes = len(graded_episodes) + len(blobs)
+    inventory = inventory or Inventory(loaded=n_episodes)
     producer = producer or Producer(version="unknown")
     producer = producer.model_copy(
-        update={
-            "metrics": detector_versions(),
-            "adapters": adapter_versions(item.adapter for item in analysed),
-        }
+        update={"metrics": detector_versions(), "adapters": adapters}
     )
-    findings = apply_calibration(
-        findings,
-        {item.episode.id: item.policy for item in analysed},
-        run,
-        scope,
-        producer,
-    )
+    findings = apply_calibration(findings, policies, run, scope, producer)
     diagnostic_results = {}
     diagnostics = None
     if diagnostics_plan is not None:
@@ -627,30 +824,35 @@ def assemble_report(
             diagnostics_plan,
             tier,
             findings,
-            {item.episode.id: item.policy for item in analysed},
+            policies,
             {e.id: e for e in graded_episodes},
         )
         findings.extend(
             review_findings([r for rs in diagnostic_results.values() for r in rs])
         )
         graded_episodes = [
-            e.model_copy(update={"diagnostics": diagnostic_results[e.id]})
+            with_coverage(e, requirements, diagnostic_results.get(e.id, []))
             for e in graded_episodes
         ]
+        summaries = [summarize(e, requirements) for e in graded_episodes]
+        ledgers = [e.coverage for e in graded_episodes]
     cameras, camera_findings = compare_cameras(
-        graded_episodes, grades_vision=grades_vision(requirements)
+        (sample for summary in summaries for sample in summary.camera_samples),
+        grades_vision=grades_vision(requirements),
+        footage=footage,
     )
     findings.extend(camera_findings)
-    duplicates, duplicate_findings = find_duplicate_episodes(
-        graded_episodes, fingerprints, cameras
+    duplicates, duplicate_findings, near_duplicates, motion_variation = (
+        find_duplicate_episodes([s.id for s in summaries], fingerprints)
     )
     findings.extend(duplicate_findings)
-    graded_episodes = [
-        e.model_copy(update={"coverage": episode_coverage(e, requirements)})
-        for e in graded_episodes
+    dataset_warnings = [
+        w
+        for w in (near_duplicate_warning(near_duplicates, n_episodes),)
+        if w is not None
     ]
     decisions = decide_all(
-        graded_episodes, findings, requirements=requirements, policy_id=scope.policy_id
+        summaries, findings, requirements=requirements, policy_id=scope.policy_id
     )
     graded_episodes = [
         episode.model_copy(
@@ -666,7 +868,7 @@ def assemble_report(
         for episode in graded_episodes
     ]
     counts = counts_of(decisions.values(), inventory)
-    readiness = readiness_of(graded_episodes, decisions, counts)
+    readiness = readiness_of(summaries, decisions, counts)
     sufficiency = sufficiency_of(requirements, counts)
     if diagnostics_plan is not None:
         from kalanos.analysis.diagnostics.runner import finish_diagnostics
@@ -685,16 +887,16 @@ def assemble_report(
             sufficiency, diagnostics, decisions, inventory, requirements
         )
 
-    # Step 2: the dataset rollup and the gate, which now only derives.
-    episode_scores = [ge.score for ge in graded_episodes]
+    # Step 3: the dataset rollup and the gate, which now only derives.
+    episode_scores = [s.score for s in summaries]
     dataset_score = rollup(Level.DATASET, episode_scores, policy=policy).model_copy(
         update={
-            "metrics": dataset_metric_rollups(graded_episodes),
+            "metrics": dataset_metric_rollups(summaries),
             "family_tails": dataset_family_tails(episode_scores, policy=policy),
         }
     )
     dataset_score, gate = apply_gate(
-        graded_episodes,
+        summaries,
         findings,
         dataset_score,
         policy,
@@ -708,18 +910,7 @@ def assemble_report(
         update={"train_ready": dataset_train_ready(counts)}
     )
 
-    errors = []
-    for episode in graded_episodes:
-        if episode.coverage:
-            for row in episode.coverage.metrics:
-                if row.error:
-                    errors.append(
-                        {
-                            "episode_id": episode.id,
-                            "metric": row.key,
-                            "reason": "; ".join(row.reasons),
-                        }
-                    )
+    errors = [row for summary in summaries for row in summary.operational_errors]
     if diagnostics:
         errors.extend(
             {
@@ -732,13 +923,12 @@ def assemble_report(
         )
     if errors and run is not None:
         run = run.model_copy(update={"completion": RunCompletion.PARTIAL})
-    return Report(
+    fields: dict[str, Any] = dict(
         diagnostics=diagnostics,
         operational_errors=errors,
         root=root,
-        coverage=report_coverage(graded_episodes, inventory),
+        coverage=report_coverage(ledgers, inventory),
         score=dataset_score,
-        episodes=graded_episodes,
         findings=sort_findings(findings),
         skipped=list(skipped),
         unresolved=list(unresolved),
@@ -760,4 +950,41 @@ def assemble_report(
         binding_conflicts=list(binding_conflicts),
         cameras=cameras,
         duplicates=duplicates,
+        near_duplicates=near_duplicates,
+        motion_variation=motion_variation,
+        dataset_warnings=dataset_warnings,
+    )
+    if keep_episodes:
+        return Report(**fields, episodes=graded_episodes)
+
+    # Step 4: a header holding no episodes is not a valid `Report`,
+    # so it is built without validation and checked against the summaries instead.
+    header = Report.model_construct(**fields, episodes=[])
+    check_agreement(
+        header,
+        [
+            AgreementRow(
+                id=s.id,
+                eligibility=decisions[s.id],
+                train_ready=decisions[s.id].compatibility_train_ready,
+            )
+            for s in summaries
+        ],
+        ledgers,
+    )
+    return StreamedReport(
+        header=header,
+        blobs=blobs,
+        decisions=decisions,
+        card_rows=[
+            CardRow(
+                id=s.id,
+                source_paths=s.source_paths,
+                score=s.score.score,
+                eligibility=decisions[s.id],
+            )
+            for s in summaries
+            if decisions[s.id].status is not EligibilityStatus.PASS
+        ],
+        unmapped_types=frozenset(t for s in summaries for t in s.unmapped_types),
     )

@@ -45,6 +45,7 @@ from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import (
     CURRENT_SCHEMA_VERSION,
     AnalysedEpisode,
+    DatasetWarning,
     GradedChannel,
     GradedEpisode,
     GradedStream,
@@ -64,8 +65,14 @@ from kalanos.analysis.reporting.assemble import (
     grade_stream,
 )
 from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
+from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import registered_reporters
-from kalanos.analysis.reporting.render import render_html, render_json, render_yaml
+from kalanos.analysis.reporting.render import (
+    render_compact_json,
+    render_html,
+    render_json,
+    render_yaml,
+)
 from kalanos.analysis.reporting.write import write_report
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import (
@@ -951,23 +958,27 @@ def test_report_round_trips_through_json():
     assert Report.model_validate_json(render_json(report)) == report
 
 
-def test_compact_json_preserves_all_fields_and_evidence():
-    """Layout removal must preserve nulls, numeric precision and string content."""
+def test_compact_json_keeps_evidence_and_omits_only_empty_defaults():
+    """Compact JSON keeps evidence nulls, numeric precision and string content."""
 
     report = _sample_report()
-    report.findings[0].evidence = {
+    evidence = {
         "instruction": 'Grasp  the towel — 左手\nHold\t"still"',
         "samples": [None, 0, False, 0.12345678901234567, 1e-20],
         "empty": {},
     }
+    report.findings[0].evidence = evidence
     before = report.model_dump(mode="json")
     pretty = report.model_dump_json(indent=2)
 
     compact = render_json(report)
+    parsed = json.loads(compact)
 
     assert "\n" not in compact
     assert len(compact.encode("utf-8")) < len(pretty.encode("utf-8"))
-    assert json.loads(compact) == json.loads(pretty) == before
+    assert parsed == omit_empty_defaults(report, before)
+    # Compared as text so False and 0, or a float's last digit, can't pass as equal.
+    assert json.dumps(parsed["findings"][0]["evidence"]) == json.dumps(evidence)
     assert report.model_dump(mode="json") == before
 
 
@@ -999,6 +1010,23 @@ def test_write_report_raises_on_an_unknown_suffix(tmp_path):
 
     with pytest.raises(ValueError, match=r"unsupported report suffix.*\.html.*\.json"):
         write_report(report, tmp_path / "r.txt")
+
+
+def test_write_report_compact_writes_the_compact_render(tmp_path):
+    """Verify compact=True writes `render_compact_json`'s text to a .json path."""
+
+    report = _sample_report()
+    path = write_report(report, tmp_path / "r.json", compact=True)
+
+    assert path.read_text() == render_compact_json(report)
+
+
+def test_write_report_compact_refuses_a_path_other_than_json(tmp_path):
+    """Verify compact=True refuses a suffix that does not hold JSON, writing nothing."""
+
+    with pytest.raises(ValueError, match="use a .json path"):
+        write_report(_sample_report(), tmp_path / "r.html", compact=True)
+    assert not (tmp_path / "r.html").exists()
 
 
 def test_the_registry_claims_exactly_the_suffixes_write_report_accepts():
@@ -1310,6 +1338,26 @@ def test_every_finding_renders_with_its_severity_metric_and_location():
     empty = render_html(_sample_report().model_copy(update={"findings": []}))
     assert 'class="empty"' in empty
     assert 'class="findings"' not in empty
+
+
+def test_html_shows_dataset_warnings():
+    """A dataset warning renders once, in its own section,
+    and a report with none renders no such section."""
+
+    warning = DatasetWarning(
+        code="near_duplicates_saturated", message="5 of 5 episodes are alike."
+    )
+    report = _sample_report().model_copy(update={"dataset_warnings": [warning]})
+
+    html = render_html(report)
+
+    column = html[html.index('<div class="column">') :]
+    assert column.count('data-warning="near_duplicates_saturated"') == 1
+    assert (
+        '<p data-warning="near_duplicates_saturated">5 of 5 episodes are alike.</p>'
+        in column
+    )
+    assert "Dataset warnings" not in render_html(_sample_report())
 
 
 def test_a_stream_less_finding_omits_the_stream_separator_in_the_html_table():

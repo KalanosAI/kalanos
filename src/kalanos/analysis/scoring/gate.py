@@ -38,6 +38,7 @@ from kalanos.analysis.models.report import (
     TaskTrait,
 )
 from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
+from kalanos.analysis.models.summaries import EpisodeSummary, GateCounts
 from kalanos.analysis.scoring.score import rollup
 
 
@@ -190,25 +191,68 @@ def _results(episode: GradedEpisode) -> Iterable[tuple[str, MetricResult]]:
             yield from channel.metrics.items()
 
 
-def coverage(episodes: Sequence[GradedEpisode], score: ScoreResult) -> Coverage:
-    """What a dataset's grade rests on."""
+def gate_counts(episode: GradedEpisode) -> GateCounts:
+    """What the gate's coverage reads of one episode's metric results.
 
-    graded_per_episode = []
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode.
+
+    Returns
+    -------
+    GateCounts
+        Its graded results, and per metric its applicable and ungraded results
+        with the first ungraded one's reason.
+    """
+
+    graded = 0
     total: Counter[str] = Counter()
     not_applicable: Counter[str] = Counter()
     reason: dict[str, str] = {}
-    for episode in episodes:
-        graded = 0
-        for name, result in _results(episode):
-            if state_of(result) == Availability.NOT_APPLICABLE:
-                continue
-            total[name] += 1
-            if result.status in _GRADED:
-                graded += 1
-            elif result.status == MetricStatus.NOT_APPLICABLE:
-                not_applicable[name] += 1
-                reason.setdefault(name, str(result.evidence.get("reason", "")))
-        graded_per_episode.append(graded)
+    for name, result in _results(episode):
+        if state_of(result) == Availability.NOT_APPLICABLE:
+            continue
+        total[name] += 1
+        if result.status in _GRADED:
+            graded += 1
+        elif result.status == MetricStatus.NOT_APPLICABLE:
+            not_applicable[name] += 1
+            reason.setdefault(name, str(result.evidence.get("reason", "")))
+    return GateCounts(
+        graded=graded,
+        total=dict(total),
+        not_applicable=dict(not_applicable),
+        reasons=reason,
+    )
+
+
+def coverage(episodes: Sequence[GateCounts], score: ScoreResult) -> Coverage:
+    """What a dataset's grade rests on.
+
+    Parameters
+    ----------
+    episodes : Sequence[GateCounts]
+        Each graded episode's `gate_counts`, in episode order.
+    score : ScoreResult
+        The dataset's rolled-up score.
+
+    Returns
+    -------
+    Coverage
+        The families graded, the median graded checks per episode,
+        and the metrics too rarely graded to rest on.
+    """
+
+    total: Counter[str] = Counter()
+    not_applicable: Counter[str] = Counter()
+    reason: dict[str, str] = {}
+    for counts in episodes:
+        total.update(counts.total)
+        not_applicable.update(counts.not_applicable)
+        for name, text in counts.reasons.items():
+            reason.setdefault(name, text)
+    graded_per_episode = [counts.graded for counts in episodes]
     unobservable = [
         NotObservable(
             metric=name,
@@ -269,7 +313,7 @@ def _summary(
 
 
 def apply_gate(
-    episodes: Sequence[GradedEpisode],
+    episodes: Sequence[EpisodeSummary],
     findings: Sequence[Finding],
     score: ScoreResult,
     policy: Policy,
@@ -282,8 +326,8 @@ def apply_gate(
 
     Parameters
     ----------
-    episodes : Sequence[GradedEpisode]
-        Every graded episode.
+    episodes : Sequence[EpisodeSummary]
+        Every graded episode's summary.
     findings : Sequence[Finding]
         Every finding across them.
     score : ScoreResult
@@ -307,10 +351,7 @@ def apply_gate(
         return score, None
 
     graded = [episode for episode in episodes if episode.score.score is not None]
-    task_of = {
-        episode.id: next((t for t in (episode.tasks or []) if t.strip()), None)
-        for episode in graded
-    }
+    task_of = {episode.id: episode.first_task for episode in graded}
     critical = critical_keys_by_episode(findings)
     min_episodes = policy.gate.task_trait_min_episodes
     allowance = next(
@@ -347,7 +388,7 @@ def apply_gate(
         if kept:
             pruned_score = rollup(Level.DATASET, kept, policy=policy).score
 
-    cover = coverage(graded, score)
+    cover = coverage([episode.gate_counts for episode in graded], score)
     gate = Gate(
         n_episodes=total,
         failing_episodes=failing,
@@ -388,6 +429,7 @@ __all__ = [
     "cap_for",
     "coverage",
     "dataset_traits",
+    "gate_counts",
     "task_traits",
     "worse",
 ]

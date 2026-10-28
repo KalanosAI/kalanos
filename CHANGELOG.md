@@ -4,6 +4,39 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.9.0] - 2026-10-28
+
+Report schema 8.0.0.
+Reports store reason texts, duplicate episodes and diagnostics once, leave out empty defaults, can be written with short keys, and grading keeps memory flat on large datasets.
+
+### Breaking
+
+- Reports are written under report schema 8.0.0, which moves and renames fields that readers look up by path; see `docs/SCHEMA.md`. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read 8.0.0 and every 7.x report up to 7.3.0, converting it on load, and keep the version it was written with. ([#68](https://github.com/KalanosAI/kalanos/pull/68))
+
+### Added
+
+- `kalanos grade --compact` writes the report JSON with every key replaced by a short alias and one key table first, under `_compact`. `kalanos.load_report`, `kalanos inspect`, `kalanos compare` and `kalanos publish` read both formats. Full JSON stays the default. ([#65](https://github.com/KalanosAI/kalanos/pull/65))
+- The report states how much episodes' trajectories differ from each other in `motion_variation`: the root mean square, over every pair of episodes, of the distance the near-duplicate check measures, from the trajectories it already resamples, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one dataset (report schema 8.0.0). ([#67](https://github.com/KalanosAI/kalanos/pull/67))
+- Each camera states how much its footage changes between episodes in `cameras[].visual_variation`: the root mean square, over every pair of episodes, of the difference between their sampled gray frames pooled to 16x16, from the frames the vision metrics already sample, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one camera (report schema 8.0.0). ([#67](https://github.com/KalanosAI/kalanos/pull/67))
+- When the near-duplicate tier is saturated, the report writes one dataset warning to the new `dataset_warnings`, stating how many episodes have a near-identical partner and the share of compared pairs that are near. `kalanos inspect` and the HTML report show it (report schema 8.0.0). ([#64](https://github.com/KalanosAI/kalanos/pull/64))
+
+### Changed
+
+- `kalanos.load_report`, `kalanos inspect` and `kalanos compare` validate a full report from the JSON they already parsed, so loading takes 22–29% less time and 33–46% less peak memory on reports of 9 to 118 MB. ([#66](https://github.com/KalanosAI/kalanos/pull/66))
+- A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 8.0.0). ([#57](https://github.com/KalanosAI/kalanos/pull/57))
+- Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 8.0.0). ([#57](https://github.com/KalanosAI/kalanos/pull/57))
+- `duplicates` names episodes by their index in `episodes`: `duplicates.exact` holds each group of identical episodes, and `duplicates.near` stores each near pair once, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`, which `cameras[].repeated_footage` already holds. On `lerobot/usc_cloth_sim`, its 487,458 near pairs take 6.2 MB. An older 7.x report that lists pair objects is converted on load (report schema 8.0.0). ([#63](https://github.com/KalanosAI/kalanos/pull/63))
+- A near finding lists no partner: its evidence is `max_nrmse` and `nearest_nrmse`, the distance to its nearest partner, and its `value` counts every episode it is near. `duplicates` lists every near pair up to 1.5 million, and past that each episode's 5 nearest, as `near_duplicates.pairs_listed` reports. When most episode pairs are near, the new `near_duplicates` summary says so once and no near finding is written. An exact finding's evidence is empty: its group is in `duplicates.exact`, and its repeated footage in `cameras[].repeated_footage` (report schema 8.0.0). ([#58](https://github.com/KalanosAI/kalanos/pull/58), [#63](https://github.com/KalanosAI/kalanos/pull/63))
+- Every reason text is written once, in the new first key `reason_codes`, and each `reason`, `reasons` and `detail` value holds its index there (report schema 8.0.0). `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read the codes back as text. ([#60](https://github.com/KalanosAI/kalanos/pull/60))
+- A 7.2.0 report's per-episode diagnostics are ignored on load. ([#57](https://github.com/KalanosAI/kalanos/pull/57))
+- A written report leaves out a field whose value is null, an empty list or an empty map when that is the field's default, and loading the report restores it. This affects `--json`, `--report` and the publish payload; `Report.model_dump` is unchanged (report schema 8.0.0). ([#61](https://github.com/KalanosAI/kalanos/pull/61))
+- Each stream's `coverage` lists only the metrics that computed, skipped or errored on it. The episode and dataset coverage ledgers keep every metric with the same counts (report schema 8.0.0). ([#62](https://github.com/KalanosAI/kalanos/pull/62))
+
+### Fixed
+
+- A LeRobot dataset whose `info.json` declares an `fps` that is not a finite positive number, such as `0`, `-30`, `"thirty"` or `true`, reports `datasets[].nominal_rate_hz` as null, as when no `fps` is declared. A non-numeric `fps` used to raise an error, and zero or a negative value was reported as the declared rate. ([#69](https://github.com/KalanosAI/kalanos/pull/69))
+- `kalanos grade` no longer runs out of memory on large datasets: graded episodes are held as compressed JSON and the report is written episode by episode, so memory stays near the report's size. ([#70](https://github.com/KalanosAI/kalanos/pull/70))
+
 ## [0.8.2] - 2026-10-21
 
 Report schema 7.2.0.
@@ -233,6 +266,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.9.0]: https://github.com/KalanosAI/kalanos/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/KalanosAI/kalanos/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/KalanosAI/kalanos/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/KalanosAI/kalanos/compare/v0.7.2...v0.8.0

@@ -245,6 +245,11 @@
     color: var(--muted);
   }
 
+  .dataset-warnings p {
+    border-left: 3px solid var(--warning);
+    padding-left: 0.5rem;
+  }
+
   .stream-metrics { margin-bottom: 0.25rem; }
   .episode-metrics { margin-bottom: 0.75rem; }
 
@@ -355,6 +360,10 @@
 
 <div class="column">
 
+{% if report.dataset_warnings %}<section aria-label="Dataset warnings" class="dataset-warnings">
+  <h2>Dataset warnings</h2>
+  {% for w in report.dataset_warnings %}<p data-warning="{{ w.code }}">{{ w.message }}</p>{% endfor %}
+</section>{% endif %}
 {% if family_scores %}<section aria-label="Family scores">
   <h2>Family scores</h2>
   <table class="plain">
@@ -487,12 +496,11 @@
   {% for item in report.diagnostics.results %}
   <details><summary>{{ item.episode_id or "dataset" }} · {{ item.kind }} · {{ item.id }} · {{ item.availability.value }} · {{ item.consequence }}</summary>
   {% if item.kind == "vision" %}
-  <div style="display:flex;flex-wrap:wrap;gap:12px">
   {% for frame in item.evidence.get("frames", []) %}
-  {% if frame.get("thumbnail_png_base64") %}
-  <figure><img alt="Sampled frame {{ frame.source_row }}" src="data:image/png;base64,{{ frame.thumbnail_png_base64 }}">
-  <figcaption>row {{ frame.source_row }} · PTS {{ frame.presentation_time_s }} s</figcaption></figure>
-  {% endif %}{% endfor %}</div>
+  {% if frame.get("thumbnail_webp_base64") %}
+  <figure><img alt="Sampled frame {{ frame.source_row }}" src="data:image/webp;base64,{{ frame.thumbnail_webp_base64 }}">
+  <figcaption>row {{ frame.source_row }} · {% if frame.presentation_time_s is not none %}PTS {{ frame.presentation_time_s }} s{% else %}PTS unknown{% endif %} · blurriest sampled frame</figcaption></figure>
+  {% endif %}{% endfor %}
   {% endif %}
   {% set preview = tracking_preview(item) %}
   {% if preview %}

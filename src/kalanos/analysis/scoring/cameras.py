@@ -7,6 +7,8 @@ or repeating another episode's footage, goes unnoticed.
 This pass reads each camera's per-episode results after grading,
 describes the camera, and flags the episodes unlike it or repeating another's footage.
 Its findings request review or are reported; they never move a score.
+`FootageVariation` gathers each camera's pooled frames during grading,
+to say how much its footage changes between episodes.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -15,9 +17,9 @@ Its findings request review or are reported; they never move a score.
 
 # Built-in
 import math
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
 
 # Internal
 from kalanos.analysis.coverage import state_of
@@ -26,9 +28,20 @@ from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Family, Level, MetricResult
 from kalanos.analysis.models.provenance import content_digest
-from kalanos.analysis.models.report import CameraSummary, GradedEpisode, GradedStream
+from kalanos.analysis.models.report import (
+    CameraSummary,
+    GradedEpisode,
+    GradedStream,
+    Variation,
+    round_nrmse,
+)
 from kalanos.analysis.models.scoring import Finding, Severity
+from kalanos.analysis.models.summaries import CameraSample
 from kalanos.analysis.optional import load_numpy
+
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -57,6 +70,10 @@ _UNCALIBRATED = {
     "accepted": False,
     "reason": "candidate cross-episode rule; not calibrated",
 }
+_TOO_FEW_FOOTAGE = (
+    "fewer than two episodes of this camera had every sampled frame read, "
+    "with the same number of frames"
+)
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -64,17 +81,115 @@ _UNCALIBRATED = {
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
-@dataclass(frozen=True)
-class _Sample:
-    """One camera stream in one episode, with what the comparison reads of it."""
+@dataclass
+class _Running:
+    """Welford's running mean and sum of squared deviations, per column.
 
-    episode_id: str
-    stream: GradedStream
-    laplacian_var: float | None
-    exposure_level: float | None
-    dark_share: float | None
-    bright_share: float | None
-    luma: tuple[str, ...] | None
+    Attributes
+    ----------
+    n : int
+        The vectors added.
+    mean : numpy.ndarray
+        Their float64 mean, per column.
+    m2 : numpy.ndarray
+        Their float64 sum of squared deviations from `mean`, per column.
+    """
+
+    n: int
+    mean: "np.ndarray"
+    m2: "np.ndarray"
+
+    def add(self, vector: "np.ndarray") -> None:
+        """Fold one vector into the running sums.
+
+        Parameters
+        ----------
+        vector : numpy.ndarray
+            A vector as long as `mean`.
+        """
+
+        self.n += 1
+        delta = vector - self.mean
+        self.mean += delta / self.n
+        self.m2 += delta * (vector - self.mean)
+
+
+@dataclass
+class FootageVariation:
+    """How much each camera's footage changes between episodes, gathered while grading.
+
+    It keeps no episode's frames: per camera and vector length,
+    only the running mean and sum of squared deviations of each column.
+    """
+
+    _seen: set[tuple[str, str]] = field(default_factory=set, init=False)
+    _groups: "dict[str, dict[int, _Running]]" = field(default_factory=dict, init=False)
+
+    def add(self, episode_id: str, camera: str, vector: "np.ndarray | None") -> None:
+        """Add one episode's pooled frames of one camera.
+
+        Only the camera's first stream in an episode counts, as in `compare_cameras`,
+        even when that stream has no vector.
+
+        Parameters
+        ----------
+        episode_id : str
+            The episode the stream belongs to.
+        camera : str
+            The camera, as `camera_key` names it.
+        vector : numpy.ndarray or None
+            The stream's `footage_vector`, `None` when its read missed a sampled frame.
+        """
+
+        if (camera, episode_id) in self._seen:
+            return
+        self._seen.add((camera, episode_id))
+        if vector is None:
+            return
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        groups = self._groups.setdefault(camera, {})
+        if len(vector) not in groups:
+            groups[len(vector)] = _Running(
+                n=0,
+                mean=numpy.zeros(len(vector), dtype=numpy.float64),
+                m2=numpy.zeros(len(vector), dtype=numpy.float64),
+            )
+        groups[len(vector)].add(vector.astype(numpy.float64))
+
+    def result(self, camera: str) -> Variation:
+        """The camera's visual variation, over its largest group of episodes.
+
+        Episodes are grouped by vector length, that is by frames sampled;
+        the group with the most episodes counts, the first seen on a tie.
+        Over all pairs of a group's `n` episodes, the mean squared distance
+        between two vectors is `2 / (n - 1)` times the summed per-column `m2`,
+        so the value is the square root of that, divided by the vector length.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        Variation
+            The value and the episodes it covers,
+            or no value and `_TOO_FEW_FOOTAGE` below two episodes.
+        """
+
+        best: _Running | None = None
+        for group in self._groups.get(camera, {}).values():
+            if best is None or group.n > best.n:
+                best = group
+        if best is None or best.n < 2:
+            return Variation(
+                episodes=best.n if best is not None else 0, reason=_TOO_FEW_FOOTAGE
+            )
+        mean_square = 2 * float(best.m2.sum()) / ((best.n - 1) * len(best.mean))
+        return Variation(value=round_nrmse(math.sqrt(mean_square)), episodes=best.n)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -118,21 +233,50 @@ def _luma(stream: GradedStream) -> tuple[str, ...] | None:
     return hashes
 
 
-def _sample(episode_id: str, stream: GradedStream) -> _Sample:
+def _sample(episode_id: str, stream: GradedStream) -> CameraSample:
     """Read the blur, exposure and luminance-hash values of one camera stream."""
 
     sharpness = _computed(stream.metrics.get("sharpness_score"))
     level = _computed(stream.metrics.get("exposure_level"))
     variance = sharpness.evidence.get("laplacian_var") if sharpness else None
-    return _Sample(
+    return CameraSample(
         episode_id=episode_id,
-        stream=stream,
+        camera=camera_key(stream),
+        taxonomy_type=stream.taxonomy_type,
+        instance=stream.instance,
+        source_field=stream.source_field,
+        source_path=stream.source_path,
         laplacian_var=float(variance) if variance is not None else None,
         exposure_level=level.value if level else None,
         dark_share=level.evidence.get("dark_share") if level else None,
         bright_share=level.evidence.get("bright_share") if level else None,
         luma=_luma(stream),
     )
+
+
+def camera_samples(episode: GradedEpisode) -> list[CameraSample]:
+    """What `compare_cameras` reads of one episode: its first stream of each camera.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode.
+
+    Returns
+    -------
+    list[CameraSample]
+        One sample per camera, from the camera's first stream in the episode,
+        so a camera repeated within an episode is not counted twice.
+    """
+
+    samples: dict[str, CameraSample] = {}
+    for stream in episode.streams:
+        if not is_camera_footage(stream.kind or "", stream.taxonomy_type):
+            continue
+        key = camera_key(stream)
+        if key not in samples:
+            samples[key] = _sample(episode.id, stream)
+    return list(samples.values())
 
 
 def _median(values: list[float]) -> float:
@@ -156,7 +300,7 @@ def _fences(values: list[float]) -> tuple[float, float, float]:
 
 
 def _finding(
-    sample: _Sample,
+    sample: CameraSample,
     key: str,
     *,
     metric_id: str,
@@ -171,7 +315,6 @@ def _finding(
     """An episode-scoped finding that `sample` is unlike its camera,
     or repeating another episode's footage."""
 
-    stream = sample.stream
     return Finding(
         id=content_digest(
             {"metric": metric_id, "episode": sample.episode_id, "camera": key}
@@ -185,10 +328,10 @@ def _finding(
         unit=unit,
         points=0,
         episode_id=sample.episode_id,
-        stream=stream.taxonomy_type,
-        instance=stream.instance,
-        source_field=stream.source_field,
-        source_path=stream.source_path,
+        stream=sample.taxonomy_type,
+        instance=sample.instance,
+        source_field=sample.source_field,
+        source_path=sample.source_path,
         subject_level=Level.STREAM,
         evidence_strength=evidence_strength,
         evidence={"camera": key, **evidence},
@@ -199,7 +342,10 @@ def _finding(
 
 
 def compare_cameras(
-    episodes: Sequence[GradedEpisode], *, grades_vision: bool
+    samples: Iterable[CameraSample],
+    *,
+    grades_vision: bool,
+    footage: FootageVariation | None = None,
 ) -> tuple[list[CameraSummary], list[Finding]]:
     """Compare each camera across the episodes it appears in.
 
@@ -212,11 +358,14 @@ def compare_cameras(
 
     Parameters
     ----------
-    episodes : Sequence[GradedEpisode]
-        The graded episodes, with their camera streams' vision results.
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`, in episode order.
     grades_vision : bool
         Whether the scope grades the vision family:
         the findings then request review, and are only reported otherwise.
+    footage : FootageVariation or None
+        Each camera's pooled frames, gathered while grading `episodes`,
+        for its visual variation; without it no camera has one.
 
     Returns
     -------
@@ -227,22 +376,17 @@ def compare_cameras(
 
     # Step 1: group every camera stream by the camera it belongs to,
     # one per episode, so a camera repeated within an episode is not counted twice.
-    cameras: dict[str, dict[str, _Sample]] = {}
-    for episode in episodes:
-        for stream in episode.streams:
-            if not is_camera_footage(stream.kind or "", stream.taxonomy_type):
-                continue
-            cameras.setdefault(camera_key(stream), {}).setdefault(
-                episode.id, _sample(episode.id, stream)
-            )
+    cameras: dict[str, dict[str, CameraSample]] = {}
+    for sample in samples:
+        cameras.setdefault(sample.camera, {}).setdefault(sample.episode_id, sample)
 
     summaries: list[CameraSummary] = []
     findings: list[Finding] = []
     for key, by_episode in cameras.items():
-        samples = list(by_episode.values())
-        blurred = [(s, s.laplacian_var) for s in samples if s.laplacian_var is not None]
+        members = list(by_episode.values())
+        blurred = [(s, s.laplacian_var) for s in members if s.laplacian_var is not None]
         exposed = [
-            (s, s.exposure_level) for s in samples if s.exposure_level is not None
+            (s, s.exposure_level) for s in members if s.exposure_level is not None
         ]
         short = [
             name
@@ -316,8 +460,8 @@ def compare_cameras(
         # A match says the footage repeats, not that the whole episode was copied:
         # a video linked to the wrong episode matches,
         # and so does a camera replaying its output.
-        by_luma: dict[tuple[str, ...], list[_Sample]] = {}
-        for sample in samples:
+        by_luma: dict[tuple[str, ...], list[CameraSample]] = {}
+        for sample in members:
             if sample.luma is not None:
                 by_luma.setdefault(sample.luma, []).append(sample)
         repeated_footage: list[list[str]] = []
@@ -343,14 +487,14 @@ def compare_cameras(
                     )
                 )
 
-        first = samples[0].stream
+        first = members[0]
         summaries.append(
             CameraSummary(
                 camera=key,
                 stream=first.taxonomy_type,
                 instance=first.instance,
                 source_field=first.source_field,
-                n_episodes=len(samples),
+                n_episodes=len(members),
                 compared=len(short) < 2,
                 reason=(
                     f"fewer than {_MIN_EPISODES} episodes measured {' or '.join(short)}"
@@ -363,6 +507,7 @@ def compare_cameras(
                 blur_outliers=blur_outliers,
                 exposure_outliers=exposure_outliers,
                 repeated_footage=repeated_footage,
+                visual_variation=footage.result(key) if footage is not None else None,
             )
         )
     return summaries, findings

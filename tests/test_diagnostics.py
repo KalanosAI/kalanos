@@ -6,6 +6,7 @@
 
 # Built-in
 import builtins
+import json
 from copy import deepcopy
 
 # External
@@ -576,7 +577,7 @@ def test_operational_errors_are_retained_and_fail_with_exit_two(monkeypatch):
     monkeypatch.setattr("kalanos.analysis.diagnostics.runner.timing", broken)
     r = audit([episode(signal("command"), signal())], DiagnosticPlan(timing=[pair()]))
     assert r.operational_errors
-    monkeypatch.setattr("kalanos.cli.api.grade", lambda *a, **k: r)
+    monkeypatch.setattr("kalanos.cli.api._grade", lambda *a, **k: r)
     invoked = CliRunner().invoke(app, ["grade", "fixture.csv", "--json"])
     assert invoked.exit_code == 2
     assert r.eligibility_counts is not None
@@ -894,6 +895,14 @@ def test_counts_cannot_be_forged_on_report_loading():
         Report.model_validate(data)
 
 
+def test_a_result_for_an_unknown_episode_is_refused_on_report_loading():
+    report = audit([episode(camera())], DiagnosticPlan(vision=True))
+    data = report.model_dump(mode="json")
+    data["diagnostics"]["results"][0]["episode_id"] = "ghost"
+    with pytest.raises(ValidationError, match="not in the report"):
+        Report.model_validate(data)
+
+
 def test_example_bundle_loads_through_cli():
     from pathlib import Path
 
@@ -907,23 +916,29 @@ def test_example_bundle_loads_through_cli():
     assert result.exit_code == 0
 
 
-def test_visual_previews_are_bounded_and_can_be_disabled():
+def test_a_visual_preview_is_one_webp_of_the_blurriest_frame():
     import base64
-    import struct
 
-    cam = camera()
-    r = camera_read(
-        audit(
-            [episode(cam)],
-            DiagnosticPlan(vision=True),
-            vision=VisionSpec(preview_frames=2, preview_size=16),
-        )
+    sharp = np.indices((16, 16)).sum(axis=0).astype(np.uint8) * 10
+    flat = np.full((16, 16), 120, dtype=np.uint8)
+    frames = [np.stack([sharp] * 3, axis=2) for _ in range(10)]
+    frames[5] = np.stack([flat] * 3, axis=2)
+    cam = camera().model_copy(update={"payload": SyntheticFrames(frames=frames)})
+    report = audit(
+        [episode(cam)],
+        DiagnosticPlan(vision=True),
+        vision=VisionSpec(sample_frames=10, preview_size=16),
     )
-    previews = [f for f in r.evidence["frames"] if "thumbnail_png_base64" in f]
-    assert len(previews) == 2
-    png = base64.b64decode(previews[0]["thumbnail_png_base64"])
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    assert struct.unpack(">II", png[16:24]) == (16, 16)
+    r = camera_read(report)
+    assert r.measurements["preview_row"] == 5
+    previews = [f for f in r.evidence["frames"] if "thumbnail_webp_base64" in f]
+    assert [f["source_row"] for f in previews] == [5]
+    webp = base64.b64decode(previews[0]["thumbnail_webp_base64"])
+    assert webp[:4] == b"RIFF" and webp[8:12] == b"WEBP"
+    assert "thumbnail_png_base64" not in report.model_dump_json()
+    page = render_html(report)
+    assert "data:image/webp;base64," in page
+    assert "data:image/png" not in page
     off = camera_read(
         audit(
             [episode(cam)],
@@ -931,9 +946,23 @@ def test_visual_previews_are_bounded_and_can_be_disabled():
             vision=VisionSpec(preview_frames=0),
         )
     )
-    assert not any("thumbnail_png_base64" in f for f in off.evidence["frames"])
-    page = render_html(audit([episode(signal(), cam)], DiagnosticPlan(vision=True)))
-    assert "data:image/png;base64," in page
+    assert off.measurements["preview_row"] is None
+    assert not any("thumbnail_webp_base64" in f for f in off.evidence["frames"])
+
+
+def test_episode_diagnostics_are_stored_once():
+    wrist = camera().model_copy(update={"source_field": "wrist"})
+    report = audit([episode(signal(), camera(), wrist)], DiagnosticPlan(vision=True))
+    data = json.loads(report.model_dump_json())
+    assert not any("diagnostics" in e for e in data["episodes"])
+    assert report.diagnostics is not None
+    vision = [r for r in report.diagnostics.results if r.kind == "vision"]
+    assert len(vision) == 2
+    assert {r.episode_id for r in vision} == {"e"}
+    coverage = report.episodes[0].coverage
+    assert coverage is not None
+    computed = {r.key: r.computed for r in coverage.metrics}
+    assert all(computed[f"diagnostics.vision.{r.id}"] == 1 for r in vision)
 
 
 def test_tracking_preview_is_bounded_and_retains_command_response():

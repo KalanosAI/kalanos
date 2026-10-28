@@ -14,14 +14,14 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 # Internal
-from kalanos.analysis.coverage import coverage_lines, metric_rows
+from kalanos.analysis.coverage import coverage_lines, metric_rows, rows_that_ran
 from kalanos.analysis.models.binding import Bundle, RequirementsSection
 from kalanos.analysis.models.coverage import CoverageRow
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.card import render_terminal
-from kalanos.analysis.reporting.render import render_html
+from kalanos.analysis.reporting.render import render_html, render_json
 from kalanos.analysis.reporting.summary import finding_groups
 from kalanos.api import grade, load_report
 from kalanos.assets.policy import load_default_policy
@@ -276,3 +276,75 @@ def test_whole_episode_spectral_results_do_not_invent_intervals():
     )
     assert result.value is not None
     assert result.support.kind.value == "whole_episode" and not result.support.intervals
+
+
+@pytest.fixture
+def trimmed_and_full(monkeypatch):
+    """The fixture graded as shipped, and graded again keeping every stream row."""
+    trimmed = grade(LEROBOT_FIXTURE)
+    monkeypatch.setattr("kalanos.analysis.reporting.assemble.rows_that_ran", list)
+    return trimmed, grade(LEROBOT_FIXTURE)
+
+
+def _ran(row: CoverageRow) -> bool:
+    return row.computed + row.skipped + row.error > 0
+
+
+def test_rows_that_ran_keeps_computed_skipped_and_errored_rows():
+    def counted(key, **counts):
+        eligible = sum(
+            counts.get(k, 0) for k in ("computed", "unavailable", "skipped", "error")
+        )
+        return CoverageRow(key=key, unit="stream_episode", eligible=eligible, **counts)
+
+    rows = [
+        counted("a.computed", computed=1),
+        counted("b.skipped", skipped=2),
+        counted("c.error", error=3),
+        counted("d.unavailable", unavailable=4),
+        counted("e.not_applicable", not_applicable=5, not_required=6),
+    ]
+    assert rows_that_ran(rows) == rows[:3]
+
+
+def test_stream_rows_record_only_metrics_that_ran(trimmed_and_full):
+    trimmed, full = trimmed_and_full
+    assert any(
+        not _ran(r) for e in full.episodes for s in e.streams for r in s.coverage
+    )
+    for episode, full_episode in zip(trimmed.episodes, full.episodes, strict=True):
+        assert episode.coverage is not None
+        ledger = {r.key for r in episode.coverage.metrics}
+        for stream, full_stream in zip(
+            episode.streams, full_episode.streams, strict=True
+        ):
+            assert all(_ran(r) for r in stream.coverage)
+            left_out = {r.key for r in full_stream.coverage} - {
+                r.key for r in stream.coverage
+            }
+            assert left_out <= ledger
+
+
+def test_left_out_rows_keep_their_counts_in_the_ledgers(trimmed_and_full, tmp_path):
+    trimmed, full = trimmed_and_full
+    assert trimmed.coverage == full.coverage
+    assert [e.coverage for e in trimmed.episodes] == [e.coverage for e in full.episodes]
+    path = tmp_path / "report.json"
+    path.write_text(render_json(trimmed))
+    loaded = load_report(path)
+    assert isinstance(loaded, Report)
+    assert loaded.coverage == trimmed.coverage
+
+
+def test_report_without_ledgers_still_reads_as_not_recorded():
+    data = grade(LEROBOT_FIXTURE).model_dump(mode="json")
+    data["coverage"] = None
+    for episode in data["episodes"]:
+        episode["coverage"] = None
+        for stream in episode["streams"]:
+            stream["coverage"] = []
+    report = Report.model_validate(data)
+    assert report.coverage is None
+    assert coverage_lines(report.coverage) == [
+        "Coverage was not recorded in this report."
+    ]

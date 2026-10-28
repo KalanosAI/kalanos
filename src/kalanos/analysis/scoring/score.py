@@ -42,6 +42,7 @@ from kalanos.analysis.models.scoring import (
     ScoreResult,
     Severity,
 )
+from kalanos.analysis.models.summaries import EpisodeSummary, MetricSubject
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -932,15 +933,45 @@ def score_episode(
     )
 
 
+def metric_subjects(episode: GradedEpisode) -> list[MetricSubject]:
+    """Every result one episode graded, keyed as the dataset's metric rollups count it.
+
+    Parameters
+    ----------
+    episode : GradedEpisode
+        A graded episode, carrying its own `score.metrics`.
+
+    Returns
+    -------
+    list[MetricSubject]
+        The metric as `family.metric`, the level it ran at, its subject,
+        the episode's id standing for the subject at episode level,
+        and whether it flagged.
+    """
+
+    # The family is read off the episode's own rollup, so this needs no policy.
+    keys: dict[str, str] = {}
+    for key in episode.score.metrics:
+        _family, _dot, name = key.partition(".")
+        keys[name] = key
+    return [
+        (keys[name], level, (episode.id,) if level == Level.EPISODE else subject, flag)
+        for name, level, subject, _points, flag in _graded_subjects(
+            episode.streams, episode.metrics
+        )
+    ]
+
+
 def dataset_metric_rollups(
-    episodes: Sequence[GradedEpisode],
+    episodes: Sequence[EpisodeSummary],
 ) -> dict[str, MetricRollup]:
     """Count, per metric, the distinct subjects it graded and flagged in a dataset.
 
     Parameters
     ----------
-    episodes : Sequence[GradedEpisode]
-        Every graded episode, each carrying its own `score.metrics`.
+    episodes : Sequence[EpisodeSummary]
+        Every graded episode's summary, each carrying its own `score.metrics`
+        and `metric_subjects`.
 
     Returns
     -------
@@ -956,14 +987,7 @@ def dataset_metric_rollups(
     episodes_flagged: dict[str, int] = {}
 
     for episode in episodes:
-        # The family is read off the episode's own rollup, so this needs no policy.
-        keys = {key.split(".", 1)[-1]: key for key in episode.score.metrics}
-        for name, level, subject, _points, is_flagged in _graded_subjects(
-            episode.streams, episode.metrics
-        ):
-            key = keys[name]
-            if level == Level.EPISODE:
-                subject = (episode.id,)
+        for key, level, subject, is_flagged in episode.metric_subjects:
             levels.setdefault(key, level)
             graded.setdefault(key, set()).add(subject)
             if is_flagged:

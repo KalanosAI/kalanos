@@ -12,12 +12,14 @@ from pathlib import Path
 import pytest
 import yaml
 from calibration_helpers import grade_with_test_calibration
-from diagnostics_helpers import audit, episode, signal, two_channels
+from diagnostics_helpers import audit, episode, signal, two_channels, window_spec
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
 # Internal
+from kalanos.analysis.coverage import report_coverage
 from kalanos.analysis.models.binding import RequirementsSection
+from kalanos.analysis.models.diagnostics import DiagnosticPlan
 from kalanos.analysis.models.eligibility import (
     Consequence,
     EligibilityCounts,
@@ -31,12 +33,18 @@ from kalanos.analysis.models.eligibility import (
 )
 from kalanos.analysis.models.metrics import Level
 from kalanos.analysis.models.provenance import FailedEpisode, Inventory
-from kalanos.analysis.models.report import GradedEpisode, Report
+from kalanos.analysis.models.report import (
+    AgreementRow,
+    DuplicateEpisodes,
+    GradedEpisode,
+    Report,
+    check_agreement,
+)
 from kalanos.analysis.models.scoring import MetricRollup, ScoreResult
 from kalanos.analysis.scoring.eligibility import (
-    _requirement_reasons,
     counts_of,
     readiness_of,
+    requirement_reasons,
     sufficiency_of,
 )
 from kalanos.api import grade
@@ -401,7 +409,7 @@ def test_a_required_family_that_graded_only_a_non_core_metric_is_not_unknown():
     )
     requirements = RequirementsSection(required_families=["integrity", "vision"])
 
-    reasons = {r.id for r in _requirement_reasons(episode, requirements)}
+    reasons = {r.id for r in requirement_reasons(episode, requirements)}
 
     assert "family:integrity" not in reasons
     assert "family:vision" in reasons
@@ -502,3 +510,257 @@ def test_a_tier_never_changes_the_requirements(tmp_path):
         ).exit_code
         == 0
     )
+
+
+# One agreement check for both paths
+
+
+def _rows(report: Report) -> list[AgreementRow]:
+    """What `check_agreement` reads of a report's episodes.
+
+    Parameters
+    ----------
+    report : Report
+        A graded report.
+
+    Returns
+    -------
+    list[AgreementRow]
+        One row per episode, in report order.
+    """
+
+    return [
+        AgreementRow(
+            id=e.id, eligibility=e.eligibility, train_ready=e.score.train_ready
+        )
+        for e in report.episodes
+    ]
+
+
+def _ledgers(report: Report) -> list:
+    """Each episode's coverage ledger, in report order."""
+
+    return [e.coverage for e in report.episodes]
+
+
+@pytest.fixture(scope="module")
+def decided(tmp_path_factory) -> Report:
+    """A graded report with a blocked episode, a gate and finding ids.
+
+    Parameters
+    ----------
+    tmp_path_factory : pytest.TempPathFactory
+        Where the recording is written.
+
+    Returns
+    -------
+    Report
+        The graded report.
+    """
+
+    path = tmp_path_factory.mktemp("agreement") / "arm.hdf5"
+    _write_arm(path, 6, glitched={1})
+    report = grade_with_test_calibration(path)
+    assert report.gate is not None and report.gate.failing_episodes
+    assert report.eligibility_counts is not None and report.inventory is not None
+    assert report.coverage is not None and report.findings
+    assert (
+        report.inventory.complete and report.episodes[0].score.train_ready is not None
+    )
+    return report
+
+
+@pytest.fixture(scope="module")
+def diagnosed() -> Report:
+    """A report holding diagnostic results.
+
+    Returns
+    -------
+    Report
+        The assembled report.
+    """
+
+    report = audit(
+        [episode(signal("command"), signal())],
+        DiagnosticPlan(windows=[window_spec()]),
+    )
+    assert report.diagnostics is not None and report.diagnostics.results
+    return report
+
+
+def _with_counts(report: Report, **update) -> Report:
+    """A copy of `report` with its eligibility counts updated."""
+
+    assert report.eligibility_counts is not None
+    counts = report.eligibility_counts.model_copy(update=update)
+    return report.model_copy(update={"eligibility_counts": counts})
+
+
+def _with(report: Report, **update) -> tuple[Report, list[AgreementRow], list]:
+    """A copy of `report` with fields updated, and its unchanged rows and ledgers."""
+
+    return report.model_copy(update=update), _rows(report), _ledgers(report)
+
+
+def _first_row(report: Report, **update) -> tuple[Report, list[AgreementRow], list]:
+    """`report`, with its first row updated."""
+
+    rows = _rows(report)
+    return report, [rows[0].model_copy(update=update), *rows[1:]], _ledgers(report)
+
+
+def _blocked(report: Report) -> tuple[Report, list[AgreementRow], list]:
+    """`report`, with its first passing episode's row blocked."""
+
+    rows = _rows(report)
+    k = next(k for k, r in enumerate(rows) if r.train_ready is True)
+    blocked = EpisodeEligibility(
+        status=EligibilityStatus.BLOCKED,
+        scope_id="s",
+        policy_id="p",
+        reasons=[_reason(EligibilityStatus.BLOCKED)],
+    )
+    rows[k] = rows[k].model_copy(update={"eligibility": blocked, "train_ready": False})
+    return report, rows, _ledgers(report)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda r: (r, [*_rows(r), _rows(r)[0]], _ledgers(r)),
+            "duplicate episode ids",
+        ),
+        (
+            lambda r: _with(r, duplicates=DuplicateEpisodes(exact=[[0, 99]])),
+            "index outside episodes",
+        ),
+        (
+            lambda r: (r, _rows(r), [None, *_ledgers(r)[1:]]),
+            "requires episode ledgers",
+        ),
+        (
+            lambda r: _with(
+                r, coverage=r.coverage.model_copy(update={"unassessed_episodes": 7})
+            ),
+            "does not reconcile",
+        ),
+        (
+            lambda r: _with(r, findings=[r.findings[0], r.findings[0]]),
+            "duplicate finding ids",
+        ),
+        (lambda r: _first_row(r, eligibility=None), "has no eligibility"),
+        (
+            lambda r: _first_row(r, train_ready=not _rows(r)[0].train_ready),
+            "contradicts eligibility",
+        ),
+        (_blocked, "not the set of blocked"),
+        (
+            lambda r: (
+                _with_counts(r, total=r.eligibility_counts.total + 1),
+                _rows(r),
+                _ledgers(r),
+            ),
+            "does not cover the inventory",
+        ),
+        (
+            lambda r: (
+                _with_counts(
+                    r,
+                    pass_count=r.eligibility_counts.pass_count + 1,
+                    blocked=r.eligibility_counts.blocked - 1,
+                ),
+                _rows(r),
+                _ledgers(r),
+            ),
+            "disagrees with episode decisions",
+        ),
+        (
+            lambda r: (
+                _with_counts(r, confirmed_eligible_share=0.123),
+                _rows(r),
+                _ledgers(r),
+            ),
+            "confirmed_eligible_share disagrees",
+        ),
+        (
+            lambda r: (
+                _with_counts(
+                    r, inventory_complete=False, confirmed_eligible_share=None
+                ),
+                _rows(r),
+                _ledgers(r),
+            ),
+            "disagree on completeness",
+        ),
+        (
+            lambda r: _with(
+                r,
+                score=r.score.model_copy(
+                    update={"train_ready": not r.score.train_ready}
+                ),
+            ),
+            "contradicts the eligibility counts",
+        ),
+    ],
+    ids=[
+        "ids",
+        "duplicates",
+        "ledger",
+        "coverage",
+        "findings",
+        "eligibility",
+        "train-ready",
+        "gate",
+        "total",
+        "tally",
+        "share",
+        "completeness",
+        "dataset-train-ready",
+    ],
+)
+def test_check_agreement_refuses_each_disagreement(decided, mutate, message):
+    report, rows, ledgers = mutate(decided)
+
+    check_agreement(decided, _rows(decided), _ledgers(decided))
+    with pytest.raises(ValueError, match=message):
+        check_agreement(report, rows, ledgers)
+
+
+def test_check_agreement_reads_merged_ledgers_as_the_episodes_ones(decided):
+    merged = report_coverage(_ledgers(decided), Inventory())
+
+    check_agreement(decided, _rows(decided), [merged])
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda d: d.model_copy(update={"plan_digest": "bad"}),
+            "plan digest disagrees",
+        ),
+        (
+            lambda d: d.model_copy(
+                update={
+                    "results": [
+                        d.results[0].model_copy(update={"episode_id": "elsewhere"})
+                    ]
+                }
+            ),
+            "names an episode not in the report",
+        ),
+        (
+            lambda d: d.model_copy(update={"results": [d.results[0], d.results[0]]}),
+            "duplicate diagnostic result addresses",
+        ),
+    ],
+    ids=["digest", "episode", "addresses"],
+)
+def test_check_agreement_refuses_disagreeing_diagnostics(diagnosed, mutate, message):
+    assert diagnosed.diagnostics is not None
+    report = diagnosed.model_copy(update={"diagnostics": mutate(diagnosed.diagnostics)})
+
+    check_agreement(diagnosed, _rows(diagnosed), _ledgers(diagnosed))
+    with pytest.raises(ValueError, match=message):
+        check_agreement(report, _rows(diagnosed), _ledgers(diagnosed))

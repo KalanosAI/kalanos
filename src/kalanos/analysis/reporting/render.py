@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 from collections import Counter
 
 # External
@@ -25,13 +26,24 @@ from kalanos.analysis.reporting.families import (
     format_low_episodes,
     format_lowest,
 )
+from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import reporter
+from kalanos.analysis.reporting.stream import episode_data, write_report_stream
 from kalanos.analysis.reporting.summary import finding_groups
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+
+# How many findings the page shows before the rest go behind a disclosure.
+_FINDINGS_PREVIEW = 8
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
+# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
+# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 # PackageLoader resolves through the package's own loader, so this works
 # whether `kalanos` is an editable checkout or unzipped from a wheel —
@@ -44,14 +56,6 @@ _TEMPLATE_ENVIRONMENT = Environment(
     autoescape=select_autoescape(enabled_extensions=("html", "j2", "xml")),
     undefined=StrictUndefined,
 )
-
-# How many findings the page shows before the rest go behind a disclosure.
-_FINDINGS_PREVIEW = 8
-
-
-# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
-# ░█░░░█░█░█░█░█▀▀░░█░░█░█░█░█░█▀▄░█▀█░░█░░░█░░█░█░█░█
-# ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 
 def _score_attr(score: ScoreResult) -> str:
@@ -122,6 +126,11 @@ _TEMPLATE_ENVIRONMENT.filters["low_episodes"] = format_low_episodes
 _TEMPLATE_ENVIRONMENT.filters["lowest"] = format_lowest
 
 
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
 def _episode_finding_counts(findings: list[Finding]) -> dict[str, int]:
     """Count findings per episode id, so the page can open the episodes that have one.
 
@@ -166,14 +175,38 @@ def _stream_finding_counts(
     )
 
 
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+def _stream_json(report: Report, *, compact: bool) -> str:
+    """Write a Report's JSON through the streaming writer, into a string.
+
+    Parameters
+    ----------
+    report : Report
+        The report to render.
+    compact : bool
+        Replace every key with a short alias.
+
+    Returns
+    -------
+    str
+        The report as JSON text.
+    """
+
+    buffer = io.BytesIO()
+    write_report_stream(
+        report.model_copy(update={"episodes": []}),
+        lambda: (episode_data(e) for e in report.episodes),
+        buffer,
+        compact=compact,
+    )
+    return buffer.getvalue().decode()
 
 
 @reporter(name="json", extensions=(".json",))
 def render_json(report: Report) -> str:
-    """Render a Report as compact, parseable JSON without omitting any fields.
+    """Render a Report as compact JSON, leaving out the empty values defaults restore.
+
+    A field whose value is null, an empty list or an empty map is left out
+    when its default gives the same value.
 
     Parameters
     ----------
@@ -184,9 +217,29 @@ def render_json(report: Report) -> str:
     -------
     str
         The report as JSON text, matching `Report`'s own field names.
+        `Report.model_validate_json` reads it back.
     """
 
-    return report.model_dump_json()
+    return _stream_json(report, compact=False)
+
+
+def render_compact_json(report: Report) -> str:
+    """Render a Report as JSON with every key replaced by a short alias.
+
+    Parameters
+    ----------
+    report : Report
+        The report to render.
+
+    Returns
+    -------
+    str
+        `render_json`'s document with its key table first, under `_compact`,
+        and every key replaced by its alias.
+        `kalanos.load_report` reads it back.
+    """
+
+    return _stream_json(report, compact=True)
 
 
 @reporter(name="yaml", extensions=(".yaml", ".yml"))
@@ -203,12 +256,14 @@ def render_yaml(report: Report) -> str:
     str
         The report as YAML text. Parses back into the model with
         `Report.model_validate(yaml.safe_load(...))`.
+        Null and empty values the field defaults restore are left out,
+        as in `render_json`.
     """
 
     # mode="json" turns Path, Grade, Severity, Level, MetricStatus and SkipReason into
     # strings yaml.safe_dump accepts and Report.model_validate can read back.
     return yaml.safe_dump(
-        report.model_dump(mode="json"),
+        omit_empty_defaults(report, report.model_dump(mode="json")),
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,
