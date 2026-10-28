@@ -27,7 +27,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.diagnostics.common import Unavailable
-from kalanos.analysis.diagnostics.dataset import cohort
+from kalanos.analysis.diagnostics.dataset import cohort, cohort_of, stored_cohort_input
 from kalanos.analysis.diagnostics.runner import execute
 from kalanos.analysis.diagnostics.signals import motion, timing, tracking
 from kalanos.analysis.diagnostics.validation import summarize_study
@@ -741,6 +741,52 @@ def test_dataset_comparison_budget_is_explicit():
     r = cohort([episode(signal(), identifier=x) for x in spec.episode_ids], spec, {})
     assert r.measurements["pair_comparisons"] == 1
     assert r.measurements["unexamined_pairs"] == 2
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("missing", "cohort episodes absent: b"),
+        ("task", "cohort task does not match declared task of b"),
+        ("nonfinite", "cohort has no finite observations"),
+    ],
+)
+def test_a_cohort_raises_from_its_stored_inputs(case, message):
+    spec = cohort_spec()
+    values = [float("nan")] * 101 if case == "nonfinite" else None
+    episodes = [episode(signal(values=values), identifier=x) for x in ("a", "b")]
+    if case == "task":
+        episodes[1].tasks = ["another task"]
+    inputs = {
+        e.id: stored_cohort_input(e, spec)
+        for e in episodes
+        if case != "missing" or e.id == "a"
+    }
+    if case == "task":
+        assert inputs["b"].__traceback__ is None
+
+    with pytest.raises(Unavailable) as excinfo:
+        cohort_of(inputs, spec, {})
+
+    assert str(excinfo.value) == message
+
+
+def test_a_stored_cohort_error_holds_no_episode(monkeypatch):
+    import gc
+    import sys
+    import weakref
+
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    listed = episode(signal(), identifier="a")
+    held = weakref.ref(listed)
+    stored = stored_cohort_input(listed, cohort_spec())
+    del listed
+    gc.collect()
+
+    assert isinstance(stored, Unavailable)
+    assert stored.__cause__ is not None
+    assert stored.__cause__.__traceback__ is None
+    assert held() is None
 
 
 def test_configured_error_and_motion_period_controls():

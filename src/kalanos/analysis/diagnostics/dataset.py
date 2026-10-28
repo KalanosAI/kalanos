@@ -9,6 +9,8 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 # Internal
 from kalanos.analysis.diagnostics.common import (
@@ -24,83 +26,102 @@ from kalanos.analysis.models.diagnostics import CohortSpec, DiagnosticResult
 from kalanos.analysis.models.domain import Episode
 
 
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+
+
+@dataclass(frozen=True)
+class CohortInput:
+    """What one listed episode contributes to a cohort, held without the episode."""
+
+    rows: list[int] | None
+    valid: list[bool]
+    total_rows: int
+    finite_rows: int
+    excluded: dict[str, Any] | None
+    item: dict[str, Any] | None
+
+
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def cohort(
-    episodes: Sequence[Episode], spec: CohortSpec, decisions: Mapping[str, str]
-) -> DiagnosticResult:
-    """Measure occupancy, dimension, trajectory repetition and labelled phase balance.
+def cohort_input(episode: Episode, spec: CohortSpec) -> CohortInput:
+    """Take the normalized feature rows a cohort compares from one listed episode.
 
-    No inferred task labels, fitted transition model
-    or universal good/bad threshold is used.
-    Raw finite observations and passing-only summaries remain separate;
-    passing alone does not establish a representative training set.
+    Parameters
+    ----------
+    episode : Episode
+        An episode the cohort lists.
+    spec : CohortSpec
+        The cohort.
+
+    Returns
+    -------
+    CohortInput
+        The episode's rows, their validity and, when any row is finite,
+        the values the cohort's summaries and comparisons read.
+
+    Raises
+    ------
+    Unavailable
+        If numpy is missing, the episode's declared task differs from the cohort's,
+        or its features are not comparable.
     """
+
     try:
         import numpy as np
     except ImportError as exc:
         raise Unavailable("dataset diagnostics require kalanos[numeric]") from exc
-    lookup = {e.id: e for e in episodes}
-    missing = sorted(set(spec.episode_ids) - lookup.keys())
-    if missing:
-        raise Unavailable("cohort episodes absent: " + ", ".join(missing))
-    items, excluded, total_rows, finite_rows, raw_rows = [], [], 0, 0, {}
-    for identifier in spec.episode_ids:
-        episode = lookup[identifier]
-        if episode.tasks is not None and spec.task not in episode.tasks:
+    identifier = episode.id
+    if episode.tasks is not None and spec.task not in episode.tasks:
+        raise Unavailable(f"cohort task does not match declared task of {identifier}")
+    vectors, reference_times, reference_rows = [], None, None
+    first_stream = None
+    for feature in spec.features:
+        stream, channel = select(episode, feature.channel)
+        b = validated(
+            channel, ["identity", "quantity", "unit", "representation"], "cohort"
+        )
+        if b.unit != feature.unit or b.representation.value != "continuous":
             raise Unavailable(
-                f"cohort task does not match declared task of {identifier}"
+                "cohort requires matching native units and continuous representations"
             )
-        vectors, reference_times, reference_rows = [], None, None
-        first_stream = None
-        for feature in spec.features:
-            stream, channel = select(episode, feature.channel)
-            b = validated(
-                channel, ["identity", "quantity", "unit", "representation"], "cohort"
+        rows, positions, times = axis(stream)
+        if reference_times is not None and (
+            reference_times != times
+            or reference_rows != rows
+            or stream is not first_stream
+        ):
+            raise Unavailable(
+                "cohort features must share one resolved stream and source grid"
             )
-            if b.unit != feature.unit or b.representation.value != "continuous":
-                raise Unavailable(
-                    "cohort requires matching native units and continuous "
-                    "representations"
-                )
-            rows, positions, times = axis(stream)
-            if reference_times is not None and (
-                reference_times != times
-                or reference_rows != rows
-                or stream is not first_stream
-            ):
-                raise Unavailable(
-                    "cohort features must share one resolved stream and source grid"
-                )
-            first_stream = stream
-            reference_times, reference_rows = times, rows
-            values = numeric(stream, channel, positions)
-            vectors.append(
-                [
-                    (v - feature.lower) / (feature.upper - feature.lower)
-                    if v is not None
-                    else float("nan")
-                    for v in values
-                ]
-            )
-        x = np.array(vectors, dtype=float).T
-        total_rows += len(x)
-        valid = np.isfinite(x).all(axis=1)
-        finite_rows += int(valid.sum())
-        raw_rows[identifier] = (reference_rows, valid.tolist())
-        if not valid.all():
-            excluded.append(
-                {
-                    "episode_id": identifier,
-                    "reason": "nonfinite rows; excluded from trajectory comparisons",
-                    "invalid_rows": int((~valid).sum()),
-                }
-            )
-        if not valid.any():
-            continue
+        first_stream = stream
+        reference_times, reference_rows = times, rows
+        values = numeric(stream, channel, positions)
+        vectors.append(
+            [
+                (v - feature.lower) / (feature.upper - feature.lower)
+                if v is not None
+                else float("nan")
+                for v in values
+            ]
+        )
+    x = np.array(vectors, dtype=float).T
+    valid = np.isfinite(x).all(axis=1)
+    excluded = (
+        None
+        if valid.all()
+        else {
+            "episode_id": identifier,
+            "reason": "nonfinite rows; excluded from trajectory comparisons",
+            "invalid_rows": int((~valid).sum()),
+        }
+    )
+    item = None
+    if valid.any():
         t = np.array(reference_times)
         trajectory = None
         if valid.all():
@@ -124,15 +145,159 @@ def cohort(
             if valid.all()
             else None
         )
-        items.append(
-            {
-                "id": identifier,
-                "x": x[valid],
-                "trajectory": trajectory,
-                "duration": float(t[-1]),
-                "digest": digest,
-            }
-        )
+        item = {
+            "id": identifier,
+            "x": x[valid],
+            "trajectory": trajectory,
+            "duration": float(t[-1]),
+            "digest": digest,
+        }
+    return CohortInput(
+        rows=reference_rows,
+        valid=valid.tolist(),
+        total_rows=len(x),
+        finite_rows=int(valid.sum()),
+        excluded=excluded,
+        item=item,
+    )
+
+
+def cohort_inputs(
+    episodes: Sequence[Episode], spec: CohortSpec
+) -> dict[str, CohortInput | BaseException]:
+    """Take each listed episode's cohort input, or the error taking it raised.
+
+    Parameters
+    ----------
+    episodes : Sequence[Episode]
+        Episodes, listed by the cohort or not.
+    spec : CohortSpec
+        The cohort.
+
+    Returns
+    -------
+    dict[str, CohortInput or BaseException]
+        By episode id, for the episodes the cohort lists.
+    """
+
+    return {
+        episode.id: stored_cohort_input(episode, spec)
+        for episode in episodes
+        if episode.id in spec.episode_ids
+    }
+
+
+def stored_cohort_input(
+    episode: Episode, spec: CohortSpec
+) -> CohortInput | BaseException:
+    """Take one episode's cohort input, keeping an error to raise when the cohort runs.
+
+    Parameters
+    ----------
+    episode : Episode
+        An episode the cohort lists.
+    spec : CohortSpec
+        The cohort.
+
+    Returns
+    -------
+    CohortInput or BaseException
+        The input, or the exception `cohort_input` raised.
+    """
+
+    try:
+        return cohort_input(episode, spec)
+    except Exception as exc:
+        # A traceback holds the frames that read the episode, keeping it alive,
+        # and every exception the error was chained from carries its own.
+        pending: list[BaseException | None] = [exc]
+        seen: set[int] = set()
+        while pending:
+            link = pending.pop()
+            if link is None or id(link) in seen:
+                continue
+            seen.add(id(link))
+            link.__traceback__ = None
+            pending += [link.__cause__, link.__context__]
+        return exc
+
+
+def cohort(
+    episodes: Sequence[Episode], spec: CohortSpec, decisions: Mapping[str, str]
+) -> DiagnosticResult:
+    """Measure a cohort over its listed episodes.
+
+    Parameters
+    ----------
+    episodes : Sequence[Episode]
+        Episodes, listed by the cohort or not.
+    spec : CohortSpec
+        The cohort.
+    decisions : Mapping[str, str]
+        Each episode's eligibility status, by id.
+
+    Returns
+    -------
+    DiagnosticResult
+        The result `cohort_of` gives over the listed episodes' inputs.
+    """
+
+    return cohort_of(cohort_inputs(episodes, spec), spec, decisions)
+
+
+def cohort_of(
+    inputs: Mapping[str, CohortInput | BaseException],
+    spec: CohortSpec,
+    decisions: Mapping[str, str],
+) -> DiagnosticResult:
+    """Measure occupancy, dimension, trajectory repetition and labelled phase balance.
+
+    No inferred task labels, fitted transition model
+    or universal good/bad threshold is used.
+    Raw finite observations and passing-only summaries remain separate;
+    passing alone does not establish a representative training set.
+
+    Parameters
+    ----------
+    inputs : Mapping[str, CohortInput or BaseException]
+        Each listed episode's input, or the error taking it raised, by episode id.
+    spec : CohortSpec
+        The cohort.
+    decisions : Mapping[str, str]
+        Each episode's eligibility status, by id.
+
+    Returns
+    -------
+    DiagnosticResult
+        The cohort's measurements.
+
+    Raises
+    ------
+    Unavailable
+        If numpy is missing, a listed episode is absent,
+        the first listed episode with a stored error raised it,
+        or no listed episode has a finite row.
+    """
+
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise Unavailable("dataset diagnostics require kalanos[numeric]") from exc
+    missing = sorted(set(spec.episode_ids) - inputs.keys())
+    if missing:
+        raise Unavailable("cohort episodes absent: " + ", ".join(missing))
+    items, excluded, total_rows, finite_rows, raw_rows = [], [], 0, 0, {}
+    for identifier in spec.episode_ids:
+        taken = inputs[identifier]
+        if isinstance(taken, BaseException):
+            raise taken
+        total_rows += taken.total_rows
+        finite_rows += taken.finite_rows
+        raw_rows[identifier] = (taken.rows, taken.valid)
+        if taken.excluded is not None:
+            excluded.append(taken.excluded)
+        if taken.item is not None:
+            items.append(taken.item)
     if not items:
         raise Unavailable("cohort has no finite observations")
 
@@ -327,7 +492,7 @@ def cohort(
 
 
 def run_dataset_diagnostics(
-    episodes: Sequence[Episode],
+    inputs: Mapping[str, Mapping[str, CohortInput | BaseException]],
     specs: Sequence[CohortSpec],
     decisions: Mapping[str, str],
     execute: Callable[
@@ -335,10 +500,31 @@ def run_dataset_diagnostics(
         DiagnosticResult,
     ],
 ) -> list[DiagnosticResult]:
-    """Execute dataset-level checks independently of the episode score rollup."""
+    """Execute dataset-level checks independently of the episode score rollup.
+
+    Parameters
+    ----------
+    inputs : Mapping[str, Mapping[str, CohortInput or BaseException]]
+        Each cohort's stored inputs, by cohort id, then by episode id.
+    specs : Sequence[CohortSpec]
+        The cohorts.
+    decisions : Mapping[str, str]
+        Each episode's eligibility status, by id.
+    execute : Callable
+        Runs one diagnostic, recording an error or an unavailable reason as a result.
+
+    Returns
+    -------
+    list[DiagnosticResult]
+        One result per cohort, in `specs` order.
+    """
+
     return [
         execute(
-            "cohort", spec, None, lambda spec=spec: cohort(episodes, spec, decisions)
+            "cohort",
+            spec,
+            None,
+            lambda spec=spec: cohort_of(inputs.get(spec.id, {}), spec, decisions),
         )
         for spec in specs
     ]

@@ -9,6 +9,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Changed
 
 - `kalanos grade` grades each episode as soon as it is read and lets go of it before reading the next, so peak memory on a dataset read from one source no longer grows with its number of episodes. `duration_s` and `run.finished_at` now include the time spent grading. A mapping override that matches no stream still fails the run, now once every episode is graded.
+- With a diagnostics plan, `kalanos grade` writing a `.json` report also lets go of each episode once it is graded: each episode's diagnostics run as it is graded, and a cohort keeps only the normalized values it compares of each episode it lists. Diagnostic results still stay in memory until the report is written.
 
 ## [0.9.0] - 2026-10-28
 

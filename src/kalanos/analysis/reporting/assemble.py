@@ -22,13 +22,14 @@ from pydantic_core import to_json
 from upath import UPath
 
 # Internal
-from kalanos.analysis.calibration import apply_calibration
+from kalanos.analysis.calibration import apply_calibration, may_promote
 from kalanos.analysis.coverage import (
     episode_coverage,
     report_coverage,
     rows_that_ran,
     stream_rows,
 )
+from kalanos.analysis.diagnostics.dataset import CohortInput
 from kalanos.analysis.identities import adapter_versions, detector_versions
 from kalanos.analysis.metrics.registry import (
     run_channel_metrics,
@@ -655,12 +656,12 @@ class ReportBuilder:
         vision : VisionSpec or None
             Decode caps, previews and exposure levels; the defaults when `None`.
         diagnostics_plan : DiagnosticPlan or None
-            The diagnostics to run. Its diagnostics read across episodes,
-            so with a plan every added episode is kept until `finish`.
+            The diagnostics to run. Each episode's run as it is added;
+            a cohort keeps only the values it compares of each episode it lists.
         keep_episodes : bool
             Make `finish` return a `Report` holding every graded episode.
             Unset, each graded episode is held only as compressed JSON,
-            and `finish` returns a `StreamedReport`, unless a diagnostics plan is set.
+            and `finish` returns a `StreamedReport`.
         """
 
         self._dictionary = load_default_dictionary()
@@ -671,11 +672,13 @@ class ReportBuilder:
         self._full_frame_scan = full_frame_scan
         self._vision = vision
         self._diagnostics_plan = diagnostics_plan
-        self._keep_episodes = keep_episodes or diagnostics_plan is not None
+        self._keep_episodes = keep_episodes
         self._policies: dict[str, Policy] = {}
         # A dict keeps the order each adapter was first seen in.
         self._adapters: dict[str, None] = {}
-        self._analysed: list[AnalysedEpisode] = []
+        self._diagnostic_results: dict[str, list[DiagnosticResult]] = {}
+        # By cohort id, then by episode id.
+        self._cohort_inputs: dict[str, dict[str, CohortInput | BaseException]] = {}
         self._graded_episodes: list[GradedEpisode] = []
         self._blobs: list[bytes] = []
         self._summaries: list[EpisodeSummary] = []
@@ -692,8 +695,8 @@ class ReportBuilder:
     def add(self, item: AnalysedEpisode) -> None:
         """Grade one analysed episode and keep what the dataset-level steps read of it.
 
-        Without a diagnostics plan its coverage is final as soon as it is graded,
-        so it is summarized then;
+        Its diagnostics run as soon as it is graded,
+        so its coverage is final and it is summarized then;
         without `keep_episodes`, it is then held only as compressed JSON.
 
         Parameters
@@ -710,11 +713,10 @@ class ReportBuilder:
 
         from kalanos.analysis.diagnostics.runner import validate_review_plan
 
-        validate_review_plan(self._diagnostics_plan, item.policy)
+        plan = self._diagnostics_plan
+        validate_review_plan(plan, item.policy)
         self._policies[item.episode.id] = item.policy
         self._adapters.setdefault(item.adapter)
-        if self._diagnostics_plan is not None:
-            self._analysed.append(item)
         graded_episode, episode_findings = grade_episode(
             item.episode,
             adapter=item.adapter,
@@ -729,12 +731,37 @@ class ReportBuilder:
             footage=self._footage,
         )
         self._findings.extend(episode_findings)
-        if self._diagnostics_plan is None:
-            graded_episode = with_coverage(graded_episode, self._requirements)
-            self._summaries.append(summarize(graded_episode, self._requirements))
-            self._ledgers.append(graded_episode.coverage)
-            if len(self._ledgers) >= _LEDGERS_HELD:
-                self._ledgers = _merged(self._ledgers)
+        results: list[DiagnosticResult] = []
+        if plan is not None:
+            from kalanos.analysis.diagnostics.dataset import stored_cohort_input
+            from kalanos.analysis.diagnostics.runner import diagnose_episode
+
+            # Calibration fixes every id and every consequence but those of findings
+            # a manifest may still promote, which the windows leave pending.
+            own = apply_calibration(episode_findings, self._policies, None, None, None)
+            results = diagnose_episode(
+                item.episode,
+                plan,
+                self._tier,
+                own,
+                item.policy,
+                graded_episode,
+                {f.id for f in own if f.id and may_promote(f, item.policy)},
+            )
+            self._diagnostic_results[item.episode.id] = results
+            # The metadata tier skips every cohort, so it reads no payload for one.
+            for spec in (
+                plan.cohorts if self._tier is not ExecutionTier.METADATA else ()
+            ):
+                if item.episode.id in spec.episode_ids:
+                    self._cohort_inputs.setdefault(spec.id, {})[item.episode.id] = (
+                        stored_cohort_input(item.episode, spec)
+                    )
+        graded_episode = with_coverage(graded_episode, self._requirements, results)
+        self._summaries.append(summarize(graded_episode, self._requirements))
+        self._ledgers.append(graded_episode.coverage)
+        if len(self._ledgers) >= _LEDGERS_HELD:
+            self._ledgers = _merged(self._ledgers)
         if self._keep_episodes:
             self._graded_episodes.append(graded_episode)
         else:
@@ -798,7 +825,6 @@ class ReportBuilder:
         requirements = self._requirements
         policy = self._policy
         diagnostics_plan = self._diagnostics_plan
-        analysed = self._analysed
         policies = self._policies
         graded_episodes = self._graded_episodes
         blobs = self._blobs
@@ -821,31 +847,22 @@ class ReportBuilder:
             update={"metrics": detector_versions(), "adapters": adapters}
         )
         findings = apply_calibration(findings, policies, run, scope, producer)
-        diagnostic_results = {}
+        diagnostic_results = self._diagnostic_results
         diagnostics = None
         if diagnostics_plan is not None:
-            from kalanos.analysis.diagnostics.runner import (
-                episode_diagnostics,
-                review_findings,
-            )
+            from kalanos.analysis.diagnostics.runner import review_findings
+            from kalanos.analysis.diagnostics.windows import resolve_windows
 
-            diagnostic_results = episode_diagnostics(
-                [a.episode for a in analysed],
-                diagnostics_plan,
-                tier,
-                findings,
-                policies,
-                {e.id: e for e in graded_episodes},
-            )
+            diagnostic_results = {
+                episode_id: [
+                    resolve_windows(r, findings) if r.kind == "windows" else r
+                    for r in results
+                ]
+                for episode_id, results in diagnostic_results.items()
+            }
             findings.extend(
                 review_findings([r for rs in diagnostic_results.values() for r in rs])
             )
-            graded_episodes = [
-                with_coverage(e, requirements, diagnostic_results.get(e.id, []))
-                for e in graded_episodes
-            ]
-            summaries = [summarize(e, requirements) for e in graded_episodes]
-            ledgers = [e.coverage for e in graded_episodes]
         cameras, camera_findings = compare_cameras(
             (sample for summary in summaries for sample in summary.camera_samples),
             grades_vision=grades_vision(requirements),
@@ -886,7 +903,7 @@ class ReportBuilder:
             from kalanos.analysis.diagnostics.runner import finish_diagnostics
 
             diagnostics = finish_diagnostics(
-                [a.episode for a in analysed],
+                self._cohort_inputs,
                 diagnostics_plan,
                 diagnostic_results,
                 decisions,
@@ -1124,8 +1141,7 @@ def assemble_report(
     keep_episodes : bool
         Return a `Report` holding every graded episode.
         Unset, each graded episode is held only as compressed JSON,
-        and a `StreamedReport` is returned,
-        unless a diagnostics plan is set: its diagnostics read across episodes.
+        and a `StreamedReport` is returned.
 
     Returns
     -------
@@ -1143,7 +1159,7 @@ def assemble_report(
         diagnostics_plan=diagnostics_plan,
         keep_episodes=keep_episodes,
     )
-    if keep_episodes or diagnostics_plan is not None:
+    if keep_episodes:
         items: Iterable[AnalysedEpisode] = analysed
     else:
         queue = analysed if isinstance(analysed, deque) else deque(analysed)

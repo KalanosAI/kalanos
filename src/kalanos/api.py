@@ -217,8 +217,7 @@ def _grade(
         As `grade` takes them.
     keep_episodes : bool
         Return a `Report` holding every graded episode.
-        Unset, a `StreamedReport` holds them as compressed JSON,
-        unless the bundle carries a diagnostics plan.
+        Unset, a `StreamedReport` holds them as compressed JSON.
 
     Returns
     -------
