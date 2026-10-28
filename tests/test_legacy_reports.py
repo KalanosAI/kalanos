@@ -7,6 +7,7 @@
 # Built-in
 import hashlib
 import json
+import re
 from pathlib import Path
 
 # External
@@ -22,6 +23,7 @@ from kalanos.analysis.models.legacy import (
     load_any,
     load_legacy,
 )
+from kalanos.analysis.models.reason_codes import decode_reasons
 from kalanos.analysis.models.report import Report, Variation
 from kalanos.analysis.scoring.duplicates import _TOO_FEW
 from kalanos.api import compare, grade, load_report
@@ -39,7 +41,14 @@ from helpers import CSV_FIXTURE
 LEGACY = Path(__file__).parent / "legacy_reports"
 TOWEL_6_4 = LEGACY / "aloha_static_towel-048fef2-6.4.0-trimmed.json"
 TINY_6_5 = LEGACY / "lerobot_v3_tiny-6.5.0.json"
+V7_1 = LEGACY / "lerobot_v3_tiny-7.1.0.json"
+V7_2 = LEGACY / "lerobot_v3_tiny-7.2.0.json"
 TINY_V3 = Path(__file__).parent / "fixtures" / "lerobot_v3_tiny"
+
+# The two conversions `docs/SCHEMA.md` documents for a 7.x report:
+# pair-object `duplicates` become `DuplicateEpisodes`,
+# and per-episode `diagnostics` are ignored.
+CONVERTED_ON_LOAD = re.compile(r"/duplicates|/episodes\[\d+\]/diagnostics")
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -85,6 +94,74 @@ def test_real_schema63_fixture_loads_without_fabricating_coverage():
     assert isinstance(report, LegacyReport)
     assert report.schema_version == "6.3.0" and report.summary.n_episodes == 1
     assert not compare(path, path).comparable
+
+
+def _assert_contains(written, loaded, path: str) -> None:
+    """Assert every value in `written` is in `loaded`, through nested dicts and lists.
+
+    Parameters
+    ----------
+    written : Any
+        A value as the file stores it.
+    loaded : Any
+        The same value from the loaded report's decoded JSON dump.
+    path : str
+        Where `written` sits in the file, as `/key/list[i]`, for the failure message.
+
+    Raises
+    ------
+    AssertionError
+        If a key is missing from `loaded`, a list changes length, or a value differs,
+        outside the paths in `CONVERTED_ON_LOAD`.
+    """
+
+    if isinstance(written, dict):
+        assert isinstance(loaded, dict), path
+        for key, value in written.items():
+            if CONVERTED_ON_LOAD.fullmatch(f"{path}/{key}"):
+                continue
+            assert key in loaded, f"{path}/{key} missing after load"
+            _assert_contains(value, loaded[key], f"{path}/{key}")
+    elif isinstance(written, list):
+        assert isinstance(loaded, list) and len(loaded) == len(written), path
+        for i, (w, ld) in enumerate(zip(written, loaded, strict=True)):
+            _assert_contains(w, ld, f"{path}[{i}]")
+    else:
+        assert written == loaded, f"{path}: {written!r} became {loaded!r}"
+
+
+def test_a_new_report_declares_8_0_0(tmp_path):
+    out = tmp_path / "r.json"
+    out.write_text(grade(TINY_V3).model_dump_json())
+    assert json.loads(out.read_text())["schema_version"] == "8.0.0"
+
+
+@pytest.mark.parametrize(("path", "version"), [(V7_1, "7.1.0"), (V7_2, "7.2.0")])
+def test_a_0_8_x_report_loads_with_its_values(tmp_path, path, version):
+    loaded = load_report(path)
+
+    assert isinstance(loaded, Report)
+    assert loaded.schema_version == version
+    _assert_contains(
+        json.loads(path.read_text()),
+        decode_reasons(loaded.model_dump(mode="json")),
+        "",
+    )
+    assert loaded.duplicates.exact == []
+    assert loaded.duplicates.near.episode == []
+    runner = CliRunner()
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert f"schema {version}" in result.output and "2/2 pass" in result.output
+    fresh = tmp_path / "fresh.json"
+    fresh.write_text(grade(TINY_V3).model_dump_json())
+    result = runner.invoke(app, ["compare", str(path), str(fresh)])
+    # Code 1 says two builds' reports are not comparable; code 2 is a load failure.
+    # A crash would also exit 1, so the verdict must be printed and agree with the code.
+    assert result.exit_code in (0, 1), result.output
+    assert json.loads(result.stdout)["comparable"] is (result.exit_code == 0)
+    diff = compare(path, path)
+    assert diff.added_episodes == diff.removed_episodes == diff.episode_changes == []
 
 
 def test_a_current_report_is_not_legacy(tmp_path):
@@ -206,8 +283,8 @@ def test_a_malformed_or_unknown_pair_is_refused(tmp_path, change, message):
         load_any(UPath(out))
 
 
-@pytest.mark.parametrize("version", ["7.4.0", "8.0.0", "7.x.0"])
-def test_a_newer_or_malformed_7_report_is_refused(tmp_path, version):
+@pytest.mark.parametrize("version", ["7.4.0", "8.0.1", "8.1.0", "9.0.0", "7.x.0"])
+def test_a_newer_or_malformed_report_is_refused(tmp_path, version):
     payload = grade(TINY_V3).model_dump(mode="json")
     payload["schema_version"] = version
     out = tmp_path / "r.json"
@@ -228,7 +305,7 @@ def test_inspect_reads_current_and_legacy_reports(tmp_path):
 
 
 def test_a_report_without_dataset_warnings_loads(tmp_path):
-    """A 7.3.0 report written before `dataset_warnings` existed loads with none."""
+    """A report written before `dataset_warnings` existed loads with none."""
 
     payload = grade(TINY_V3).model_dump(mode="json")
     payload.pop("dataset_warnings", None)

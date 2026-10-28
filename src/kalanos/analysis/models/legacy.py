@@ -4,7 +4,7 @@ A historical report is evidence of what an older build decided.
 This loader returns its values untouched and names the schema.
 It points out where the old fields contradict each other,
 such as an episode `train_ready: true` that the gate also lists as failing,
-and labels anything schema 7 would have recorded but the old file lacks as unknown.
+and labels anything a current report would record but the old file lacks as unknown.
 It never invents producer identity, clock provenance, defect intervals or eligibility.
 """
 
@@ -33,6 +33,17 @@ from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION, Report
 
 LEGACY_SCHEMAS = ("6.3.0", "6.4.0", "6.5.0")
 
+# Every version from this one up to `CURRENT_SCHEMA_VERSION` must validate as `Report`,
+# through the converting validators in `report.py`.
+# Raising it is how a later major stops reading 7.x,
+# and `NEWEST_PRIOR_SCHEMA` then names the last version of the new prior major.
+OLDEST_CURRENT_SCHEMA = (7, 0, 0)
+
+# The last version an earlier major reached.
+# A file of an earlier major newer than this was written by no build,
+# so it is refused rather than read as current.
+NEWEST_PRIOR_SCHEMA = (7, 3, 0)
+
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
 # ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
@@ -56,7 +67,7 @@ class Contradiction(BaseModel):
 
 
 class DerivedSummary(BaseModel):
-    """What schema 7 counts *would* say, derived from legacy fields, labelled as such.
+    """What a current report's counts *would* say, derived from legacy fields.
 
     Attributes
     ----------
@@ -149,10 +160,12 @@ def _unknown(data: dict[str, Any]) -> list[str]:
 def _reads_as_current(version: str) -> bool:
     """Whether a file declaring `version` validates as the current `Report`.
 
-    Minor and patch bumps inside a major only add fields with defaults,
-    so an older file of the current major still validates.
+    A file from `OLDEST_CURRENT_SCHEMA` up to the current version
+    validates as the current `Report`,
+    whose validators convert the older shapes.
     A newer one would validate too, dropping the fields this build does not know,
-    so it is refused.
+    so it is refused,
+    and so is a file of an earlier major newer than `NEWEST_PRIOR_SCHEMA`.
 
     Parameters
     ----------
@@ -162,8 +175,10 @@ def _reads_as_current(version: str) -> bool:
     Returns
     -------
     bool
-        True when `version` is three integers, its major is the current major,
-        and it is not newer than `CURRENT_SCHEMA_VERSION`.
+        True when `version` is three integers,
+        not older than `OLDEST_CURRENT_SCHEMA`,
+        not newer than `CURRENT_SCHEMA_VERSION`,
+        and, below the current major, not newer than `NEWEST_PRIOR_SCHEMA`.
     """
 
     current = tuple(int(part) for part in CURRENT_SCHEMA_VERSION.split("."))
@@ -171,7 +186,9 @@ def _reads_as_current(version: str) -> bool:
         found = tuple(int(part) for part in version.split("."))
     except ValueError:
         return False
-    return len(found) == 3 and found[0] == current[0] and found <= current
+    if len(found) != 3 or not OLDEST_CURRENT_SCHEMA <= found <= current:
+        return False
+    return found[0] == current[0] or found <= NEWEST_PRIOR_SCHEMA
 
 
 def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
@@ -190,7 +207,7 @@ def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
     ------
     UnsupportedSchema
         If the file is not one of `LEGACY_SCHEMAS`.
-        A schema-7 file is not legacy: read it with `Report.model_validate_json`.
+        A 7.x or 8.x file is not legacy: read it with `load_any`.
     """
 
     if isinstance(source, dict):
@@ -202,7 +219,7 @@ def load_legacy(source: UPath | str | bytes | dict[str, Any]) -> LegacyReport:
     version = str(data.get("schema_version", ""))
     if _reads_as_current(version):
         raise UnsupportedSchema(
-            f"schema {version} is current; read it as a Report, not a legacy file"
+            f"schema {version} reads as a current Report, not a legacy file"
         )
     if version not in LEGACY_SCHEMAS:
         raise UnsupportedSchema(
@@ -239,8 +256,7 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
     Returns
     -------
     Report or LegacyReport
-        A `Report` when the file declares the current schema major,
-        up to the current version,
+        A `Report` when the file declares a schema from 7.0.0 up to the current version,
         otherwise the file loaded as a `LegacyReport`.
 
     Raises
@@ -250,12 +266,13 @@ def load_any(source: UPath | str | os.PathLike[str]) -> Report | LegacyReport:
     ValueError
         If the file is not JSON,
         a compact file's key table is malformed,
-        or a file of the current schema major does not validate as a `Report`.
+        or a file declaring a schema from 7.0.0 up to the current version
+        does not validate as a `Report`.
     UnsupportedEncoding
         If a compact file declares an encoding version this kalanos can't read.
     UnsupportedSchema
-        If the file declares neither the current schema major,
-        up to the current version, nor one of `LEGACY_SCHEMAS`.
+        If the file declares neither a schema from 7.0.0 up to the current version,
+        nor one of `LEGACY_SCHEMAS`.
     """
 
     raw = UPath(source).read_bytes()
