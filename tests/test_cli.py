@@ -12,6 +12,7 @@ form is pinned here rather than left to a default.
 
 # Built-in
 import csv
+import importlib.metadata
 import json
 from importlib import resources
 from pathlib import Path
@@ -137,6 +138,15 @@ def test_help_lists_grade_as_a_subcommand():
     assert result.exit_code == 0
     assert "COMMAND [ARGS]" in result.output
     assert "grade" in result.output
+
+
+def test_version_flag_prints_the_installed_version_and_exits_zero():
+    """Verify `kalanos --version` prints the version and runs no subcommand."""
+
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == f"kalanos {importlib.metadata.version('kalanos')}"
 
 
 def test_grade_is_invoked_as_a_subcommand_not_as_the_bare_command():
