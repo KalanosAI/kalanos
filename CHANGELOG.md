@@ -29,6 +29,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - A written report leaves out a field whose value is null, an empty list or an empty map when that is the field's default, and loading the report restores it. This affects `--json`, `--report` and the publish payload; `Report.model_dump` is unchanged (report schema 8.0.0).
 - Each stream's `coverage` lists only the metrics that computed, skipped or errored on it. The episode and dataset coverage ledgers keep every metric with the same counts (report schema 8.0.0).
 
+### Fixed
+
+- A LeRobot dataset whose `info.json` declares an `fps` that is not a finite positive number, such as `0`, `-30`, `"thirty"` or `true`, reports `datasets[].nominal_rate_hz` as null, as when no `fps` is declared. A non-numeric `fps` used to raise an error, and zero or a negative value was reported as the declared rate.
+
 ## [0.8.2] - 2026-10-21
 
 Report schema 7.2.0.
