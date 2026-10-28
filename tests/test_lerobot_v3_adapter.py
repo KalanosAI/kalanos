@@ -143,6 +143,38 @@ def test_the_declared_rate_is_read_not_inferred(tmp_path):
     assert info.episode_count == 2
 
 
+@pytest.mark.parametrize(
+    ("fps", "expected"),
+    [
+        (30, 30.0),
+        ("30", 30.0),
+        (0, None),
+        (-30, None),
+        ("thirty", None),
+        (True, None),
+        (None, None),
+    ],
+)
+def test_an_unusable_declared_rate_is_reported_as_none(tmp_path, fps, expected):
+    """Verify describe() keeps a usable `fps` and drops anything else to None.
+
+    A `None` case removes the key, so an absent rate is covered too.
+    """
+
+    copy_root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy_root)
+    info_path = copy_root / "meta" / "info.json"
+    info_json = json.loads(info_path.read_text())
+    info_json.pop("fps")
+    if fps is not None:
+        info_json["fps"] = fps
+    info_path.write_text(json.dumps(info_json))
+
+    info = LeRobotV3Adapter().describe(UPath(copy_root))
+
+    assert info.nominal_rate_hz == expected
+
+
 def test_a_camera_stream_is_never_fully_decoded_while_grading(monkeypatch):
     """Verify grading the whole fixture samples frames and never decodes them all."""
 

@@ -31,6 +31,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Fixed
 
+- A LeRobot dataset whose `info.json` declares an `fps` that is not a finite positive number, such as `0`, `-30`, `"thirty"` or `true`, reports `datasets[].nominal_rate_hz` as null, as when no `fps` is declared. A non-numeric `fps` used to raise an error, and zero or a negative value was reported as the declared rate.
 - `kalanos grade` no longer runs out of memory on large datasets: graded episodes are held as compressed JSON and the report is written episode by episode, so memory stays near the report's size.
 
 ## [0.8.2] - 2026-10-21
