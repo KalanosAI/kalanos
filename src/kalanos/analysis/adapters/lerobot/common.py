@@ -471,9 +471,33 @@ def describe_from_info(name: str, path: UPath, info: dict[str, Any]) -> DatasetI
         adapter=name,
         path=path,
         episode_count=info.get("total_episodes"),
-        nominal_rate_hz=float(info["fps"]) if "fps" in info else None,
+        nominal_rate_hz=_declared_rate(info.get("fps")),
         robot_type=info.get("robot_type"),
     )
+
+
+def _declared_rate(value: Any) -> float | None:
+    """Read a declared rate, or `None` when it is not a usable rate.
+
+    Parameters
+    ----------
+    value : Any
+        The `fps` value `info.json` holds, `None` when it holds none.
+
+    Returns
+    -------
+    float or None
+        The rate in Hz, or `None` when it is absent, unparseable,
+        non-finite, or not positive.
+    """
+
+    # bool is an int subclass, so float(True) would declare a 1 Hz rate.
+    if isinstance(value, bool):
+        return None
+    rate = _coerced(value, float)
+    if rate is None or not math.isfinite(rate) or rate <= 0:
+        return None
+    return rate
 
 
 def sampling_is_regular(timestamps: pl.Series) -> bool:
