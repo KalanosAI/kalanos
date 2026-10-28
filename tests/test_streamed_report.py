@@ -642,6 +642,8 @@ def test_a_diagnostics_plan_streams_the_same_report(plan, tmp_path):
     if plan.vision:
         assert [camera_read(kept).consequence] == ["review"]
     assert streamed_file == kept_file
+    assert kept_file == _whole_dump(kept, compact=False)
+    assert render_compact_json(kept).encode() == _whole_dump(kept, compact=True)
 
 
 def test_a_calibrated_window_resolves_after_grading(monkeypatch, tmp_path):
