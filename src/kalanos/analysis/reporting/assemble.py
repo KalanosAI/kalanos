@@ -883,10 +883,14 @@ class ReportBuilder:
         readiness = readiness_of(summaries, decisions, counts)
         sufficiency = sufficiency_of(requirements, counts)
         if diagnostics_plan is not None:
+            from kalanos.analysis.diagnostics.dataset import cohort_inputs
             from kalanos.analysis.diagnostics.runner import finish_diagnostics
 
             diagnostics = finish_diagnostics(
-                [a.episode for a in analysed],
+                {
+                    spec.id: cohort_inputs([a.episode for a in analysed], spec)
+                    for spec in diagnostics_plan.cohorts
+                },
                 diagnostics_plan,
                 diagnostic_results,
                 decisions,
