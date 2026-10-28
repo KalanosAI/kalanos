@@ -6,22 +6,26 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Breaking
+
+- Reports are written under report schema 8.0.0, which moves and renames fields that readers look up by path; see `docs/SCHEMA.md`. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read 8.0.0 and every 7.x report up to 7.3.0, converting it on load, and keep the version it was written with.
+
 ### Added
 
 - `kalanos grade --compact` writes the report JSON with every key replaced by a short alias and one key table first, under `_compact`. `kalanos.load_report`, `kalanos inspect`, `kalanos compare` and `kalanos publish` read both formats. Full JSON stays the default.
 - The report states how much episodes' trajectories differ from each other in `motion_variation`: the root mean square, over every pair of episodes, of the distance the near-duplicate check measures, from the trajectories it already resamples, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one dataset (report schema 8.0.0).
 - Each camera states how much its footage changes between episodes in `cameras[].visual_variation`: the root mean square, over every pair of episodes, of the difference between their sampled gray frames pooled to 16x16, from the frames the vision metrics already sample, with the number of episodes covered. It is descriptive, feeds no score, and compares episodes within one camera (report schema 8.0.0).
-- When the near-duplicate tier is saturated, the report writes one dataset warning to the new `dataset_warnings`, stating how many episodes have a near-identical partner and the share of compared pairs that are near. `kalanos inspect` and the HTML report show it (report schema 7.3.0).
+- When the near-duplicate tier is saturated, the report writes one dataset warning to the new `dataset_warnings`, stating how many episodes have a near-identical partner and the share of compared pairs that are near. `kalanos inspect` and the HTML report show it (report schema 8.0.0).
 
 ### Changed
 
 - `kalanos.load_report`, `kalanos inspect` and `kalanos compare` validate a full report from the JSON they already parsed, so loading takes 22–29% less time and 33–46% less peak memory on reports of 9 to 118 MB.
-- A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 7.3.0).
-- Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 7.3.0).
-- `duplicates` names episodes by their index in `episodes`: `duplicates.exact` holds each group of identical episodes, and `duplicates.near` stores each near pair once, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`, which `cameras[].repeated_footage` already holds. On `lerobot/usc_cloth_sim`, its 487,458 near pairs take 6.2 MB. An older 7.x report that lists pair objects is converted on load (report schema 7.3.0).
-- A near finding lists no partner: its evidence is `max_nrmse` and `nearest_nrmse`, the distance to its nearest partner, and its `value` counts every episode it is near. `duplicates` lists every near pair up to 1.5 million, and past that each episode's 5 nearest, as `near_duplicates.pairs_listed` reports. When most episode pairs are near, the new `near_duplicates` summary says so once and no near finding is written. An exact finding's evidence is empty: its group is in `duplicates.exact`, and its repeated footage in `cameras[].repeated_footage` (report schema 7.3.0).
+- A vision diagnostic embeds one preview per camera and episode, a WebP of its blurriest sampled frame in `thumbnail_webp_base64`, named by `measurements.preview_row`, in place of up to `preview_frames` PNG previews. A vision metric graded warning or critical no longer embeds a preview; its `worst_index` or `first_run_index` names the frame (report schema 8.0.0).
+- Each episode's diagnostic results are stored once, in `diagnostics.results`; `episodes[].diagnostics` is gone (report schema 8.0.0).
+- `duplicates` names episodes by their index in `episodes`: `duplicates.exact` holds each group of identical episodes, and `duplicates.near` stores each near pair once, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`, which `cameras[].repeated_footage` already holds. On `lerobot/usc_cloth_sim`, its 487,458 near pairs take 6.2 MB. An older 7.x report that lists pair objects is converted on load (report schema 8.0.0).
+- A near finding lists no partner: its evidence is `max_nrmse` and `nearest_nrmse`, the distance to its nearest partner, and its `value` counts every episode it is near. `duplicates` lists every near pair up to 1.5 million, and past that each episode's 5 nearest, as `near_duplicates.pairs_listed` reports. When most episode pairs are near, the new `near_duplicates` summary says so once and no near finding is written. An exact finding's evidence is empty: its group is in `duplicates.exact`, and its repeated footage in `cameras[].repeated_footage` (report schema 8.0.0).
 - Every reason text is written once, in the new first key `reason_codes`, and each `reason`, `reasons` and `detail` value holds its index there (report schema 8.0.0). `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read the codes back as text.
-- `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current schema, 7.3.0. A 7.2.0 report's per-episode diagnostics are ignored on load.
+- A 7.2.0 report's per-episode diagnostics are ignored on load.
 - A written report leaves out a field whose value is null, an empty list or an empty map when that is the field's default, and loading the report restores it. This affects `--json`, `--report` and the publish payload; `Report.model_dump` is unchanged (report schema 8.0.0).
 - Each stream's `coverage` lists only the metrics that computed, skipped or errored on it. The episode and dataset coverage ledgers keep every metric with the same counts (report schema 8.0.0).
 

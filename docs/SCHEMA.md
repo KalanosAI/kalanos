@@ -1,6 +1,6 @@
 # Report schema
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 7.3.0 changes below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 8.0.0 changes (written by Kalanos 0.9.0) below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
 
@@ -15,6 +15,14 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - Episode and dataset ledgers are unchanged.
 - `motion_variation` is new: how much the episodes' trajectories differ from each other, from the trajectories the duplicate check resamples. It is descriptive and feeds no score.
 - `cameras[].visual_variation` is new: how much each camera's footage changes between episodes, from the frames the vision metrics sample. It is descriptive and feeds no score.
+- `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.
+- `thumbnail_png_base64` is no longer written, neither in a vision diagnostic's `evidence.frames[]` nor in a metric's `evidence`. A vision result embeds one WebP preview of its blurriest sampled frame, in that frame's `thumbnail_webp_base64`, and names the frame in `measurements.preview_row` (`null` with `preview_frames: 0` or when the frame cannot be encoded). Each frame keeps its `source_row` and `presentation_time_s`, and the video file is the result's `subject.source_path`.
+- `duplicates` is no longer a list of pair objects. It is a `DuplicateEpisodes` object that names episodes by their index in `episodes`: `exact` holds each group of identical episodes, and `near` stores each near pair once, under its earlier episode, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`; read shared footage from `cameras[].repeated_footage`. A 7.0.0 to 7.3.0 report that lists pair objects is converted on load, its distances rounded to 4 significant digits.
+- `duplicates` lists every near pair up to 1.5 million. Past that, it keeps a near pair only when it is among the 5 nearest of either episode, and `near_duplicates.pairs_listed` falls short of `pairs_near`.
+- An `integrity.near_duplicate_episode` finding no longer lists partners: its evidence is `max_nrmse`, the limit, and `nearest_nrmse`, the distance to its nearest partner to 4 significant digits. `partners`, `nrmse`, `footage_identical` and `partners_omitted` are gone from it, and `value` still counts every episode it is near. Its pairs are in `duplicates.near`.
+- An `integrity.duplicate_episode` finding's evidence is empty: `partners` and `footage_identical` are gone, since `duplicates.exact` holds the group and `cameras[].repeated_footage` the repeated footage. `value` still counts the other copies.
+- When the near tier is saturated (see `NearDuplicateSummary.saturated`), no `integrity.near_duplicate_episode` finding is written.
+- `dataset_warnings` is new. When the near tier is saturated, it holds one `near_duplicates_saturated` warning stating how many episodes have a near-identical partner and the share of compared pairs that are near. It feeds no score.
 
 | Field | Type | What it is |
 |---|---|---|
@@ -23,8 +31,21 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `Variation.episodes` | `int` | The episodes covered. |
 | `Variation.reason` | `str` or `null` | Why `value` is `null`. Written as an index into `reason_codes`, and left out when `null`. |
 | `cameras[].visual_variation` | `Variation` or `null` | How much the camera's footage changes between episodes, as the RMS difference of their sampled gray frames pooled to 16x16 on a 0-1 scale. Motion in view counts as change, and it compares episodes within this camera. It covers the largest group of episodes whose read decoded every sampled frame, with the same number of frames; `reason` says when fewer than two qualify. `null` in a report written before the field existed. |
+| `near_duplicates` | `NearDuplicateSummary` or `null` | How many pairs the near-duplicate search found, over the whole dataset. `null` when the search did not run: numpy is missing, or no group of comparable episodes holds two that differ in their payloads and could be resampled (every value finite, at least 2 rows). |
+| `NearDuplicateSummary.limit` | `float` | The largest normalized RMSE at which a pair counts as near. |
+| `NearDuplicateSummary.max_partners` | `int` | The most near partners each episode keeps in `duplicates` when `pairs_listed` is less than `pairs_near`. A near finding lists no partner. |
+| `NearDuplicateSummary.episodes_compared` | `int` | The episodes the near search compared: the first of each group of exact copies. |
+| `NearDuplicateSummary.pairs_compared` | `int` | The pairs among them, summed over the groups of episodes that hold the same streams and channels. |
+| `NearDuplicateSummary.pairs_near` | `int` | Of those, the pairs within `limit` whose row counts also agree. |
+| `NearDuplicateSummary.pairs_listed` | `int` | The near pairs in `duplicates`: every one of `pairs_near`, or, when there are too many to list, those among the nearest `max_partners` of either episode. |
+| `NearDuplicateSummary.episodes_with_partner` | `int` | The episodes, exact copies included, with at least one near partner. |
+| `NearDuplicateSummary.median_nearest_nrmse` | `float` or `null` | The median, over compared episodes with a near partner, of the distance to their nearest one. `null` when `pairs_near` is 0. |
+| `NearDuplicateSummary.saturated` | `bool` | Whether more than half the compared pairs are near and there are more near pairs than compared episodes. The near tier then does not separate copies from re-runs in this dataset; the exact tier still applies. |
+| `dataset_warnings` | `list[DatasetWarning]` | Warnings about the dataset as a whole, which belong to no episode. Descriptive: they have no effect on any score. Left out of a written report when empty. |
+| `DatasetWarning.code` | `"near_duplicates_saturated"` | What the warning is about. `near_duplicates_saturated`: the near tier is saturated, so no episode carries a near-duplicate finding; the counts are in `near_duplicates`. |
+| `DatasetWarning.message` | `str` | The warning, stated for a reader. |
 
-A report without `motion_variation` still loads, with `motion_variation` null. A report without `visual_variation` still loads, with each camera's `visual_variation` null.
+`kalanos inspect`, `kalanos compare` and `kalanos.load_report` read an 8.0.0 report and every 7.x report from 7.0.0 to 7.3.0, and refuse a newer one. No release wrote 7.3.0. A 7.x report keeps the `schema_version` it was written with and is converted as it loads: pair-object `duplicates` as above, `episodes[].diagnostics` ignored, any `thumbnail_png_base64` left in `evidence` as written, reason texts read as they are, `near_duplicates`, `motion_variation` and every `visual_variation` null, and `dataset_warnings` empty.
 
 ## Compact encoding (version 1)
 
@@ -47,35 +68,6 @@ becomes
 ```
 
 To decode, read the table, then replace each key `k` with `keys[i]` where `alias(i) == k`. Since the table comes first, a streaming reader can translate keys as they arrive.
-
-## Changed in 7.3.0
-
-- `GradedEpisode.diagnostics` is removed. Each diagnostic result is stored once, in `Report.diagnostics.results`, addressed by `episode_id`, `kind` and `id`.
-- `thumbnail_png_base64` is no longer written, neither in a vision diagnostic's `evidence.frames[]` nor in a metric's `evidence`. A vision result embeds one WebP preview of its blurriest sampled frame, in that frame's `thumbnail_webp_base64`, and names the frame in `measurements.preview_row` (`null` with `preview_frames: 0` or when the frame cannot be encoded). Each frame keeps its `source_row` and `presentation_time_s`, and the video file is the result's `subject.source_path`.
-- `duplicates` is no longer a list of pair objects. It is a `DuplicateEpisodes` object that names episodes by their index in `episodes`: `exact` holds each group of identical episodes, and `near` stores each near pair once, under its earlier episode, with its distance to 4 significant digits. A pair no longer carries `footage_identical` or `cameras`; read shared footage from `cameras[].repeated_footage`. A 7.0.0 to 7.3.0 report that lists pair objects is converted on load, its distances rounded to 4 significant digits.
-- `duplicates` lists every near pair up to 1.5 million. Past that, it keeps a near pair only when it is among the 5 nearest of either episode, and `near_duplicates.pairs_listed` falls short of `pairs_near`.
-- An `integrity.near_duplicate_episode` finding no longer lists partners: its evidence is `max_nrmse`, the limit, and `nearest_nrmse`, the distance to its nearest partner to 4 significant digits. `partners`, `nrmse`, `footage_identical` and `partners_omitted` are gone from it, and `value` still counts every episode it is near. Its pairs are in `duplicates.near`.
-- An `integrity.duplicate_episode` finding's evidence is empty: `partners` and `footage_identical` are gone, since `duplicates.exact` holds the group and `cameras[].repeated_footage` the repeated footage. `value` still counts the other copies.
-- When the near tier is saturated (see `NearDuplicateSummary.saturated`), no `integrity.near_duplicate_episode` finding is written.
-- `dataset_warnings` is new. When the near tier is saturated, it holds one `near_duplicates_saturated` warning stating how many episodes have a near-identical partner and the share of compared pairs that are near. It feeds no score.
-
-| Field | Type | What it is |
-|---|---|---|
-| `near_duplicates` | `NearDuplicateSummary` or `null` | How many pairs the near-duplicate search found, over the whole dataset. `null` when the search did not run: numpy is missing, or no group of comparable episodes holds two that differ in their payloads and could be resampled (every value finite, at least 2 rows). |
-| `NearDuplicateSummary.limit` | `float` | The largest normalized RMSE at which a pair counts as near. |
-| `NearDuplicateSummary.max_partners` | `int` | The most near partners each episode keeps in `duplicates` when `pairs_listed` is less than `pairs_near`. A near finding lists no partner. |
-| `NearDuplicateSummary.episodes_compared` | `int` | The episodes the near search compared: the first of each group of exact copies. |
-| `NearDuplicateSummary.pairs_compared` | `int` | The pairs among them, summed over the groups of episodes that hold the same streams and channels. |
-| `NearDuplicateSummary.pairs_near` | `int` | Of those, the pairs within `limit` whose row counts also agree. |
-| `NearDuplicateSummary.pairs_listed` | `int` | The near pairs in `duplicates`: every one of `pairs_near`, or, when there are too many to list, those among the nearest `max_partners` of either episode. |
-| `NearDuplicateSummary.episodes_with_partner` | `int` | The episodes, exact copies included, with at least one near partner. |
-| `NearDuplicateSummary.median_nearest_nrmse` | `float` or `null` | The median, over compared episodes with a near partner, of the distance to their nearest one. `null` when `pairs_near` is 0. |
-| `NearDuplicateSummary.saturated` | `bool` | Whether more than half the compared pairs are near and there are more near pairs than compared episodes. The near tier then does not separate copies from re-runs in this dataset; the exact tier still applies. |
-| `dataset_warnings` | `list[DatasetWarning]` | Warnings about the dataset as a whole, which belong to no episode. Descriptive: they have no effect on any score. Left out of a written report when empty. |
-| `DatasetWarning.code` | `"near_duplicates_saturated"` | What the warning is about. `near_duplicates_saturated`: the near tier is saturated, so no episode carries a near-duplicate finding; the counts are in `near_duplicates`. |
-| `DatasetWarning.message` | `str` | The warning, stated for a reader. |
-
-A 7.2.0 report still loads: its `episodes[].diagnostics` is ignored, any `thumbnail_png_base64` stays in `evidence` as it was written, `near_duplicates` is null and `dataset_warnings` is empty.
 
 ## Added in 7.2.0
 
@@ -102,7 +94,7 @@ A 7.2.0 report still loads: its `episodes[].diagnostics` is ignored, any `thumbn
 
 `found`'s `bit_rate`, `frame_count` and `duration_s` describe the whole video file. A LeRobot v3.0 dataset stores several episodes in one file, so each of those episodes reports the same values. Of the container's tags, only the camera make, model and encoder are read, and no location is recorded. A field one side can never state stays `null` on that side.
 
-A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null, and a `video_format` that lacks the codec, encoding and source fields loads with them null. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read any 7.x report up to the current version, and refuse a newer one.
+A 7.1.0 report loads with `video_format`, `split` and every `source_dtype` null, and a `video_format` that lacks the codec, encoding and source fields loads with them null.
 
 ## Added in 7.1.0
 
@@ -215,7 +207,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 1. Read `eligibility_counts` and `readiness.score` (which may be `null`; show `readiness.reasons`), not `score.train_ready` or a letter.
 2. Gate CI on the exit code of `kalanos grade --fail-on ...`, or on `eligibility_counts` from `--json`.
 3. Show `scope.requirements_id` beside any number: a readiness is meaningless without its scope.
-4. To read a 6.x file, use `kalanos.analysis.models.legacy.load_any`; it returns a `LegacyReport` with the original data, its SHA-256, contradictions and the fields it cannot supply. Do not convert legacy values into schema-7 decisions.
+4. To read a 6.x file, use `kalanos.analysis.models.legacy.load_any`; it returns a `LegacyReport` with the original data, its SHA-256, contradictions and the fields it cannot supply. Do not convert legacy values into current decisions.
 5. Keep showing `scope`, `eligibility_counts`, `readiness`, `sufficiency` and `coverage` together wherever readiness appears: a `readiness.score` of `null` means undefined.
 6. Decode every `reason`, `reasons` and `detail` value through `reason_codes` before showing or comparing it.
 7. Read a missing key as `null`, or as an empty list or map when the field is a list or map.
@@ -226,6 +218,8 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 - `tests/legacy_reports/lerobot_v3_tiny-6.5.0.json` — produced by the release branch at `18cf9b6` before this change; real branch output.
 - `tests/legacy_reports/aloha_static_towel-048fef2-6.4.0-trimmed.json` — four episodes from the 048fef2 towel report (original SHA-256 `8001d3ce…`), two of them carrying the `train_ready: true` + gate-failing contradiction. Dataset-level fields are the original 50-episode values and intentionally do not reconcile with the four episodes; the fixture tests loading, not arithmetic.
 - `tests/legacy_reports/aloha_static_towel-43e0cb1-6.3.0-trimmed.json` — first episode from the supplied schema-6.3 report. See the adjacent README for source digest and trimming boundaries.
+- `tests/legacy_reports/lerobot_v3_tiny-7.1.0.json` — real `kalanos grade` output of 0.8.1 from PyPI on `tests/fixtures/lerobot_v3_tiny`, untrimmed.
+- `tests/legacy_reports/lerobot_v3_tiny-7.2.0.json` — real `kalanos grade` output of 0.8.2 from PyPI on `tests/fixtures/lerobot_v3_tiny`, untrimmed.
 
 ## Coverage, findings and calibration additions
 
@@ -236,7 +230,7 @@ Every section is optional; the defaults are the built-in scope. A duplicate key 
 - Finding `id`, `source_path`, `source_field`, `source_index`, `subject_level`, `evidence_strength` and `calibration` make subjects and promotion decisions inspectable. IDs identify a metric at a source subject; they are not waveform hashes.
 - `operational_errors` records computation/payload exceptions. Such a run is partial and exits 2.
 - `producer.metrics` and `producer.adapters` identify built-in code and numerical runtime. Third-party implementation identity remains unknown and cannot authorize statistical promotion.
-- Additive fields stay under the ongoing schema-7 development version, and 7.3.0 also removes fields. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` still read every 7.x report up to 7.3.0. Historical files are not rewritten.
+- Additive fields stayed under schema 7 until 8.0.0. `kalanos inspect`, `kalanos compare` and `kalanos.load_report` read every 7.x report up to 7.3.0. Historical files are not rewritten.
 
 
 ## Optional deeper diagnostics in 0.7.0

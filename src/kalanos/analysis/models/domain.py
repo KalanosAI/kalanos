@@ -100,7 +100,7 @@ class TimestampDtype(str, Enum):
 
 
 class ClockOrigin(str, Enum):
-    """Where a Stream's timestamps come from, at the resolution schema 7 needs.
+    """Where a Stream's timestamps come from, at the resolution the report schema needs.
 
     `Clock` collapses "the adapter built this grid" and "the file held a
     perfectly uniform series" into `RECONSTRUCTED`. They differ: the first is
