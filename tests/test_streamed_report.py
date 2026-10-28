@@ -32,9 +32,18 @@ from upath import UPath
 # Internal
 from kalanos import api, publish
 from kalanos.analysis import pipeline
+from kalanos.analysis.adapters.discover import (
+    AdapterDiscovery,
+    LoadedAdapter,
+    PluginSource,
+)
+from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.compact_keys import decode_keys, encode_keys
 from kalanos.analysis.models.diagnostics import DiagnosticPlan
+from kalanos.analysis.models.domain import Episode
+from kalanos.analysis.models.errors import MappingOverrideError
 from kalanos.analysis.models.legacy import load_any
+from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.reporting import assemble
 from kalanos.analysis.reporting.assemble import assemble_report
@@ -242,6 +251,133 @@ def _as_report(data: dict) -> Report:
     """
 
     return Report.model_validate(decode_keys(data) if "_compact" in data else data)
+
+
+class _OneSource:
+    """An adapter reading `n` single-stream episodes from any path, logging each read.
+
+    Parameters
+    ----------
+    n : int
+        How many episodes the source holds.
+    events : list or None
+        When given, receives `("read", id)` as each episode is yielded.
+    alive : list or None
+        When given, receives, as each episode is read,
+        whether each earlier episode's payload frame is still in memory.
+    """
+
+    name = "one_source"
+
+    def __init__(
+        self, n: int, *, events: list | None = None, alive: list | None = None
+    ) -> None:
+        """Hold the source's shape and what to record.
+
+        Parameters
+        ----------
+        n : int
+            How many episodes the source holds.
+        events : list or None
+            When given, receives `("read", id)` as each episode is yielded.
+        alive : list or None
+            When given, receives, as each episode is read,
+            whether each earlier episode's payload frame is still in memory.
+        """
+
+        self._n = n
+        self._events = events
+        self._alive = alive
+
+    def detect(self, path: UPath) -> float:
+        """Claim any path."""
+
+        return 1.0
+
+    def describe(self, path: UPath) -> DatasetInfo:
+        """Declare how many episodes the source holds.
+
+        Parameters
+        ----------
+        path : UPath
+            The candidate.
+
+        Returns
+        -------
+        DatasetInfo
+            The declared episode count.
+        """
+
+        return DatasetInfo(adapter=self.name, path=path, episode_count=self._n)
+
+    def episodes(self, path: UPath, sample: int | None = None) -> Iterator[Episode]:
+        """Yield each episode, built only when asked for.
+
+        Parameters
+        ----------
+        path : UPath
+            The candidate.
+        sample : int or None
+            Unused.
+
+        Yields
+        ------
+        Episode
+            One single-stream recording.
+        """
+
+        frames: list[weakref.ref] = []
+        for k in range(self._n):
+            if self._alive is not None:
+                gc.collect()
+                self._alive.append([ref() is not None for ref in frames])
+            if self._events is not None:
+                self._events.append(("read", f"e{k}"))
+            stream = signal()
+            assert stream.payload is not None
+            frames.append(weakref.ref(stream.payload.fetch()))
+            yield episode(stream, identifier=f"e{k}")
+            del stream
+
+
+def _one_source_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    adapter: _OneSource,
+    **options,
+):
+    """Grade a one-file folder that only `adapter` reads.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces adapter discovery with `adapter` alone.
+    tmp_path : Path
+        Where the file to grade is written.
+    adapter : _OneSource
+        The adapter that reads it.
+    **options
+        Passed to `pipeline.run`.
+
+    Returns
+    -------
+    Report or StreamedReport
+        What `pipeline.run` returned.
+    """
+
+    loaded = LoadedAdapter(
+        name=adapter.name,
+        adapter=adapter,
+        source=PluginSource.ENTRY_POINT,
+        origin="test",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "discover_adapters",
+        lambda: AdapterDiscovery(adapters=[loaded], failures=[]),
+    )
+    (tmp_path / "recording.bin").write_bytes(b"recording")
+    return pipeline.run(UPath(tmp_path), policy=load_default_policy(), **options)
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -457,3 +593,68 @@ def test_a_streamed_run_lets_go_of_each_recording_once_graded(monkeypatch):
 
     assert isinstance(result, StreamedReport)
     assert alive == [[], [False]]
+
+
+def test_a_run_grades_each_episode_before_reading_the_next(monkeypatch, tmp_path):
+    events: list[tuple[str, str]] = []
+    graded: list[weakref.ref] = []
+    alive: list[list[bool]] = []
+    grade_episode = assemble.grade_episode
+
+    def spy(episode, **options):
+        gc.collect()
+        alive.append([ref() is not None for ref in graded])
+        graded.append(weakref.ref(episode))
+        events.append(("grade", episode.id.rsplit("::", 1)[-1]))
+        return grade_episode(episode, **options)
+
+    monkeypatch.setattr(assemble, "grade_episode", spy)
+    result = _one_source_run(
+        monkeypatch, tmp_path, _OneSource(4, events=events), keep_episodes=False
+    )
+
+    assert isinstance(result, StreamedReport)
+    assert events == [(step, f"e{k}") for k in range(4) for step in ("read", "grade")]
+    assert alive == [[False] * k for k in range(4)]
+
+
+def test_a_run_lets_go_of_each_recording_before_reading_the_next(monkeypatch, tmp_path):
+    alive: list[list[bool]] = []
+    result = _one_source_run(
+        monkeypatch, tmp_path, _OneSource(4, alive=alive), keep_episodes=False
+    )
+
+    assert isinstance(result, StreamedReport)
+    assert alive == [[False] * k for k in range(4)]
+
+
+def test_an_unmatched_override_fails_once_every_episode_is_read(monkeypatch, tmp_path):
+    graded: list[str] = []
+    grade_episode = assemble.grade_episode
+
+    def spy(episode, **options):
+        graded.append(episode.id)
+        return grade_episode(episode, **options)
+
+    monkeypatch.setattr(assemble, "grade_episode", spy)
+    override = MappingOverride(
+        feature="missing",
+        taxonomy_type="proprio.joint_position",
+        origin=OverrideOrigin.ARGUMENT,
+    )
+    with pytest.raises(MappingOverrideError) as excinfo:
+        _one_source_run(monkeypatch, tmp_path, _OneSource(3), overrides=[override])
+
+    message = str(excinfo.value)
+    assert "'missing' (from argument)" in message
+    assert "state" in message
+    assert len(graded) == 3
+
+
+def test_a_refusal_raised_while_grading_propagates(monkeypatch, tmp_path):
+    def refuse(episode, **options):
+        raise AdapterRefusal(UPath(tmp_path), "payload could not be read")
+
+    monkeypatch.setattr(assemble, "grade_episode", refuse)
+    with pytest.raises(AdapterRefusal, match="payload could not be read"):
+        _one_source_run(monkeypatch, tmp_path, _OneSource(2))
