@@ -2,6 +2,7 @@
 
 A written report leaves out a field whose value is null, an empty list or an empty map
 when the field's default gives the same value, so loading it back restores that value.
+With `keep_root`, the dump's own keys are all kept; the report writers pass it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -21,7 +22,9 @@ from pydantic import BaseModel
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any]:
+def omit_empty_defaults(
+    model: BaseModel, data: dict[str, Any], *, keep_root: bool = False
+) -> dict[str, Any]:
     """Drop the keys of a model's JSON dump whose value is its field's empty default.
 
     Nested models are walked through lists, tuples and dicts.
@@ -36,6 +39,9 @@ def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any
     data : dict[str, Any]
         `model.model_dump(mode="json")`,
         or the sub-dict of such a dump that `model` produced.
+    keep_root : bool
+        Keep every key of `data` itself.
+        Nested models still leave out their empty defaults.
 
     Returns
     -------
@@ -44,8 +50,8 @@ def omit_empty_defaults(model: BaseModel, data: dict[str, Any]) -> dict[str, Any
         `data` is left unchanged.
     """
 
-    defaults = _empty_defaults(type(model))
-    model_defaults = _model_defaults(type(model))
+    defaults = {} if keep_root else _empty_defaults(type(model))
+    model_defaults = {} if keep_root else _model_defaults(type(model))
     fields = type(model).model_fields
     out: dict[str, Any] = {}
     for key, value in data.items():

@@ -1,4 +1,4 @@
-"""Verifies a written report leaves out only the empty values its defaults restore."""
+"""Verifies a written report leaves out only nested empty values defaults restore."""
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
@@ -19,10 +19,15 @@ from pydantic import BaseModel, Field
 from test_reporting import _sample_report
 
 # Internal
+from kalanos.analysis.models.compact_keys import decode_keys
 from kalanos.analysis.models.diagnostics import DiagnosticPlan
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.reporting.omit import omit_empty_defaults
-from kalanos.analysis.reporting.render import render_json, render_yaml
+from kalanos.analysis.reporting.render import (
+    render_compact_json,
+    render_json,
+    render_yaml,
+)
 from kalanos.api import grade, load_report
 from kalanos.assets.bundle import Bundle
 
@@ -32,16 +37,6 @@ from kalanos.assets.bundle import Bundle
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 TINY_V3 = Path(__file__).parent / "fixtures" / "lerobot_v3_tiny"
-
-EMPTY_TOP_LEVEL_LISTS = (
-    "findings",
-    "skipped",
-    "unresolved",
-    "operational_errors",
-    "mapping_overrides",
-    "binding_conflicts",
-    "duplicates",
-)
 
 
 class Child(BaseModel):
@@ -114,14 +109,18 @@ def test_a_written_report_loads_back_equal(tmp_path, vision):
     assert Report.model_validate(yaml.safe_load(render_yaml(report))) == report
 
 
-def test_a_written_report_leaves_out_empty_defaults():
+def test_a_written_report_keeps_root_keys_and_leaves_out_nested_empty_defaults():
     report = grade(TINY_V3)
 
     text = render_json(report)
     data = json.loads(text)
 
-    assert "schema_version" in data
-    assert not set(EMPTY_TOP_LEVEL_LISTS) & data.keys()
+    for written in (
+        data,
+        decode_keys(json.loads(render_compact_json(report))),
+        yaml.safe_load(render_yaml(report)),
+    ):
+        assert set(Report.model_fields) <= written.keys()
     bindings = [
         graded["channel"]["binding"]
         for episode in data["episodes"]
