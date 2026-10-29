@@ -205,7 +205,7 @@ def _whole_dump(report: Report, *, compact: bool) -> bytes:
         The report's JSON.
     """
 
-    data = omit_empty_defaults(report, report.model_dump(mode="json"))
+    data = omit_empty_defaults(report, report.model_dump(mode="json"), keep_root=True)
     return to_json(encode_keys(data) if compact else data, inf_nan_mode="null")
 
 
@@ -411,7 +411,7 @@ def test_write_report_writes_the_whole_dump(report, tmp_path, compact):
     assert path.read_bytes() == _whole_dump(report, compact=compact)
 
 
-def test_a_report_without_episodes_leaves_them_out(report):
+def test_a_report_without_episodes_writes_an_empty_list(report):
     empty = report.model_copy(update={"episodes": []})
 
     assert render_json(empty).encode() == _whole_dump(empty, compact=False)

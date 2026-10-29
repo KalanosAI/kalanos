@@ -189,8 +189,8 @@ def write_report_stream(
         raise ValueError("a report header must hold no episodes")
 
     # Step 1: the header in the order the whole dump would hold it.
-    # An empty `episodes` is left out of the header by `omit_empty_defaults`,
-    # so it is placed back by its position among the fields.
+    # The header holds an empty `episodes`.
+    # The streamed episodes are written at its position among the fields.
     # The diagnostic results grow with the dataset, so they are dumped one at a time
     # and placed back by their position among the diagnostics' fields.
     # Left out when empty, they are written nowhere, as the whole dump leaves them out.
@@ -201,6 +201,7 @@ def write_report_stream(
             context={"raw_reasons": True},
             exclude={"diagnostics": {"results"}},
         ),
+        keep_root=True,
     )
     fields = list(Report.model_fields)
     cut = fields.index("episodes")
@@ -225,7 +226,6 @@ def write_report_stream(
     # walking every part in document order.
     coder = ReasonCoder()
     counter = KeyCounter() if compact else None
-    n_episodes = 0
 
     def feed(part: Any) -> None:
         coded = coder.walk(part)
@@ -247,13 +247,11 @@ def write_report_stream(
         feed_member(key)
     for episode in episodes():
         feed(episode)
-        n_episodes += 1
     for key in after:
         feed_member(key)
     if counter is not None:
         counter.count({REASONS_KEY: None})
-        if n_episodes:
-            counter.count({"episodes": None})
+        counter.count({"episodes": None})
 
     # Step 3: write the document, a top-level member at a time.
     def name(key: str) -> bytes:
@@ -290,14 +288,13 @@ def write_report_stream(
     out.write(member(REASONS_KEY, coder.table()))
     for key in before:
         write_member(key)
-    if n_episodes:
-        out.write(b"," + name("episodes") + b":[")
-        for k, episode in enumerate(episodes()):
-            coded = coder.walk(episode)
-            if counter is not None:
-                coded = counter.walk(coded)
-            out.write((b"," if k else b"") + _json(coded))
-        out.write(b"]")
+    out.write(b"," + name("episodes") + b":[")
+    for k, episode in enumerate(episodes()):
+        coded = coder.walk(episode)
+        if counter is not None:
+            coded = counter.walk(coded)
+        out.write((b"," if k else b"") + _json(coded))
+    out.write(b"]")
     for key in after:
         write_member(key)
     out.write(b"}")

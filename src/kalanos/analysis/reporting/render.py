@@ -205,7 +205,8 @@ def _stream_json(report: Report, *, compact: bool) -> str:
 def render_json(report: Report) -> str:
     """Render a Report as compact JSON, leaving out the empty values defaults restore.
 
-    A field whose value is null, an empty list or an empty map is left out
+    Every top-level field is written.
+    Below it, a field whose value is null, an empty list or an empty map is left out
     when its default gives the same value.
 
     Parameters
@@ -256,14 +257,15 @@ def render_yaml(report: Report) -> str:
     str
         The report as YAML text. Parses back into the model with
         `Report.model_validate(yaml.safe_load(...))`.
-        Null and empty values the field defaults restore are left out,
+        Every top-level field is written.
+        Below it, the null and empty values defaults restore are left out,
         as in `render_json`.
     """
 
     # mode="json" turns Path, Grade, Severity, Level, MetricStatus and SkipReason into
     # strings yaml.safe_dump accepts and Report.model_validate can read back.
     return yaml.safe_dump(
-        omit_empty_defaults(report, report.model_dump(mode="json")),
+        omit_empty_defaults(report, report.model_dump(mode="json"), keep_root=True),
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,

@@ -976,7 +976,7 @@ def test_compact_json_keeps_evidence_and_omits_only_empty_defaults():
 
     assert "\n" not in compact
     assert len(compact.encode("utf-8")) < len(pretty.encode("utf-8"))
-    assert parsed == omit_empty_defaults(report, before)
+    assert parsed == omit_empty_defaults(report, before, keep_root=True)
     # Compared as text so False and 0, or a float's last digit, can't pass as equal.
     assert json.dumps(parsed["findings"][0]["evidence"]) == json.dumps(evidence)
     assert report.model_dump(mode="json") == before

@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Fixed
+
+- A written report again holds every top-level key in JSON, compact JSON and YAML. Nested objects still leave out empty defaults.
+
 ## [0.9.1] - 2026-10-28
 
 Report schema 8.0.0.
