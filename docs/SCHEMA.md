@@ -9,7 +9,8 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 - `reason_codes`, the report's first key, lists each distinct reason text once.
 - Every value under a key named `reason`, `reasons` or `detail`, at any depth, holds an index into `reason_codes`: a string becomes an integer, a list of strings a list of integers, and the keys of a `reasons` map (the coverage rows) become integers written as strings. `null` stays `null`.
 - Codes are per report. The same text can have a different code in another report.
-- A field whose value is `null`, `[]` or `{}` is left out when its default is that same value. This includes top-level lists such as `findings`, `skipped` and `unresolved`. A field that is nullable but has no default is still written as `null`, and a value inside a free-form `evidence` or `calibration` object is written as it is.
+- Every top-level field of the report is written, holding `null`, `[]` or `{}` when that is its value. Reports written by kalanos 0.9.0 and 0.9.1 may lack top-level keys; a missing one reads as its default.
+- Below the top level, a field whose value is `null`, `[]` or `{}` is left out when its default is that same value. A field that is nullable but has no default is still written as `null`, and a value inside a free-form `evidence` or `calibration` object is written as it is.
 - `streams[].coverage` lists only the rows where at least one subject was computed, skipped or errored.
 - When an episode has a `coverage` ledger, a stream- or channel-level key in `episodes[].coverage.metrics` that is missing from a stream's `coverage` neither computed, skipped nor errored on that stream. The episode row gives its counts and reasons. An episode with no `coverage` ledger recorded none, as before.
 - Episode and dataset ledgers are unchanged.
@@ -41,7 +42,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `NearDuplicateSummary.episodes_with_partner` | `int` | The episodes, exact copies included, with at least one near partner. |
 | `NearDuplicateSummary.median_nearest_nrmse` | `float` or `null` | The median, over compared episodes with a near partner, of the distance to their nearest one. `null` when `pairs_near` is 0. |
 | `NearDuplicateSummary.saturated` | `bool` | Whether more than half the compared pairs are near and there are more near pairs than compared episodes. The near tier then does not separate copies from re-runs in this dataset; the exact tier still applies. |
-| `dataset_warnings` | `list[DatasetWarning]` | Warnings about the dataset as a whole, which belong to no episode. Descriptive: they have no effect on any score. Left out of a written report when empty. |
+| `dataset_warnings` | `list[DatasetWarning]` | Warnings about the dataset as a whole, which belong to no episode. Descriptive: they have no effect on any score. Written as `[]` when empty. |
 | `DatasetWarning.code` | `"near_duplicates_saturated"` | What the warning is about. `near_duplicates_saturated`: the near tier is saturated, so no episode carries a near-duplicate finding; the counts are in `near_duplicates`. |
 | `DatasetWarning.message` | `str` | The warning, stated for a reader. |
 
