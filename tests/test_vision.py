@@ -444,7 +444,7 @@ def test_a_network_error_leaves_presence_unknown_and_uncached(monkeypatch, faili
         assert "vision.camera_stream_present" not in findings
         assert camera_stream_present(stream_context(stream)).value == 1.0
     finally:
-        video.close_remote_handles()
+        video.close_video_files()
         remote.unlink()
 
 

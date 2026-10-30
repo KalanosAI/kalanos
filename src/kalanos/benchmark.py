@@ -30,7 +30,7 @@ from kalanos.analysis.adapters.video import (
     DecodeFailed,
     DecoderUnavailable,
     VideoPayload,
-    close_remote_handles,
+    close_video_files,
 )
 from kalanos.analysis.bindings import (
     binding_records,
@@ -766,8 +766,10 @@ def benchmark_dataset(
                 inject_cameras=grades_vision(config.requirements),
             )
     finally:
-        # Remote video stays open across episodes, as in `kalanos grade`.
-        close_remote_handles()
+        # Video files stay open across episodes, local and remote,
+        # as in `kalanos grade`; a later run must not read a file
+        # that changed since through a stale container.
+        close_video_files()
     check_matched(channels, matched_channels)
     unmatched = [o.feature for o in config.overrides if o.feature not in seen_features]
     if unmatched:
