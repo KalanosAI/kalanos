@@ -42,6 +42,7 @@ for the cross-episode comparison of a camera's footage.
 import functools
 import hashlib
 import logging
+import math
 from collections import OrderedDict
 from contextlib import closing
 from dataclasses import asdict, dataclass
@@ -558,6 +559,7 @@ def _read(
     previous: np.ndarray | None = None
     previous_position = -1
     previous_spread = 0.0
+    levels = numpy.arange(256)
     try:
         with closing(
             payload.gray_windows(
@@ -574,7 +576,9 @@ def _read(
                 index = windows[position][0] + counts[position]
                 counts[position] += 1
 
-                p5, p95 = (float(v) for v in numpy.percentile(frame, [5, 95]))
+                histogram = numpy.bincount(frame.ravel(), minlength=256)
+                cumulative = numpy.cumsum(histogram)
+                p5, p95 = _percentile(cumulative, 5), _percentile(cumulative, 95)
                 spread = p95 - p5
                 if index in wanted:
                     assert full is not None
@@ -585,13 +589,17 @@ def _read(
                     hashes.append(hashlib.sha256(full.tobytes()).hexdigest())
                     kept["loss"].append(_reblur_loss(full, laplacian))
                     kept["laplacian"].append(laplacian)
-                    kept["mean"].append(float(frame.mean()))
+                    kept["mean"].append(int(histogram @ levels) / frame.size)
                     kept["p5"].append(p5)
                     kept["p95"].append(p95)
                     # A pixel at or above the bright level is clipped white (rda),
                     # one at or below the dark level crushed black.
-                    kept["white_share"].append(float((frame >= bright_level).mean()))
-                    kept["dark_share"].append(float((frame <= dark_level).mean()))
+                    kept["white_share"].append(
+                        int(histogram[bright_level:].sum()) / frame.size
+                    )
+                    kept["dark_share"].append(
+                        int(histogram[: dark_level + 1].sum()) / frame.size
+                    )
 
                 # Only the frames a sample measures are pooled,
                 # so a full scan's vector matches a sampled read's.
@@ -647,6 +655,40 @@ def _read(
     )
 
 
+def _percentile(cumulative: "np.ndarray", q: float) -> float:
+    """Read a percentile of a gray frame from its cumulative histogram.
+
+    Parameters
+    ----------
+    cumulative : numpy.ndarray
+        The `cumsum` of the frame's 256-bin gray-level histogram.
+    q : float
+        The percentile, in percent.
+
+    Returns
+    -------
+    float
+        The percentile `numpy.percentile` gives on the frame itself.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n = int(cumulative[-1])
+    virtual = (n - 1) * (q / 100)
+    below = math.floor(virtual)
+    t = virtual - below
+    a = int(numpy.searchsorted(cumulative, below, side="right"))
+    b = int(numpy.searchsorted(cumulative, min(below + 1, n - 1), side="right"))
+    if a == b:
+        return float(a)
+    # numpy's linear interpolation in its two branches,
+    # so the result equals `numpy.percentile` to the bit.
+    if t < 0.5:
+        return a + (b - a) * t
+    return b - (b - a) * (1 - t)
+
+
 def _thumbnail(frame: "np.ndarray", size: int = _FREEZE_SIZE) -> "np.ndarray":
     """Average a `(_SAMPLE_SIZE, _SAMPLE_SIZE)` gray frame down to a thumbnail.
 
@@ -655,7 +697,7 @@ def _thumbnail(frame: "np.ndarray", size: int = _FREEZE_SIZE) -> "np.ndarray":
     frame : numpy.ndarray
         The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
     size : int
-        The thumbnail's side, a divisor of `_SAMPLE_SIZE`:
+        The thumbnail's side, a divisor of `_SAMPLE_SIZE // 2`:
         `_FREEZE_SIZE` for freezes, `_VARIATION_SIZE` for footage variation.
 
     Returns
@@ -667,10 +709,18 @@ def _thumbnail(frame: "np.ndarray", size: int = _FREEZE_SIZE) -> "np.ndarray":
     numpy = load_numpy()
     assert numpy is not None
 
-    factor = _SAMPLE_SIZE // size
-    return frame.reshape(size, factor, size, factor).mean(
-        axis=(1, 3), dtype=numpy.float32
-    )
+    wide = frame.astype(numpy.uint16)
+    sums = wide[0::2, 0::2] + wide[1::2, 0::2] + wide[0::2, 1::2] + wide[1::2, 1::2]
+    factor = sums.shape[0] // size
+    assert factor * size == sums.shape[0], f"{size} does not divide {sums.shape[0]}"
+    if factor > 1:
+        sums = sums.reshape(size, factor, size, factor).sum(
+            axis=(1, 3), dtype=numpy.uint32
+        )
+    # Block sums are integers well below 2**24, so their float32 value is exact
+    # and the one float32 division equals the float32 block mean to the bit,
+    # which freeze differences and footage vectors depend on.
+    return sums.astype(numpy.float32) / numpy.float32((_SAMPLE_SIZE // size) ** 2)
 
 
 def clear_cache() -> None:

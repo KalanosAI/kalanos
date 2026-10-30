@@ -1181,6 +1181,81 @@ def test_a_flat_frame_reads_as_fully_blurred():
     assert sharpness_score(stream_context(stream)).value == 0.0
 
 
+def _gray_frames(kind: str) -> list:
+    """Build square gray frames of side `_SAMPLE_SIZE`, as `gray_windows` yields them.
+
+    Parameters
+    ----------
+    kind : str
+        `random`, `black`, `white`, `dim` (a narrow spread around level 30),
+        `two_level` (half black, half white)
+        or `between_levels` (P5 and P95 both fall between two gray levels).
+
+    Returns
+    -------
+    list of numpy.ndarray
+        50 uint8 frames, or one for a constant or `between_levels` kind.
+    """
+
+    rng = numpy.random.default_rng(42)
+    side = vision._SAMPLE_SIZE
+    if kind == "black":
+        return [numpy.zeros((side, side), numpy.uint8)]
+    if kind == "white":
+        return [numpy.full((side, side), 255, numpy.uint8)]
+    if kind == "between_levels":
+        # P5 sits between ranks 819 and 820, P95 between 15563 and 15564,
+        # so 820 pixels at 10 and 820 at 30 put each pair on two levels.
+        frame = numpy.full(side * side, 20, numpy.uint8)
+        frame[:820] = 10
+        frame[-820:] = 30
+        return [frame.reshape(side, side)]
+    frames = []
+    for _ in range(50):
+        if kind == "random":
+            frame = rng.integers(0, 256, (side, side), dtype=numpy.uint8)
+        elif kind == "dim":
+            frame = numpy.clip(rng.normal(30, 3, (side, side)), 0, 255).astype(
+                numpy.uint8
+            )
+        else:
+            frame = numpy.where(rng.random((side, side)) < 0.5, 0, 255).astype(
+                numpy.uint8
+            )
+        frames.append(frame)
+    return frames
+
+
+FRAME_KINDS = ["random", "black", "white", "dim", "two_level", "between_levels"]
+
+
+@pytest.mark.parametrize("kind", FRAME_KINDS)
+def test_frame_percentiles_match_numpy_to_the_bit(kind):
+    """P5 and P95 from a frame's histogram equal `numpy.percentile` exactly."""
+
+    for frame in _gray_frames(kind):
+        cumulative = numpy.cumsum(numpy.bincount(frame.ravel(), minlength=256))
+        for q in (5, 95):
+            assert vision._percentile(cumulative, q) == float(
+                numpy.percentile(frame, q)
+            )
+
+
+@pytest.mark.parametrize("kind", FRAME_KINDS)
+def test_thumbnails_match_the_block_mean_to_the_bit(kind):
+    """Integer block sums give the same float32 thumbnail as a float32 block mean."""
+
+    for frame in _gray_frames(kind):
+        for size in (vision._FREEZE_SIZE, vision._VARIATION_SIZE):
+            k = vision._SAMPLE_SIZE // size
+            thumbnail = vision._thumbnail(frame, size)
+            assert thumbnail.dtype == numpy.float32
+            assert numpy.array_equal(
+                thumbnail,
+                frame.reshape(size, k, size, k).mean(axis=(1, 3), dtype=numpy.float32),
+            )
+
+
 def test_a_graded_video_stream_serializes_to_json(_fixture_stream):
     """Every vision value and evidence entry is a plain Python type."""
 
