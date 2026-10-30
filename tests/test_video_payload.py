@@ -15,6 +15,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 from upath import UPath
 
 # Internal
+import kalanos
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.video import (
     DecodeFailed,
@@ -67,6 +68,86 @@ def _windows(payload: VideoPayload, windows, size: int) -> list:
     for position, frame, _native, _pts in payload.gray_windows(windows, size):
         grouped[position].append(frame)
     return grouped
+
+
+class _Container:
+    """Stand in for a PyAV container, recording when it is closed."""
+
+    def __init__(self, container, name: str) -> None:
+        """Wrap `container`, opened from the file `name`.
+
+        Parameters
+        ----------
+        container : Any
+            The real PyAV container.
+        name : str
+            What `av.open` was given, as a string.
+        """
+
+        self._container = container
+        self.name = name
+        self.closed = False
+
+    def __getattr__(self, attribute: str):
+        """Delegate every other attribute to the real container.
+
+        Parameters
+        ----------
+        attribute : str
+            The attribute asked for.
+
+        Returns
+        -------
+        Any
+            The real container's attribute.
+        """
+
+        return getattr(self._container, attribute)
+
+    def close(self) -> None:
+        """Close the real container and record it."""
+
+        self.closed = True
+        self._container.close()
+
+
+def _record_opens(monkeypatch) -> list[_Container]:
+    """Make `av.open` record every container it opens, in order.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest's patching fixture.
+
+    Returns
+    -------
+    list of _Container
+        Filled as containers open.
+    """
+
+    opened: list[_Container] = []
+    original = video.av.open
+
+    def recording(file, *args, **kwargs):
+        container = _Container(original(file, *args, **kwargs), str(file))
+        opened.append(container)
+        return container
+
+    monkeypatch.setattr(video.av, "open", recording)
+    return opened
+
+
+def _read_back(payload: VideoPayload, frames: int) -> tuple:
+    """Read a payload's frames as gray images, then its packet times.
+
+    Returns
+    -------
+    tuple
+        The `(frames, pts)` the reads returned.
+    """
+
+    images = [frame for _, frame, _n, _p in payload.gray_windows([(0, frames)], 16)]
+    return images, payload.packet_times().pts
 
 
 def _write_b_frame_video(path: UPath, frames: int) -> None:
@@ -151,7 +232,7 @@ def remote_video():
     remote = UPath("memory://videos/file-000.mp4")
     remote.write_bytes(LEROBOT_VIDEO.read_bytes())
     yield remote
-    video.close_remote_handles()
+    video.close_video_files()
     remote.unlink()
 
 
@@ -460,7 +541,7 @@ def test_b_frame_segments_count_and_sample_their_own_frames(tmp_path, start):
 
 
 def test_episodes_sharing_a_remote_file_open_it_once(monkeypatch, remote_video):
-    """Verify every payload on one remote mp4 reads through a single file object."""
+    """Verify every payload on one remote mp4 shares one file object and container."""
 
     opens = []
     original = MemoryFileSystem._open
@@ -470,6 +551,7 @@ def test_episodes_sharing_a_remote_file_open_it_once(monkeypatch, remote_video):
         return original(self, path, *args, **kwargs)
 
     monkeypatch.setattr(MemoryFileSystem, "_open", counting)
+    containers = _record_opens(monkeypatch)
     segments = [(0.0, 8 / 30, 8), (8 / 30, 14 / 30, 6)]
 
     for start_s, end_s, frame_count in segments:
@@ -482,10 +564,11 @@ def test_episodes_sharing_a_remote_file_open_it_once(monkeypatch, remote_video):
         ]
 
     assert len(opens) == 1
+    assert len(containers) == 1
 
 
 def test_a_remote_read_that_fails_drops_its_handle(remote_video):
-    """Verify a failed read does not leave a broken handle for the next payload."""
+    """Verify a failed read is not pooled, so the next payload reopens the file."""
 
     remote_video.write_bytes(random.Random(42).randbytes(4096))
     payload = VideoPayload(path=remote_video, frame_count=8, start_s=0.0, end_s=8 / 30)
@@ -493,7 +576,128 @@ def test_a_remote_read_that_fails_drops_its_handle(remote_video):
     with pytest.raises(DecodeFailed):
         payload.packet_times()
 
-    assert str(remote_video) not in video._REMOTE_HANDLES
+    assert str(remote_video) not in video._OPEN_FILES
+
+
+def test_payloads_sharing_a_local_file_open_it_once(monkeypatch):
+    """Verify every read of every payload on one local mp4 reuses one container."""
+
+    opened = _record_opens(monkeypatch)
+
+    for start_s, end_s, frame_count in [(0.0, 8 / 30, 8), (8 / 30, 14 / 30, 6)]:
+        payload = VideoPayload(
+            path=LEROBOT_VIDEO, frame_count=frame_count, start_s=start_s, end_s=end_s
+        )
+        payload.header()
+        assert len(payload.packet_times().pts) == frame_count
+        assert [len(w) for w in _windows(payload, [(0, frame_count)], 16)] == [
+            frame_count
+        ]
+
+    assert len(opened) == 1
+
+
+def test_the_pool_keeps_at_most_four_files(monkeypatch, tmp_path):
+    """Verify a fifth open file evicts and closes the least recently used one."""
+
+    opened = _record_opens(monkeypatch)
+    paths = [UPath(tmp_path / f"file-{k}.mp4") for k in range(5)]
+
+    for path in paths:
+        path.write_bytes(LEROBOT_VIDEO.read_bytes())
+        VideoPayload(path=path, frame_count=8, start_s=0.0, end_s=8 / 30).header()
+
+    assert len(video._OPEN_FILES) == 4
+    assert str(paths[0]) not in video._OPEN_FILES
+    assert [c.closed for c in opened] == [True, False, False, False, False]
+
+
+def test_closing_video_files_closes_local_and_remote(monkeypatch, remote_video):
+    """Verify closing the pool closes local and remote containers and file objects."""
+
+    opened = _record_opens(monkeypatch)
+    for path in (LEROBOT_VIDEO, remote_video):
+        VideoPayload(path=path, frame_count=8, start_s=0.0, end_s=8 / 30).header()
+    # A MemoryFile ignores close(), so record the call instead.
+    closed = []
+    handle = video._OPEN_FILES[str(remote_video)].handle
+    monkeypatch.setattr(handle, "close", lambda: closed.append(handle))
+
+    video.close_video_files()
+
+    assert not video._OPEN_FILES
+    assert [c.closed for c in opened] == [True, True]
+    assert closed == [handle]
+
+
+def test_a_grade_leaves_no_video_file_open(monkeypatch):
+    """Verify grading closes every video file it opened before returning."""
+
+    opened = _record_opens(monkeypatch)
+
+    kalanos.grade(LEROBOT_FIXTURE)
+
+    assert opened
+    assert not video._OPEN_FILES
+    assert all(c.closed for c in opened)
+
+
+@pytest.mark.parametrize("writer", ["fixture", "b_frames"])
+def test_a_reused_container_reads_what_a_fresh_one_does(tmp_path, writer):
+    """Verify a container left mid-decode by an abandoned read reads as a fresh one."""
+
+    if writer == "fixture":
+        path, frames = LEROBOT_VIDEO, 6
+        first = VideoPayload(path=path, frame_count=8, start_s=0.0, end_s=8 / 30)
+    else:
+        path, frames = UPath(tmp_path / "b_frames.mp4"), 20
+        _write_b_frame_video(path, 40)
+        first = VideoPayload(path=path, frame_count=20, start_s=0.0, end_s=20 / 30)
+    second = VideoPayload(
+        path=path,
+        frame_count=frames,
+        start_s=first.end_s,
+        end_s=first.end_s + frames / 30,
+    )
+
+    abandoned = first.gray_windows([(0, first.frame_count)], 16)
+    next(abandoned)
+    abandoned.close()
+    reused_frames, reused_pts = _read_back(second, frames)
+    video.close_video_files()
+    fresh_frames, fresh_pts = _read_back(second, frames)
+
+    assert len(reused_frames) == frames
+    assert reused_pts == fresh_pts
+    assert all((a == b).all() for a, b in zip(reused_frames, fresh_frames, strict=True))
+
+
+def test_the_header_is_the_one_read_at_open():
+    """Verify the header after a full decode equals the one a fresh open reads."""
+
+    payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
+
+    _windows(payload, [(0, 8)], 16)
+    after_decode = payload.header()
+    video.close_video_files()
+
+    assert after_decode == payload.header()
+
+
+def test_a_read_inside_another_read_opens_its_own_container(monkeypatch):
+    """Verify a read of a file another read holds opens its own, and one goes back."""
+
+    opened = _record_opens(monkeypatch)
+    payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
+
+    outer = payload.gray_windows([(0, 8)], 16)
+    next(outer)
+    assert len(payload.packet_times().pts) == 8
+    outer.close()
+
+    assert len(opened) == 2
+    assert list(video._OPEN_FILES) == [str(LEROBOT_VIDEO)]
+    assert [c.closed for c in opened] == [True, False]
 
 
 def test_the_header_names_the_codec_rather_than_its_decoder(tmp_path):
