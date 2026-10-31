@@ -10,6 +10,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - Grading measures each decoded camera frame with one gray-level histogram and integer block sums, so vision metrics spend less time per frame. Metric values are unchanged.
 - Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged.
+- Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads.
 
 ## [0.9.2] - 2026-10-29
 

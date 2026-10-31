@@ -28,7 +28,12 @@ from kalanos.analysis.adapters.video import (
 from kalanos.analysis.coverage import coverage_lines, vision_metric_coverage
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.metrics import vision
-from kalanos.analysis.metrics.registry import run_episode_metrics
+from kalanos.analysis.metrics.continuity import (
+    _plan_cuts,
+    _window_thumbnails,
+    cut_count,
+)
+from kalanos.analysis.metrics.registry import run_episode_metrics, run_stream_metrics
 from kalanos.analysis.metrics.vision import (
     blank_frame_pct,
     bright_frame_pct,
@@ -62,6 +67,7 @@ from kalanos.analysis.models.domain import (
 from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 from kalanos.analysis.models.metrics import (
     EpisodeContext,
+    MetricResult,
     MetricStatus,
     StreamContext,
 )
@@ -191,8 +197,12 @@ def _full_scan_freeze(stream: Stream):
     )
 
 
-def _write_paced_video(path: UPath, pts: list[int]) -> None:
-    """Encode one 64x64 gray frame at each of `pts`, in ticks of 1/30 s, at 30 fps."""
+def _write_paced_video(path: UPath, pts: list[int], vary: bool = False) -> None:
+    """Encode one 64x64 gray frame at each of `pts`, in ticks of 1/30 s, at 30 fps.
+
+    With `vary`, each frame is a ramp whose level follows its tick,
+    so no two frames look alike and none reads as blank.
+    """
 
     av = pytest.importorskip("av")
 
@@ -201,8 +211,11 @@ def _write_paced_video(path: UPath, pts: list[int]) -> None:
     stream.width = stream.height = 64
     stream.pix_fmt = "yuv420p"
     stream.codec_context.time_base = Fraction(1, 30)
-    pixels = numpy.full((64, 64, 3), 128, dtype=numpy.uint8)
     for tick in pts:
+        pixels = numpy.full((64, 64, 3), 128, dtype=numpy.uint8)
+        if vary:
+            ramp = 20 + (tick * 7) % 150 + numpy.arange(64)
+            pixels[:] = ramp[None, :, None].astype(numpy.uint8)
         frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
         frame.pts = tick
         frame.time_base = Fraction(1, 30)
@@ -460,8 +473,8 @@ def test_a_dropped_first_frame_is_still_present(tmp_path):
     assert result.evidence["reason"] is None
 
 
-def test_presence_keeps_one_frame_and_format_decodes_none(monkeypatch):
-    """Presence stops at the segment's first frame; format reads the header alone."""
+def test_presence_reads_the_shared_decode_and_format_decodes_none(monkeypatch):
+    """Presence takes its first frame from the vision read; format reads no frame."""
 
     calls: list[int] = []
     gray_windows = VideoPayload.gray_windows
@@ -473,13 +486,203 @@ def test_presence_keeps_one_frame_and_format_decodes_none(monkeypatch):
             yield item
 
     monkeypatch.setattr(VideoPayload, "gray_windows", counting)
-    stream = _camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0))
+    ctx = stream_context(_camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0)))
 
-    assert camera_stream_present(stream_context(stream)).value == 1.0
-    assert calls == [1]
-    calls.clear()
-    assert video_format_consistency(stream_context(stream)).value == 0.0
-    assert calls == []
+    sharpness_score(ctx)
+    assert len(calls) == 1
+    assert camera_stream_present(ctx).value == 1.0
+    assert video_format_consistency(ctx).value == 0.0
+    assert len(calls) == 1
+
+
+def _indexed_decodes(monkeypatch) -> list[list[int]]:
+    """Record the frame indices each `VideoPayload.gray_windows` call yields."""
+
+    calls: list[list[int]] = []
+    gray_windows = VideoPayload.gray_windows
+
+    def recording(self, windows, size, native=frozenset(), **caps):
+        calls.append([])
+        counts = [0] * len(windows)
+        for item in gray_windows(self, windows, size, native, **caps):
+            position = item[0]
+            calls[-1].append(windows[position][0] + counts[position])
+            counts[position] += 1
+            yield item
+
+    monkeypatch.setattr(VideoPayload, "gray_windows", recording)
+    return calls
+
+
+def test_every_camera_metric_shares_one_decode(monkeypatch, tmp_path):
+    """The vision metrics, cut_count and presence decode each frame once in all."""
+
+    calls = _indexed_decodes(monkeypatch)
+    camera = _paced_camera(UPath(tmp_path / "paced.mp4"), list(range(60)), "up")
+    ctx = stream_context(camera, episode_streams=[camera, _moving_actions(60)])
+
+    results = run_stream_metrics(ctx)
+
+    assert results["cut_count"].status == MetricStatus.REPORT_ONLY
+    assert results["camera_stream_present"].value == 1.0
+    # Sixty frames make one vision window, which holds every cut window too.
+    assert calls == [list(range(60))]
+
+
+def test_a_dropped_first_frame_is_present_with_one_sample(tmp_path):
+    """With no sampled range at a dropped first frame, presence reads one alone."""
+
+    path = UPath(tmp_path / "dropped.mp4")
+    pts = [tick for tick in range(80) if tick != 8]
+    camera = _paced_camera(path, pts, CAMERA_FIELD, frames=60, start=8)
+
+    result = camera_stream_present(stream_context(camera, vision_samples=1))
+
+    assert result.value == 1.0
+    assert result.evidence["reason"] is None
+
+
+def test_a_failure_between_ranges_leaves_presence_to_read_alone(monkeypatch, tmp_path):
+    """A stop the shared read cannot place leaves presence to read its first frame."""
+
+    path = UPath(tmp_path / "dropped.mp4")
+    pts = [tick for tick in range(80) if tick != 8]
+    camera = _paced_camera(path, pts, CAMERA_FIELD, frames=60, start=8)
+    gray_windows = VideoPayload.gray_windows
+    calls: list[int] = []
+
+    def failing(self, windows, size, native=frozenset(), **caps):
+        calls.append(1)
+        for item in gray_windows(self, windows, size, native, **caps):
+            if len(calls) == 1 and item[0] > 0:
+                raise DecodeFailed("corrupt packet")
+            yield item
+
+    monkeypatch.setattr(VideoPayload, "gray_windows", failing)
+    result = camera_stream_present(stream_context(camera, vision_samples=1))
+
+    assert result.value == 1.0
+
+
+def test_a_decode_cap_before_the_first_frame_leaves_presence_unknown(tmp_path):
+    """A cap the seek preroll alone exhausts says nothing about the file."""
+
+    camera = _paced_camera(
+        UPath(tmp_path / "late.mp4"),
+        list(range(100)),
+        CAMERA_FIELD,
+        frames=60,
+        start=40,
+    )
+    ctx = stream_context(camera).model_copy(
+        update={"vision": VisionSpec(sample_frames=2, max_decode_frames=2)}
+    )
+
+    result = camera_stream_present(ctx)
+
+    assert result.value is None
+    assert result.availability == Availability.UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    ("windows", "cut_windows"),
+    [([(10, 30)], [(5, 20)]), ([(5, 30)], [(10, 20)])],
+    ids=["cut_first", "cut_inside"],
+)
+def test_the_shared_read_numbers_frames_as_each_read_alone(
+    tmp_path, windows, cut_windows
+):
+    """On video missing a frame, each window takes the frames its own read would."""
+
+    path = UPath(tmp_path / "gap.mp4")
+    _write_paced_video(path, [tick for tick in range(60) if tick != 7], vary=True)
+    payload = VideoPayload(path=path, frame_count=60, start_s=0.0, end_s=2.0)
+    sampled = [15, 25]
+    spec = VisionSpec()
+    limits = {
+        "dark_level": spec.dark_level,
+        "bright_level": spec.bright_level,
+        "max_decode_frames": spec.max_decode_frames,
+        "max_pixels": spec.max_pixels,
+    }
+
+    ranges = vision._split(windows + cut_windows + [(0, 1)], 60)
+    shared = vision._pass(
+        payload, ranges, windows, sampled, sampled, cut_windows, **limits
+    )
+    alone = vision._read(payload, windows, sampled, sampled, **limits)
+    cut, failure = _window_thumbnails(payload, cut_windows)
+
+    assert isinstance(shared.frames, vision._Frames)
+    assert isinstance(alone, vision._Frames)
+    assert (shared.frames.pts, shared.frames.luma_sha256) == (
+        alone.pts,
+        alone.luma_sha256,
+    )
+    [(start, diffs)] = shared.frames.diffs
+    assert start == alone.diffs[0][0]
+    assert numpy.array_equal(diffs, alone.diffs[0][1])
+    assert (shared.cut_failure, failure) == (None, None)
+    assert shared.cut.keys() == cut.keys()
+    assert all(numpy.array_equal(shared.cut[index], cut[index]) for index in cut)
+
+
+def test_a_failing_control_stream_fails_cut_count_alone(monkeypatch):
+    """A control payload that cannot be fetched leaves the vision read whole."""
+
+    action = _moving_actions(1000)
+    payload_type = type(action.payload)
+    fetch = payload_type.fetch
+    calls: list[int] = []
+
+    def failing(self, *args, **kwargs):
+        if self is action.payload:
+            calls.append(1)
+            raise OSError("503 Service Unavailable")
+        return fetch(self, *args, **kwargs)
+
+    monkeypatch.setattr(payload_type, "fetch", failing)
+    ctx = stream_context(clean_frames(frames=1000), episode_streams=[action])
+
+    assert sharpness_score(ctx).status == MetricStatus.REPORT_ONLY
+    with pytest.raises(OSError):
+        cut_count(ctx)
+    assert len(calls) == 1
+
+
+def test_a_pixel_limit_leaves_later_cut_windows_as_before():
+    """A frame over max_pixels stops the vision read, and the cut windows still read."""
+
+    ctx = stream_context(
+        clean_frames(frames=1000, height=16, width=16),
+        episode_streams=[_moving_actions(1000)],
+    )
+    windows, _sampled = vision._layout(ctx, False)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    assert any(start >= windows[0][1] for start, _end in plan.windows)
+    default = cut_count(ctx)
+    vision.clear_cache()
+    capped = ctx.model_copy(update={"vision": VisionSpec(max_pixels=64)})
+
+    assert sharpness_score(capped).availability == Availability.UNAVAILABLE
+    assert cut_count(capped).evidence == default.evidence
+
+
+def test_a_pixel_limit_leaves_presence_and_cuts_as_before(tmp_path):
+    """A frame over max_pixels stops the vision metrics alone."""
+
+    camera = _paced_camera(UPath(tmp_path / "paced.mp4"), list(range(60)), "up")
+    episode = [camera, _moving_actions(60)]
+    default = cut_count(stream_context(camera, episode_streams=episode))
+    vision.clear_cache()
+    ctx = stream_context(camera, episode_streams=episode).model_copy(
+        update={"vision": VisionSpec(max_pixels=64)}
+    )
+
+    assert sharpness_score(ctx).availability == Availability.UNAVAILABLE
+    assert camera_stream_present(ctx).value == 1.0
+    assert cut_count(ctx).evidence == default.evidence
 
 
 @pytest.mark.parametrize(
@@ -1294,21 +1497,69 @@ def _count_decodes(monkeypatch) -> list[int]:
 
 
 def test_blur_exposure_and_freezes_decode_the_stream_once(monkeypatch):
-    """The three frame metrics read one shared pass rather than decoding three times."""
+    """The three frame metrics read one shared pass rather than decoding three times.
+
+    The pass also reads cut_count's windows, around the actions' largest jumps.
+    """
 
     calls = _count_decodes(monkeypatch)
 
     ctx = stream_context(
         clean_frames(frames=1000), episode_streams=[_moving_actions(1000)]
     )
+    windows, _sampled = vision._layout(ctx, False)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    ranges = vision._merge(windows + plan.windows, 1000)
 
     results = [
         func(ctx) for func in (sharpness_score, exposure_shift_pct, frozen_frame_pct)
     ]
 
     assert [result.status for result in results] == [MetricStatus.REPORT_ONLY] * 3
-    assert calls == [300]
+    assert calls == [sum(end - start for start, end in ranges)]
     assert results[0].evidence["n_sampled"] == 10
+
+
+def test_a_failure_in_a_cut_range_leaves_vision_as_before(monkeypatch):
+    """A decode failure in frames only cut_count reads leaves the vision read whole."""
+
+    ctx = stream_context(
+        clean_frames(frames=1000), episode_streams=[_moving_actions(1000)]
+    )
+    windows, _sampled = vision._layout(ctx, False)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    cut_only = [
+        (start, end)
+        for start, end in vision._merge(windows + plan.windows, 1000)
+        if not any(s < end and start < e for s, e in windows)
+    ]
+    # A vision window after the failure, which the pass never reaches.
+    failing_at = next(
+        start for start, _end in cut_only if any(s > start for s, _e in windows)
+    )
+    clean = sharpness_score(ctx)
+    vision.clear_cache()
+
+    gray_windows = SyntheticFrames.gray_windows
+    calls: list[int] = []
+
+    def failing(self, windows, size, native=frozenset(), **caps):
+        calls.append(1)
+        counts = [0] * len(windows)
+        for item in gray_windows(self, windows, size, native, **caps):
+            index = windows[item[0]][0] + counts[item[0]]
+            counts[item[0]] += 1
+            if len(calls) == 1 and index == failing_at:
+                raise DecodeFailed("corrupt packet")
+            yield item
+
+    monkeypatch.setattr(SyntheticFrames, "gray_windows", failing)
+    result = sharpness_score(ctx)
+
+    assert len(calls) > 1
+    assert (result.value, result.evidence) == (clean.value, clean.evidence)
 
 
 def test_without_an_action_stream_only_the_sampled_frames_are_decoded(monkeypatch):
@@ -2011,13 +2262,13 @@ def test_footage_reuses_the_vision_read(monkeypatch):
     """The footage vector comes from the read the vision metrics already made."""
 
     calls = []
-    read = vision._read
+    read = vision._pass
 
     def counting(*args, **kwargs):
         calls.append(1)
         return read(*args, **kwargs)
 
-    monkeypatch.setattr(vision, "_read", counting)
+    monkeypatch.setattr(vision, "_pass", counting)
     stream = clean_frames(frames=30, height=128, width=128)
 
     footage = FootageVariation()

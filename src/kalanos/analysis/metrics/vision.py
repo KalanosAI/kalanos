@@ -14,19 +14,22 @@ Fourteen metrics measure camera footage:
   decoding nothing, under a full scan too;
 - camera_sync_skew_ms compares the cameras of one episode through the same probe;
 - camera_stream_present and video_format_consistency share one read of the
-  container header, and presence also decodes the segment's first frame.
+  container header, and presence also takes the segment's first frame.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
 Under `StreamContext.full_frame_scan`, blur, exposure and freezes read every frame.
 
-The three share one decode:
+The three share one decode,
+which also reads `kalanos.analysis.metrics.continuity.cut_count`'s windows
+and the segment's first frame for presence:
 
 - when frozen_frame_pct runs, the sampled frames are taken from inside its
   windows, and otherwise only the sampled frames are decoded;
 - each frame is decoded as a 128x128 gray image for exposure and freezes,
   and each sampled frame also at native resolution for blur;
-- every frame is measured and dropped, so a full scan runs in flat memory.
+- every frame is measured and dropped, so a full scan runs in flat memory;
+  of the rest, only cut_count's thumbnails are kept.
 
 `camera_frames` publishes the shared read as evidence,
 which the `vision` diagnostic reads,
@@ -58,6 +61,7 @@ from kalanos.analysis.adapters.video import (
     DecodeFailed,
     DecodeLimitReached,
     DecoderUnavailable,
+    PixelLimitReached,
     ReadInterrupted,
     SampledFrames,
     SegmentPackets,
@@ -89,7 +93,11 @@ from kalanos.assets.dictionary import load_dictionary
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
+
+    from kalanos.analysis.metrics.continuity import _CutPlan
 
     # The frame cache's key: what was read, and how it was read.
     _Key = tuple[
@@ -101,6 +109,12 @@ if TYPE_CHECKING:
         int,  # VisionSpec.bright_level
         int | None,  # the max_decode_frames cap, None under a full scan
         int,  # VisionSpec.max_pixels
+        tuple[tuple[int, int], ...],  # cut_count's [start, end) windows
+        bool,  # whether the first frame is read in a window of its own
+    ]
+
+    _CutPlanEntry = tuple[
+        SampledFrames, list[Stream], _CutPlan | MetricResult | Exception
     ]
 
 
@@ -190,9 +204,12 @@ _CACHE_SIZE = 8
 #   which stops its id being reused while the entry lives;
 # - payloads are immutable in normal use,
 #   so an in-place edit of a SyntheticFrames.frames list would read a stale sample.
-_CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Frames | MetricResult]]" = (
-    OrderedDict()
-)
+_CACHE: "OrderedDict[_Key, tuple[SampledFrames, _Read]]" = OrderedDict()
+
+# cut_count's plan, keyed on id(payload) and the ids of the camera stream
+# and its episode's streams, whose control signals the plan is drawn from.
+# The value holds the payload and those streams so no id is reused while cached.
+_CUT_PLANS: "OrderedDict[tuple[int, tuple[int, ...]], _CutPlanEntry]" = OrderedDict()
 
 # The packet probe, keyed on id(payload).
 # The value holds the payload so its id is not reused while cached, as in `_CACHE`.
@@ -282,6 +299,34 @@ class _Frames:
 
 
 @dataclass(frozen=True)
+class _Read:
+    """What every consumer of one camera stream's shared decode keeps of it.
+
+    Attributes
+    ----------
+    frames : _Frames or MetricResult
+        What the vision metrics keep, or why they read nothing.
+    cut : dict of int to numpy.ndarray
+        The `_thumbnail` of every frame read inside a cut_count window,
+        keyed by frame index.
+    cut_failure : DecodeFailed or DecodeLimitReached or None
+        What stopped the read of cut_count's windows, if anything did.
+    first : bool or None
+        `True` when the range starting at frame 0 yielded a frame,
+        `False` when the read failed before it did,
+        `None` when presence must read the first frame alone.
+    first_failure : DecodeFailed or DecodeLimitReached or None
+        What stopped the read before the first frame, when `first` is `False`.
+    """
+
+    frames: "_Frames | MetricResult"
+    cut: "dict[int, np.ndarray]"
+    cut_failure: DecodeFailed | DecodeLimitReached | None
+    first: bool | None
+    first_failure: DecodeFailed | DecodeLimitReached | None
+
+
+@dataclass(frozen=True)
 class _Exposure:
     """exposure_shift_pct's verdict on each sampled frame."""
 
@@ -290,6 +335,207 @@ class _Exposure:
     worst_index: int | None
     typical_mean: float
     typical_white: float
+
+
+class _VisionAccumulator:
+    """What the vision metrics keep of a read, gathered frame by frame as it decodes."""
+
+    def __init__(
+        self,
+        windows: list[tuple[int, int]],
+        sampled: list[int],
+        evidence: list[int],
+        *,
+        dark_level: int,
+        bright_level: int,
+    ) -> None:
+        """Start an empty accumulation over `windows`.
+
+        Parameters
+        ----------
+        windows : list of tuple of (int, int)
+            The ascending `[start, end)` windows the vision metrics read.
+        sampled : list of int
+            The positions blur and exposure measure.
+        evidence : list of int
+            The positions whose frames are pooled for the footage vector.
+        dark_level, bright_level : int
+            `VisionSpec.dark_level` and `VisionSpec.bright_level`.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        self.windows = windows
+        self.sampled = sampled
+        self.evidence = evidence
+        self.wanted = set(sampled)
+        self.evidence_set = set(evidence)
+        self.dark_level = dark_level
+        self.bright_level = bright_level
+        self.kept: dict[str, list[float]] = {
+            name: []
+            for name in (
+                "loss",
+                "laplacian",
+                "mean",
+                "p5",
+                "p95",
+                "white_share",
+                "dark_share",
+            )
+        }
+        self.measured: list[int] = []
+        self.pts: list[float | None] = []
+        self.shapes: list[tuple[int, int]] = []
+        self.hashes: list[str] = []
+        self.pooled: dict[int, np.ndarray] = {}
+        self.counts = [0] * len(windows)
+        self.diffs: list[list[float]] = [[] for _ in windows]
+        self.steps: list[list[float]] = [[] for _ in windows]
+        self.previous: np.ndarray | None = None
+        self.previous_window = -1
+        self.previous_spread = 0.0
+        self.levels = numpy.arange(256)
+
+    def add(
+        self,
+        window: int,
+        index: int,
+        frame: "np.ndarray",
+        full: "np.ndarray | None",
+        frame_pts: float | None,
+    ) -> "np.ndarray":
+        """Measure one decoded frame.
+
+        Parameters
+        ----------
+        window : int
+            The frame's window, as a position in `windows`.
+        index : int
+            The frame's index in the stream.
+        frame : numpy.ndarray
+            The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
+        full : numpy.ndarray or None
+            Its native luminance, present when `index` is sampled.
+        frame_pts : float or None
+            Its presentation time.
+
+        Returns
+        -------
+        numpy.ndarray
+            The frame's `_thumbnail`.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        self.counts[window] += 1
+        histogram = numpy.bincount(frame.ravel(), minlength=256)
+        cumulative = numpy.cumsum(histogram)
+        p5, p95 = _percentile(cumulative, 5), _percentile(cumulative, 95)
+        spread = p95 - p5
+        if index in self.wanted:
+            assert full is not None
+            laplacian = _laplacian_var(full)
+            self.measured.append(index)
+            self.pts.append(frame_pts)
+            self.shapes.append((int(full.shape[0]), int(full.shape[1])))
+            self.hashes.append(hashlib.sha256(full.tobytes()).hexdigest())
+            self.kept["loss"].append(_reblur_loss(full, laplacian))
+            self.kept["laplacian"].append(laplacian)
+            self.kept["mean"].append(int(histogram @ self.levels) / frame.size)
+            self.kept["p5"].append(p5)
+            self.kept["p95"].append(p95)
+            # A pixel at or above the bright level is clipped white (rda),
+            # one at or below the dark level crushed black.
+            self.kept["white_share"].append(
+                int(histogram[self.bright_level :].sum()) / frame.size
+            )
+            self.kept["dark_share"].append(
+                int(histogram[: self.dark_level + 1].sum()) / frame.size
+            )
+
+        # Only the frames a sample measures are pooled,
+        # so a full scan's vector matches a sampled read's.
+        if index in self.evidence_set:
+            self.pooled[index] = _thumbnail(frame, _VARIATION_SIZE) / 255
+
+        thumbnail = _thumbnail(frame)
+        if window == self.previous_window and self.previous is not None:
+            difference = float(numpy.abs(thumbnail - self.previous).mean())
+            self.steps[window].append(difference)
+            contrast = min(spread, self.previous_spread)
+            if contrast < _BLANK_SPREAD:
+                self.diffs[window].append(float("nan"))
+            else:
+                self.diffs[window].append(difference * _FREEZE_CONTRAST / contrast)
+        self.previous, self.previous_window = thumbnail, window
+        self.previous_spread = spread
+        return thumbnail
+
+    def finish(
+        self,
+        stopped: tuple[Availability, str] | None,
+        failure: DecodeFailed | None,
+    ) -> "_Frames | MetricResult":
+        """Close the accumulation into what the vision metrics read.
+
+        Parameters
+        ----------
+        stopped : tuple of (Availability, str) or None
+            Why the read stopped early, when a decode cap stopped it.
+        failure : DecodeFailed or None
+            The decode failure that stopped the read, if one did.
+
+        Returns
+        -------
+        _Frames or MetricResult
+            What was kept, or `not_applicable` when no frame was read:
+            a failure before any frame decoded, such as a file that cannot be opened,
+            and a read that ended without a frame, are not camera footage to grade.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+
+        n_read = sum(self.counts)
+        if failure is not None:
+            # Only a file that started decoding was readable and then broke;
+            # one that never yields a frame was never camera footage to read.
+            if not n_read:
+                return not_applicable(str(failure))
+            stopped = (Availability.ERROR, str(failure))
+        if not n_read and stopped is None:
+            return not_applicable("no frame could be decoded")
+
+        return _Frames(
+            windows=self.windows,
+            n_read=n_read,
+            sampled=self.measured,
+            diffs=[
+                (start, numpy.asarray(window_diffs, dtype=numpy.float32))
+                for (start, _end), window_diffs in zip(
+                    self.windows, self.diffs, strict=True
+                )
+                if window_diffs
+            ],
+            luma_steps=[
+                (start, numpy.asarray(window_steps, dtype=numpy.float32))
+                for (start, _end), window_steps in zip(
+                    self.windows, self.steps, strict=True
+                )
+                if window_steps
+            ],
+            pts=self.pts,
+            shape=self.shapes,
+            luma_sha256=self.hashes,
+            requested=list(self.sampled),
+            evidence_positions=list(self.evidence),
+            pooled=self.pooled,
+            stopped=stopped,
+            **self.kept,
+        )
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -460,6 +706,33 @@ def _ranges(positions: list[int]) -> list[tuple[int, int]]:
     return ranges
 
 
+def _merge(windows: list[tuple[int, int]], n: int) -> list[tuple[int, int]]:
+    """Clip `[start, end)` windows to `[0, n)`, then sort and merge overlapping ones.
+
+    Parameters
+    ----------
+    windows : list of tuple of (int, int)
+        Windows, in any order.
+    n : int
+        The frame count to clip to.
+
+    Returns
+    -------
+    list of tuple of (int, int)
+        Ascending, non-overlapping windows, as `gray_windows` takes them.
+    """
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted((max(0, a), min(n, b)) for a, b in windows):
+        if start >= end:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
     """Return what the vision metrics keep of the stream's frames, or `not_applicable`.
 
@@ -468,6 +741,82 @@ def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
     the sampled frames alone otherwise.
     The stream is checked on every call; only the read is cached,
     so two streams sharing one payload are each judged on their own type.
+    """
+
+    try:
+        read = _shared_read(ctx)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(read, MetricResult):
+        return read
+    return read.frames
+
+
+def _cut_plan(ctx: StreamContext, payload: SampledFrames) -> "_CutPlan | MetricResult":
+    """Return cut_count's plan for the stream, computing it once per stream and episode.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream, with its episode's streams.
+    payload : SampledFrames
+        The stream's frames.
+
+    Returns
+    -------
+    _CutPlan or MetricResult
+        The windows cut_count reads, or why it reads none.
+
+    Raises
+    ------
+    Exception
+        Whatever reading the control streams raised;
+        it is kept, so a failing control payload is fetched once per stream.
+    """
+
+    # continuity imports this module.
+    from kalanos.analysis.metrics.continuity import _plan_cuts
+
+    streams = [ctx.stream, *(ctx.episode_streams or [])]
+    key = (id(payload), tuple(id(stream) for stream in streams))
+    entry = _CUT_PLANS.get(key)
+    if entry is not None and entry[0] is payload:
+        _CUT_PLANS.move_to_end(key)
+        plan = entry[2]
+    else:
+        try:
+            plan = _plan_cuts(ctx)
+        except Exception as exc:
+            plan = exc
+        _CUT_PLANS[key] = (payload, streams, plan)
+        while len(_CUT_PLANS) > _CACHE_SIZE:
+            _CUT_PLANS.popitem(last=False)
+    if isinstance(plan, Exception):
+        raise plan
+    return plan
+
+
+def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
+    """Decode the stream once for the vision metrics, cut_count and presence.
+
+    The read covers the vision metrics' windows, cut_count's windows
+    and the segment's first frame, cut at every window's bounds by `_split`.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream, with its episode's streams.
+
+    Returns
+    -------
+    _Read or MetricResult
+        What each consumer keeps of the read,
+        or `not_applicable` when the stream's frames cannot be read.
+
+    Raises
+    ------
+    DecoderUnavailable
+        If no decoder is installed.
     """
 
     payload = _readable(ctx)
@@ -481,6 +830,14 @@ def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
     spec = ctx.vision
     # A full scan is asked to read every frame, so no frame budget stops it.
     max_decode_frames = None if ctx.full_frame_scan else spec.max_decode_frames
+    try:
+        plan = _cut_plan(ctx, payload)
+    except Exception:
+        # cut_count reports the failure itself;
+        # the other consumers read without its windows.
+        plan = None
+    cut_windows = [] if plan is None or isinstance(plan, MetricResult) else plan.windows
+    first = [] if any(start == 0 for start, _end in windows + cut_windows) else [(0, 1)]
     key = (
         id(payload),
         tuple(windows),
@@ -490,16 +847,20 @@ def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
         spec.bright_level,
         max_decode_frames,
         spec.max_pixels,
+        tuple(cut_windows),
+        bool(first),
     )
     if key in _CACHE and _CACHE[key][0] is payload:
         _CACHE.move_to_end(key)
         return _CACHE[key][1]
 
-    result = _read(
+    result = _pass(
         payload,
+        _split(windows + cut_windows + first, ctx.n_samples),
         windows,
         sampled,
         evidence,
+        cut_windows,
         dark_level=spec.dark_level,
         bright_level=spec.bright_level,
         max_decode_frames=max_decode_frames,
@@ -509,6 +870,349 @@ def _frames(ctx: StreamContext) -> "_Frames | MetricResult":
     while len(_CACHE) > _CACHE_SIZE:
         _CACHE.popitem(last=False)
     return result
+
+
+def _split(windows: list[tuple[int, int]], n: int) -> list[tuple[int, int]]:
+    """Cover `windows`, clipped to `[0, n)`, with pieces cut at every window's bounds.
+
+    Each window then starts a piece,
+    so the read seeks to it as the window's own read would,
+    and every piece lies wholly inside or wholly outside each window.
+
+    Parameters
+    ----------
+    windows : list of tuple of (int, int)
+        `[start, end)` windows, in any order, overlapping or not.
+    n : int
+        The frame count to clip to.
+
+    Returns
+    -------
+    list of tuple of (int, int)
+        Ascending, non-overlapping pieces, as `gray_windows` takes them.
+    """
+
+    clipped = [(max(0, start), min(n, end)) for start, end in windows]
+    clipped = [(start, end) for start, end in clipped if start < end]
+    bounds = sorted({bound for window in clipped for bound in window})
+    return [
+        (start, end)
+        for start, end in zip(bounds, bounds[1:], strict=False)
+        if any(a <= start and end <= b for a, b in clipped)
+    ]
+
+
+class _Numbering:
+    """Number one consumer's frames as its own read of its windows would.
+
+    The shared read seeks at every piece, the consumer's own read once per window.
+    Both take the same frames, numbered alike,
+    while each earlier piece of a window yielded exactly its length,
+    and no piece yields again a frame the one before it did,
+    as a seek clipped to the segment's end can.
+    Otherwise, on footage missing or reordering frames,
+    the consumer is irregular and reads its windows alone.
+    """
+
+    def __init__(
+        self, windows: list[tuple[int, int]], pieces: list[tuple[int, int]]
+    ) -> None:
+        """Map each piece to the window holding it.
+
+        Parameters
+        ----------
+        windows : list of tuple of (int, int)
+            The consumer's ascending, non-overlapping windows.
+        pieces : list of tuple of (int, int)
+            The pieces the shared read decodes, from `_split`.
+        """
+
+        self.windows = windows
+        self.pieces = pieces
+        self.window_of = [
+            next(
+                (w for w, (a, b) in enumerate(windows) if a <= start and end <= b),
+                None,
+            )
+            for start, end in pieces
+        ]
+        self.taken = [0] * len(windows)
+        self.piece = [-1] * len(windows)
+        self.last_pts: list[float | None] = [None] * len(windows)
+        self.irregular = False
+
+    def take(self, piece: int, pts: float | None) -> int | None:
+        """Return the window a frame of `piece` belongs to, or `None` if it serves none.
+
+        Parameters
+        ----------
+        piece : int
+            The frame's piece, as a position in `pieces`.
+        pts : float or None
+            The frame's presentation time.
+
+        Returns
+        -------
+        int or None
+            The frame's window, as a position in `windows`;
+            `None` when no window holds the piece or the consumer is irregular.
+        """
+
+        w = self.window_of[piece]
+        if w is None or self.irregular:
+            return None
+        if self.piece[w] != piece:
+            last_pts = self.last_pts[w]
+            if self.piece[w] >= 0 and (
+                self.taken[w] != self.pieces[piece][0] - self.windows[w][0]
+                or (pts is not None and last_pts is not None and pts <= last_pts)
+            ):
+                self.irregular = True
+                return None
+            self.piece[w] = piece
+        self.taken[w] += 1
+        self.last_pts[w] = pts
+        return w
+
+
+def _pass(
+    payload: SampledFrames,
+    ranges: list[tuple[int, int]],
+    windows: list[tuple[int, int]],
+    sampled: list[int],
+    evidence: list[int],
+    cut_windows: list[tuple[int, int]],
+    *,
+    dark_level: int,
+    bright_level: int,
+    max_decode_frames: int | None,
+    max_pixels: int,
+) -> _Read:
+    """Decode `ranges` of `payload` once, handing each frame to the consumers it serves.
+
+    A stop is charged to the consumers it kept from their frames,
+    each as its own read would have met it:
+
+    - the decode cap counts every frame of the pass,
+      so it stops every consumer with frames left to read;
+    - a decode failure, or a frame over `max_pixels`,
+      stops the consumers whose own read would have met it,
+      and a consumer whose frames the pass did not reach reads them alone.
+
+    `_charge` places each stop.
+
+    Parameters
+    ----------
+    payload : SampledFrames
+        The camera's frames.
+    ranges : list of tuple of (int, int)
+        The pieces to decode, from `_split` over every window below.
+    windows : list of tuple of (int, int)
+        The vision metrics' windows.
+    sampled : list of int
+        The positions blur and exposure measure.
+    evidence : list of int
+        The positions pooled for the footage vector.
+    cut_windows : list of tuple of (int, int)
+        cut_count's windows.
+    dark_level, bright_level : int
+        `VisionSpec.dark_level` and `VisionSpec.bright_level`.
+    max_decode_frames : int or None
+        The most frames the whole pass may decode.
+    max_pixels : int
+        The most pixels a sampled frame may hold.
+
+    Returns
+    -------
+    _Read
+        What each consumer keeps of the pass.
+
+    Raises
+    ------
+    DecoderUnavailable
+        If no decoder is installed.
+    """
+
+    # continuity imports this module.
+    from kalanos.analysis.metrics.continuity import _window_thumbnails
+
+    accumulator = _VisionAccumulator(
+        windows, sampled, evidence, dark_level=dark_level, bright_level=bright_level
+    )
+    cut: dict[int, np.ndarray] = {}
+    vision_numbering = _Numbering(windows, ranges)
+    cut_numbering = _Numbering(cut_windows, ranges)
+    counts = [0] * len(ranges)
+    last = -1
+    first_read = False
+    stop: DecodeFailed | DecodeLimitReached | None = None
+
+    # Step 1: one read over every range.
+    try:
+        with closing(
+            payload.gray_windows(
+                ranges,
+                _SAMPLE_SIZE,
+                native=frozenset(sampled),
+                max_decode_frames=max_decode_frames,
+                max_pixels=max_pixels,
+            )
+        ) as frames:
+            for position, frame, full, frame_pts in frames:
+                # Step 2: each frame to the consumers whose windows hold it.
+                # A piece is only ever cut short at its end,
+                # so the frames it did yield are its first ones.
+                index = ranges[position][0] + counts[position]
+                counts[position] += 1
+                last = position
+                if ranges[position][0] == 0:
+                    first_read = True
+                thumbnail = None
+                window = vision_numbering.take(position, frame_pts)
+                if window is not None:
+                    thumbnail = accumulator.add(window, index, frame, full, frame_pts)
+                if cut_numbering.take(position, frame_pts) is not None:
+                    cut[index] = (
+                        thumbnail if thumbnail is not None else _thumbnail(frame)
+                    )
+    # Step 3: what stopped the read, if anything did.
+    except (DecodeFailed, DecodeLimitReached) as exc:
+        stop = exc
+
+    # Step 4: charge the stop to the consumers it kept from their frames.
+    stopped: tuple[Availability, str] | None = None
+    failure: DecodeFailed | None = None
+    frames_read: _Frames | MetricResult | None = None
+    cut_failure: DecodeFailed | DecodeLimitReached | None = None
+    first: bool | None = True if first_read else None
+    first_failure: DecodeFailed | DecodeLimitReached | None = None
+    if stop is not None:
+        stops = _charge(stop, ranges, counts, last)
+        vision_stop, cut_stop = stops(windows), stops(cut_windows)
+        if vision_stop == "hit":
+            if isinstance(stop, DecodeFailed):
+                failure = stop
+            else:
+                stopped = (Availability.UNAVAILABLE, str(stop))
+        elif vision_stop == "alone":
+            frames_read = _read(
+                payload,
+                windows,
+                sampled,
+                evidence,
+                dark_level=dark_level,
+                bright_level=bright_level,
+                max_decode_frames=max_decode_frames,
+                max_pixels=max_pixels,
+            )
+        # cut_count's own read takes no frame at native resolution,
+        # so it never meets a frame over max_pixels.
+        if cut_stop == "hit" and not isinstance(stop, PixelLimitReached):
+            cut_failure = stop
+        elif cut_stop is not None:
+            cut, cut_failure = _window_thumbnails(payload, cut_windows)
+        # Before any frame, only the decode cap is charged to presence;
+        # after any other stop it reads its first frame alone.
+        if last < 0 and _is_cap(stop):
+            first, first_failure = False, stop
+
+    # Step 5: a consumer whose frames the pieces could not number reads alone.
+    if vision_numbering.irregular:
+        frames_read = _read(
+            payload,
+            windows,
+            sampled,
+            evidence,
+            dark_level=dark_level,
+            bright_level=bright_level,
+            max_decode_frames=max_decode_frames,
+            max_pixels=max_pixels,
+        )
+    if cut_numbering.irregular:
+        cut, cut_failure = _window_thumbnails(payload, cut_windows)
+
+    # Step 6: what each consumer keeps.
+    return _Read(
+        frames=frames_read
+        if frames_read is not None
+        else accumulator.finish(stopped, failure),
+        cut=cut,
+        cut_failure=cut_failure,
+        first=first,
+        first_failure=first_failure,
+    )
+
+
+def _is_cap(stop: DecodeFailed | DecodeLimitReached) -> bool:
+    """Whether `stop` came from `max_decode_frames`."""
+
+    return isinstance(stop, DecodeLimitReached) and not isinstance(
+        stop, PixelLimitReached
+    )
+
+
+def _charge(
+    stop: DecodeFailed | DecodeLimitReached,
+    ranges: list[tuple[int, int]],
+    counts: list[int],
+    last: int,
+) -> "Callable[[list[tuple[int, int]]], str | None]":
+    """Decide how a stop of the shared read reaches each consumer's windows.
+
+    A read shows only which frames it yielded.
+    A stop inside a range fell on the frame after the last one yielded.
+    A stop after a range yielded all its frames fell either on the frame
+    the read decodes past that range to find its end, or in the seek to the next range.
+
+    - The decode cap stops every consumer with frames left to read.
+    - A decode failure or a frame over `max_pixels` inside a range hits the consumers
+      whose windows hold that frame or end on it,
+      since their own read would have decoded it too;
+      a consumer with frames only after it reads alone.
+    - The same stop between ranges cannot be placed,
+      so the consumers on either side of it read alone,
+      each meeting it, or not, as its own read would.
+
+    Parameters
+    ----------
+    stop : DecodeFailed or DecodeLimitReached
+        What stopped the read.
+    ranges : list of tuple of (int, int)
+        The ranges read.
+    counts : list of int
+        How many frames each range yielded.
+    last : int
+        The last range that yielded a frame, -1 when none did.
+
+    Returns
+    -------
+    Callable
+        Given a consumer's windows, `"hit"` when the stop is the consumer's own,
+        `"alone"` when the consumer must read its windows alone,
+        `None` when the stop does not reach it.
+    """
+
+    inside = last >= 0 and counts[last] < ranges[last][1] - ranges[last][0]
+    if inside:
+        at = ranges[last][0] + counts[last]
+    else:
+        at = ranges[last][1] if last >= 0 else 0
+
+    def charge(windows: list[tuple[int, int]]) -> str | None:
+        """How the stop reaches a consumer reading `windows`."""
+
+        windows = [(start, end) for start, end in windows if start < end]
+        left = any(end > at for _start, end in windows)
+        if _is_cap(stop):
+            return "hit" if left else None
+        if inside:
+            if any(start <= at <= end for start, end in windows):
+                return "hit"
+            return "alone" if left else None
+        ends_here = last >= 0 and any(end == at for _start, end in windows)
+        return "alone" if left or ends_here else None
+
+    return charge
 
 
 def _read(
@@ -522,44 +1226,21 @@ def _read(
     max_decode_frames: int | None,
     max_pixels: int,
 ) -> "_Frames | MetricResult":
-    """Decode `windows` of `payload` once, keeping only what the metrics measure.
+    """Decode `windows` of `payload` for the vision metrics alone.
 
+    The reader the shared pass falls back on when a failure in another consumer's
+    frames stopped it before the vision metrics' own.
     A read stopped by a decode cap, or by a decode failure after its first frame,
     keeps what it read, with the reason in `stopped`.
     A failure before any frame decoded, such as a file that cannot be opened,
     is `not_applicable`.
     """
 
-    numpy = load_numpy()
-    assert numpy is not None
-
-    wanted = set(sampled)
-    evidence_set = set(evidence)
-    kept: dict[str, list[float]] = {
-        name: []
-        for name in (
-            "loss",
-            "laplacian",
-            "mean",
-            "p5",
-            "p95",
-            "white_share",
-            "dark_share",
-        )
-    }
-    measured: list[int] = []
-    pts: list[float | None] = []
-    shapes: list[tuple[int, int]] = []
-    hashes: list[str] = []
-    pooled: dict[int, np.ndarray] = {}
+    accumulator = _VisionAccumulator(
+        windows, sampled, evidence, dark_level=dark_level, bright_level=bright_level
+    )
     stopped: tuple[Availability, str] | None = None
-    counts = [0] * len(windows)
-    diffs: list[list[float]] = [[] for _ in windows]
-    steps: list[list[float]] = [[] for _ in windows]
-    previous: np.ndarray | None = None
-    previous_position = -1
-    previous_spread = 0.0
-    levels = numpy.arange(256)
+    failure: DecodeFailed | None = None
     try:
         with closing(
             payload.gray_windows(
@@ -573,86 +1254,15 @@ def _read(
             for position, frame, full, frame_pts in frames:
                 # A window is only ever cut short at its end,
                 # so the frames it did yield are its first ones.
-                index = windows[position][0] + counts[position]
-                counts[position] += 1
-
-                histogram = numpy.bincount(frame.ravel(), minlength=256)
-                cumulative = numpy.cumsum(histogram)
-                p5, p95 = _percentile(cumulative, 5), _percentile(cumulative, 95)
-                spread = p95 - p5
-                if index in wanted:
-                    assert full is not None
-                    laplacian = _laplacian_var(full)
-                    measured.append(index)
-                    pts.append(frame_pts)
-                    shapes.append((int(full.shape[0]), int(full.shape[1])))
-                    hashes.append(hashlib.sha256(full.tobytes()).hexdigest())
-                    kept["loss"].append(_reblur_loss(full, laplacian))
-                    kept["laplacian"].append(laplacian)
-                    kept["mean"].append(int(histogram @ levels) / frame.size)
-                    kept["p5"].append(p5)
-                    kept["p95"].append(p95)
-                    # A pixel at or above the bright level is clipped white (rda),
-                    # one at or below the dark level crushed black.
-                    kept["white_share"].append(
-                        int(histogram[bright_level:].sum()) / frame.size
-                    )
-                    kept["dark_share"].append(
-                        int(histogram[: dark_level + 1].sum()) / frame.size
-                    )
-
-                # Only the frames a sample measures are pooled,
-                # so a full scan's vector matches a sampled read's.
-                if index in evidence_set:
-                    pooled[index] = _thumbnail(frame, _VARIATION_SIZE) / 255
-
-                thumbnail = _thumbnail(frame)
-                if position == previous_position and previous is not None:
-                    difference = float(numpy.abs(thumbnail - previous).mean())
-                    steps[position].append(difference)
-                    contrast = min(spread, previous_spread)
-                    if contrast < _BLANK_SPREAD:
-                        diffs[position].append(float("nan"))
-                    else:
-                        diffs[position].append(difference * _FREEZE_CONTRAST / contrast)
-                previous, previous_position = thumbnail, position
-                previous_spread = spread
+                index = windows[position][0] + accumulator.counts[position]
+                accumulator.add(position, index, frame, full, frame_pts)
     except DecoderUnavailable as exc:
         return not_applicable(str(exc))
     except DecodeLimitReached as exc:
         stopped = (Availability.UNAVAILABLE, str(exc))
     except DecodeFailed as exc:
-        # Only a file that started decoding was readable and then broke;
-        # one that never yields a frame was never camera footage to read.
-        if not sum(counts):
-            return not_applicable(str(exc))
-        stopped = (Availability.ERROR, str(exc))
-    if not sum(counts) and stopped is None:
-        return not_applicable("no frame could be decoded")
-
-    return _Frames(
-        windows=windows,
-        n_read=sum(counts),
-        sampled=measured,
-        diffs=[
-            (start, numpy.asarray(window_diffs, dtype=numpy.float32))
-            for (start, _end), window_diffs in zip(windows, diffs, strict=True)
-            if window_diffs
-        ],
-        luma_steps=[
-            (start, numpy.asarray(window_steps, dtype=numpy.float32))
-            for (start, _end), window_steps in zip(windows, steps, strict=True)
-            if window_steps
-        ],
-        pts=pts,
-        shape=shapes,
-        luma_sha256=hashes,
-        requested=list(sampled),
-        evidence_positions=list(evidence),
-        pooled=pooled,
-        stopped=stopped,
-        **kept,
-    )
+        failure = exc
+    return accumulator.finish(stopped, failure)
 
 
 def _percentile(cumulative: "np.ndarray", q: float) -> float:
@@ -724,9 +1334,10 @@ def _thumbnail(frame: "np.ndarray", size: int = _FREEZE_SIZE) -> "np.ndarray":
 
 
 def clear_cache() -> None:
-    """Empty the frame, packet and header caches."""
+    """Empty the frame, cut plan, packet and header caches."""
 
     _CACHE.clear()
+    _CUT_PLANS.clear()
     _PACKETS.clear()
     _HEADERS.clear()
 
@@ -1575,8 +2186,10 @@ def camera_sync_skew_ms(ctx: EpisodeContext) -> MetricResult:
 def camera_stream_present(ctx: StreamContext) -> MetricResult:
     """Whether a declared camera's file opens and yields this episode's first frame.
 
-    Reads the container header, then decodes up to the first frame the segment holds,
-    discarding the seek preroll before it.
+    Reads the container header, then takes the segment's first frame
+    from the decode the other vision metrics share.
+    When that read cannot tell, presence decodes up to the first frame the segment holds
+    by itself, discarding the seek preroll before it.
     That frame need not sit exactly at the segment's start,
     so a frame the encoder dropped there does not read as a missing camera.
     A decode failure after that frame is not this metric's to judge:
@@ -1613,21 +2226,22 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
         reason = str(header)
     else:
         try:
-            # The whole segment as one window, closed after its first frame:
-            # the generator decodes nothing past the frame it yields.
-            with closing(
-                payload.gray_windows(
-                    [(0, payload.frame_count)],
-                    _SAMPLE_SIZE,
-                    max_decode_frames=ctx.vision.max_decode_frames,
-                    max_pixels=ctx.vision.max_pixels,
-                )
-            ) as frames:
-                decoded = next(frames, None) is not None
-        except (DecodeLimitReached, ReadInterrupted) as exc:
-            return _stopped_result((Availability.UNAVAILABLE, str(exc)))
-        except DecodeFailed as exc:
-            decoded, reason = False, str(exc)
+            read = _shared_read(ctx)
+        except DecoderUnavailable as exc:
+            return not_applicable(str(exc))
+        if isinstance(read, MetricResult) or read.first is None:
+            first = _first_frame(payload, ctx)
+            if isinstance(first, MetricResult):
+                return first
+            decoded, reason = first
+        elif read.first:
+            decoded = True
+        else:
+            failure = read.first_failure
+            # A stop at the decode cap is no evidence the file is absent.
+            if isinstance(failure, DecodeLimitReached):
+                return _stopped_result((Availability.UNAVAILABLE, str(failure)))
+            decoded, reason = False, str(failure)
         if not decoded and reason is None:
             reason = "no frame could be decoded"
 
@@ -1641,6 +2255,44 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
             "reason": reason,
         },
     )
+
+
+def _first_frame(
+    payload: VideoPayload, ctx: StreamContext
+) -> MetricResult | tuple[bool, str | None]:
+    """Decode up to the segment's first frame by itself, for presence.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The camera's video file.
+    ctx : StreamContext
+        The camera stream, for its decode limits.
+
+    Returns
+    -------
+    MetricResult or tuple of (bool, str or None)
+        Whether a frame decoded, with the decode failure that stopped it, if any;
+        or an unavailable result when the read stopped for a reason
+        that says nothing about the file.
+    """
+
+    try:
+        # The whole segment as one window, closed after its first frame:
+        # the generator decodes nothing past the frame it yields.
+        with closing(
+            payload.gray_windows(
+                [(0, payload.frame_count)],
+                _SAMPLE_SIZE,
+                max_decode_frames=ctx.vision.max_decode_frames,
+                max_pixels=ctx.vision.max_pixels,
+            )
+        ) as frames:
+            return next(frames, None) is not None, None
+    except (DecodeLimitReached, ReadInterrupted) as exc:
+        return _stopped_result((Availability.UNAVAILABLE, str(exc)))
+    except DecodeFailed as exc:
+        return False, str(exc)
 
 
 def _fps_differs(found: float, declared: float) -> bool:

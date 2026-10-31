@@ -164,6 +164,10 @@ class DecodeLimitReached(RuntimeError):
     """Raised when a read stops at `max_decode_frames` or `max_pixels`."""
 
 
+class PixelLimitReached(DecodeLimitReached):
+    """Raised when a frame in `native` holds more than `max_pixels`."""
+
+
 @runtime_checkable
 class SampledFrames(Protocol):
     """A payload that can hand out a few frames as small gray images.
@@ -225,8 +229,9 @@ class SampledFrames(Protocol):
         Raises
         ------
         DecodeLimitReached
-            If the read would pass `max_decode_frames`,
-            or a frame in `native` holds more than `max_pixels`.
+            If the read would pass `max_decode_frames`.
+        PixelLimitReached
+            If a frame in `native` holds more than `max_pixels`.
         """
 
         ...
@@ -528,8 +533,9 @@ class VideoPayload:
             If the file cannot be opened, seeked or decoded,
             or has no frame rate to place the segment by.
         DecodeLimitReached
-            If the read would pass `max_decode_frames`,
-            or a frame in `native` holds more than `max_pixels`.
+            If the read would pass `max_decode_frames`.
+        PixelLimitReached
+            If a frame in `native` holds more than `max_pixels`.
         """
 
         return self._windows(
@@ -637,7 +643,7 @@ class VideoPayload:
                             and index in native
                             and frame.width * frame.height > max_pixels
                         ):
-                            raise DecodeLimitReached("frame exceeds max_pixels")
+                            raise PixelLimitReached("frame exceeds max_pixels")
                         if pixel_format is None:
                             image = frame.to_ndarray(format="rgb24")
                         else:
