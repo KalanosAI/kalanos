@@ -4,8 +4,8 @@ These vision metrics read a camera stream
 beside the state and action streams of its episode:
 
 - cut_count takes the largest jumps in the control signals
-  and confirms each in the footage;
-  it decodes at most three windows of 14 frames, at any tier;
+  and confirms each in the footage,
+  at any tier, in windows the shared decode of the other vision metrics reads;
 - dropped_chunk_count looks for a jump in the footage that no state stream shows,
   and reads every frame, so it runs only under a full frame scan,
   sharing the decode of the other vision metrics;
@@ -32,6 +32,7 @@ import polars as pl
 # Internal
 from kalanos.analysis.adapters.video import (
     DecodeFailed,
+    DecodeLimitReached,
     DecoderUnavailable,
     SampledFrames,
 )
@@ -40,9 +41,12 @@ from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
 from kalanos.analysis.metrics.vision import (
     _SAMPLE_SIZE,
+    _cut_plan,
     _frame_rate,
     _frames,
+    _merge,
     _readable,
+    _shared_read,
     _stopped_result,
     _thumbnail,
 )
@@ -123,6 +127,25 @@ class _Control:
 
     times: "np.ndarray"
     values: "np.ndarray"
+
+
+@dataclass(frozen=True)
+class _CutPlan:
+    """Where cut_count looks for cuts on one camera stream.
+
+    Attributes
+    ----------
+    candidates : list of int
+        The first frame of each control jump checked, largest jump first.
+    spans : dict of int to int
+        Each candidate's last frame, keyed by its first.
+    windows : list of tuple of (int, int)
+        The ascending, non-overlapping `[start, end)` windows read around them.
+    """
+
+    candidates: list[int]
+    spans: dict[int, int]
+    windows: list[tuple[int, int]]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -615,37 +638,12 @@ def _xcorr_lag(v: "np.ndarray", motion: "np.ndarray") -> dict[str, float]:
     }
 
 
-def _merge(windows: list[tuple[int, int]], n: int) -> list[tuple[int, int]]:
-    """Clip `[start, end)` windows to `[0, n)`, then sort and merge overlapping ones.
-
-    Parameters
-    ----------
-    windows : list of tuple of (int, int)
-        Windows, in any order.
-    n : int
-        The frame count to clip to.
-
-    Returns
-    -------
-    list of tuple of (int, int)
-        Ascending, non-overlapping windows, as `gray_windows` takes them.
-    """
-
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted((max(0, a), min(n, b)) for a, b in windows):
-        if start >= end:
-            continue
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
 def _window_thumbnails(
     payload: SampledFrames, windows: list[tuple[int, int]]
-) -> "tuple[dict[int, np.ndarray], DecodeFailed | None]":
-    """Decode `windows` of `payload` as freeze thumbnails, keyed by frame index.
+) -> "tuple[dict[int, np.ndarray], DecodeFailed | DecodeLimitReached | None]":
+    """Decode `windows` of `payload` alone as freeze thumbnails, keyed by frame index.
+
+    The reader the shared decode falls back on for cut_count's windows.
 
     Parameters
     ----------
@@ -656,7 +654,7 @@ def _window_thumbnails(
 
     Returns
     -------
-    tuple of (dict of int to numpy.ndarray, DecodeFailed or None)
+    tuple of (dict of int to numpy.ndarray, DecodeFailed or DecodeLimitReached or None)
         The thumbnails decoded, and the failure that stopped the read, if any.
 
     Raises
@@ -673,9 +671,57 @@ def _window_thumbnails(
             # so the frames it did yield are its first ones.
             thumbnails[windows[position][0] + counts[position]] = _thumbnail(frame)
             counts[position] += 1
-    except DecodeFailed as exc:
+    except (DecodeFailed, DecodeLimitReached) as exc:
         return thumbnails, exc
     return thumbnails, None
+
+
+def _plan_cuts(ctx: StreamContext) -> "_CutPlan | MetricResult":
+    """Pick the control jumps cut_count checks, and the windows it reads around them.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream, with its episode's streams.
+
+    Returns
+    -------
+    _CutPlan or MetricResult
+        The plan, or `not_applicable` when the stream has no state or action stream
+        beside it or holds too few frames.
+    """
+
+    # Step 1: the control signals a cut also shows in.
+    numpy = load_numpy()
+    assert numpy is not None
+    state, action = _controls(ctx)
+    if not state and not action:
+        return not_applicable("no state or action stream to locate a cut against")
+    n = ctx.n_samples
+    if n < 2 * _CUT_HALF + 1:
+        return not_applicable("too few frames to confirm a cut in")
+
+    # Step 2: the largest control jumps, each on the frames its step spans.
+    video_times = ctx.timestamps.to_numpy()
+    zs, firsts, lasts = [], [], []
+    for control in state + action:
+        first, last = _frames_spanned(video_times, control.times)
+        zs.append(_robust_z(_steps(control.values)))
+        firsts.append(first)
+        lasts.append(last)
+    z, first, last = (numpy.concatenate(parts) for parts in (zs, firsts, lasts))
+    spans: dict[int, int] = {}
+    # Largest z first, ties to the earlier frame; one candidate per first frame.
+    for k in numpy.lexsort((first, -z)):
+        if len(spans) == _CUT_CANDIDATES:
+            break
+        if first[k] >= 0 and numpy.isfinite(z[k]) and int(first[k]) not in spans:
+            spans[int(first[k])] = int(last[k])
+    candidates = list(spans)
+
+    # Step 3: a short window around each candidate.
+    windows = _merge([(p - _CUT_HALF, spans[p] + _CUT_HALF) for p in candidates], n)
+    return _CutPlan(candidates=candidates, spans=spans, windows=windows)
 
 
 def _window_ratio(
@@ -730,7 +776,8 @@ def cut_count(ctx: StreamContext) -> MetricResult:
     of every state and action stream are placed on the camera's clock,
     each on the frames whose incoming step overlaps it in time:
     one frame when the clocks share a rate, more when they do not.
-    A window from `_CUT_HALF` frames before each to `_CUT_HALF - 1` after it is decoded,
+    A window from `_CUT_HALF` frames before each to `_CUT_HALF - 1` after it
+    is read in the shared decode of the other vision metrics,
     and a candidate is a cut when the 64x64 gray mean absolute difference
     of the step into one of its frames
     exceeds `_CUT_RATIO` times the median of the window's other nonzero steps.
@@ -751,47 +798,28 @@ def cut_count(ctx: StreamContext) -> MetricResult:
         or no frame of the windows decodes.
     """
 
-    # Step 1: the camera, and the control signals a cut also shows in.
+    # Step 1: the camera, and the control jumps to check in it.
     payload = _readable(ctx)
     if isinstance(payload, MetricResult):
         return payload
-    numpy = load_numpy()
-    assert numpy is not None
-    state, action = _controls(ctx)
-    if not state and not action:
-        return not_applicable("no state or action stream to locate a cut against")
+    plan = _cut_plan(ctx, payload)
+    if isinstance(plan, MetricResult):
+        return plan
+    candidates, spans, windows = plan.candidates, plan.spans, plan.windows
     n = ctx.n_samples
-    if n < 2 * _CUT_HALF + 1:
-        return not_applicable("too few frames to confirm a cut in")
 
-    # Step 2: the largest control jumps, each on the frames its step spans.
-    video_times = ctx.timestamps.to_numpy()
-    zs, firsts, lasts = [], [], []
-    for control in state + action:
-        first, last = _frames_spanned(video_times, control.times)
-        zs.append(_robust_z(_steps(control.values)))
-        firsts.append(first)
-        lasts.append(last)
-    z, first, last = (numpy.concatenate(parts) for parts in (zs, firsts, lasts))
-    spans: dict[int, int] = {}
-    # Largest z first, ties to the earlier frame; one candidate per first frame.
-    for k in numpy.lexsort((first, -z)):
-        if len(spans) == _CUT_CANDIDATES:
-            break
-        if first[k] >= 0 and numpy.isfinite(z[k]) and int(first[k]) not in spans:
-            spans[int(first[k])] = int(last[k])
-    candidates = list(spans)
-
-    # Step 3: decode a short window around each candidate.
-    windows = _merge([(p - _CUT_HALF, spans[p] + _CUT_HALF) for p in candidates], n)
+    # Step 2: the windows around each candidate, from the shared read.
     try:
-        thumbnails, failure = _window_thumbnails(payload, windows)
+        read = _shared_read(ctx)
+        if isinstance(read, MetricResult):
+            return read
+        thumbnails, failure = read.cut, read.cut_failure
     except DecoderUnavailable as exc:
         return not_applicable(str(exc))
     if not thumbnails:
         return not_applicable(str(failure) if failure else "no frame could be decoded")
 
-    # Step 4: a candidate is a cut when the footage jumps in its span too.
+    # Step 3: a candidate is a cut when the footage jumps in its span too.
     # One jump is one cut, so a span scores only its frame that jumps most.
     ratios: dict[int, float] = {}
     for p in candidates:
