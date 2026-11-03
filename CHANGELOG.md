@@ -11,6 +11,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - The LeRobot reader reads 2-D features (Hugging Face Array2D columns) under polars 2, which loads them as extension types. Before, such a dataset was refused with "too many values to unpack".
 - A LeRobot dataset whose path templates, episode index or index columns don't follow the format is refused with a reason that names the problem, instead of the raw Python error.
 - A LeRobot v3 dataset whose episode index files store a statistics column with different types is read. Before, it was refused with "failed to vstack column". The reader now loads only the episode index columns it uses.
+- A LeRobot v3 dataset whose episode index has no `episode_index` column is refused with a reason that names the column, instead of polars' raw "unable to find column" error.
 
 ### Changed
 
