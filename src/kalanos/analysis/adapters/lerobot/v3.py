@@ -79,6 +79,8 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     -------
     pl.DataFrame
         Every episode's row, one per episode, sorted by `episode_index`.
+        Only `episode_index`, `tasks` and the `data/*` and `videos/*` columns
+        are read; any other column has to be added here before a caller reads it.
 
     Raises
     ------
@@ -96,7 +98,17 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
         frames = []
         for parquet_path in parquet_paths:
             with parquet_path.open("rb") as handle:
-                frames.append(pl.read_parquet(handle))
+                names = list(pl.read_parquet_schema(handle))
+            # Every other column, `stats/*` among them, is left unread: its type can
+            # differ from one file to the next, which would fail the concat below.
+            columns = [
+                name
+                for name in names
+                if name in ("episode_index", "tasks")
+                or name.startswith(("data/", "videos/"))
+            ]
+            with parquet_path.open("rb") as handle:
+                frames.append(pl.read_parquet(handle, columns=columns))
     except AdapterRefusal:
         raise
     except Exception as exc:

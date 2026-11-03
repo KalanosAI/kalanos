@@ -525,3 +525,23 @@ def test_a_video_path_templated_per_episode_is_refused(tmp_path):
 
     with pytest.raises(AdapterRefusal, match=r"video_path .* uses \{episode_index\}"):
         list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_episode_index_files_that_disagree_on_an_unread_column_still_read(tmp_path):
+    """Verify a stats column typed differently across episode index files is ignored."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_dir = root / "meta" / "episodes" / "chunk-000"
+    index = pl.read_parquet(index_dir / "file-000.parquet")
+    first, second = index.head(1), index.tail(1)
+    first.with_columns(
+        pl.Series("stats/frame_index/min", [[0]], dtype=pl.List(pl.Int64))
+    ).write_parquet(index_dir / "file-000.parquet")
+    second.with_columns(
+        pl.Series("stats/frame_index/min", [[0.0]], dtype=pl.List(pl.Float64))
+    ).write_parquet(index_dir / "file-001.parquet")
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]
