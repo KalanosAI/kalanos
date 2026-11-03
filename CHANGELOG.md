@@ -15,6 +15,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Changed
 
 - kalanos now requires polars 1.44.2 or later.
+- kalanos now requires pydantic 2.10.4, pydantic-settings 2.0.0, PyYAML 6.0 and typer 0.16.0 or later, and the video extra numpy 2.2.6 or later.
 - Grading measures each decoded camera frame with one gray-level histogram and integer block sums, so vision metrics spend less time per frame. Metric values are unchanged.
 - Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged.
 - Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads.
