@@ -78,7 +78,8 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     Returns
     -------
     pl.DataFrame
-        Every episode's row, one per episode, sorted by `episode_index`.
+        Every episode's row, one per episode, sorted by `episode_index`
+        when the index has that column; the caller checks that it does.
         Only `episode_index`, `tasks` and the `data/*` and `videos/*` columns
         are read; any other column has to be added here before a caller reads it.
 
@@ -115,7 +116,11 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
         raise AdapterRefusal(
             path, f"could not read episode index under {episodes_dir}: {exc}"
         ) from exc
-    return pl.concat(frames).sort("episode_index")
+    index = pl.concat(frames)
+    # A missing `episode_index` is refused by name in `episodes`.
+    if "episode_index" not in index.columns:
+        return index
+    return index.sort("episode_index")
 
 
 def _video_stream(
@@ -284,7 +289,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
             )
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
-            required = {"data/chunk_index", "data/file_index"}
+            required = {"episode_index", "data/chunk_index", "data/file_index"}
             for video_key in plan.video:
                 required |= {
                     f"videos/{video_key}/chunk_index",
