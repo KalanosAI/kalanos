@@ -32,6 +32,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     sampling_is_regular,
     series_streams,
     split_of,
+    storage_columns,
     timestamp_dtype_of,
     with_episode_clock,
 )
@@ -307,15 +308,21 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         # the file. The schema still says which columns exist.
                         cached_schema = list(pl.read_parquet_schema(handle))
                     with data_path.open("rb") as handle:
-                        cached_frame = pl.read_parquet(
-                            handle,
-                            columns=None
-                            if materialise
-                            else [
-                                c
-                                for c in ("episode_index", TIME_COLUMN, "frame_index")
-                                if c in cached_schema
-                            ],
+                        cached_frame = storage_columns(
+                            pl.read_parquet(
+                                handle,
+                                columns=None
+                                if materialise
+                                else [
+                                    c
+                                    for c in (
+                                        "episode_index",
+                                        TIME_COLUMN,
+                                        "frame_index",
+                                    )
+                                    if c in cached_schema
+                                ],
+                            )
                         )
                     cached_path = data_path
                 assert cached_frame is not None

@@ -24,6 +24,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     episode_clock,
     resolve_taxonomy,
     series_stream,
+    storage_columns,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
 from kalanos.analysis.models.domain import (
@@ -59,6 +60,19 @@ _MOTOR_NAMES = [
     "wrist_roll.pos",
     "gripper.pos",
 ]
+
+# How polars 2 loads a Hugging Face `datasets` Array2D column.
+# polars 1 loads the same column as its storage.
+_ARRAY2D = pl.Extension(
+    "datasets.features.features.Array2DExtensionType",
+    pl.List(pl.List(pl.Int16)),
+    '[[2, 2], "int16"]',
+)
+
+_POLARS_2 = pytest.mark.skipif(
+    int(pl.__version__.split(".")[0]) < 2,
+    reason="polars 1 loads extension columns as their storage",
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -360,6 +374,73 @@ def test_a_fixed_size_array_feature_unnests_into_one_column_per_channel():
     assert isinstance(stream.payload, FramePayload)
     assert stream.payload.frame.columns == ["x", "y"]
     assert stream.payload.frame["y"].to_list() == [1.0, 3.0]
+
+
+@_POLARS_2
+def test_an_extension_column_is_read_as_its_storage():
+    """Verify an extension column reads as its storage, other columns as they were."""
+
+    grids = pl.Series(
+        "observation.tactile", [[[1, 2], [3, 4]]], dtype=pl.List(pl.List(pl.Int16))
+    )
+    frame = pl.DataFrame(
+        [grids.ext.to(_ARRAY2D), pl.Series("x", [0.5], dtype=pl.Float32)]
+    )
+
+    read = storage_columns(frame)
+
+    assert read.schema == pl.Schema(
+        {"observation.tactile": pl.List(pl.List(pl.Int16)), "x": pl.Float32}
+    )
+    assert read["observation.tactile"].to_list() == [[[1, 2], [3, 4]]]
+
+
+@_POLARS_2
+def test_a_2d_feature_grades_under_polars_2(tmp_path):
+    """Verify a 2-D extension column reads as one channel per row of its grid."""
+
+    copy_root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy_root)
+    info_path = copy_root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.tactile"] = {
+        "dtype": "int16",
+        "shape": [2, 2],
+        "names": None,
+    }
+    info_path.write_text(json.dumps(info))
+    data_path = copy_root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data_path)
+    grids = pl.Series(
+        "observation.tactile",
+        [[[i, i + 1], [i + 2, i + 3]] for i in range(frame.height)],
+        dtype=pl.List(pl.List(pl.Int16)),
+    )
+    frame.with_columns(grids.ext.to(_ARRAY2D)).write_parquet(data_path)
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(copy_root)))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        tactile = next(
+            s for s in episode.streams if s.source_field == "observation.tactile"
+        )
+        assert len(tactile.channels) == 2
+
+
+def test_storage_columns_leaves_a_frame_without_extensions_unchanged():
+    """Verify a frame with no extension column passes through as it was."""
+
+    frame = pl.DataFrame(
+        {
+            "observation.tactile": pl.Series(
+                [[[1, 2], [3, 4]]], dtype=pl.List(pl.List(pl.Int16))
+            ),
+            "x": pl.Series([0.5], dtype=pl.Float32),
+        }
+    )
+
+    assert storage_columns(frame).schema == frame.schema
 
 
 def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock():

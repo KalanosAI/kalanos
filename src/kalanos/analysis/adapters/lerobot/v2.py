@@ -34,6 +34,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     sampling_is_regular,
     series_streams,
     split_of,
+    storage_columns,
     timestamp_dtype_of,
     with_episode_clock,
 )
@@ -292,15 +293,17 @@ class LeRobotV2Adapter(LeRobotAdapter):
                 with data_path.open("rb") as handle:
                     # Metadata tier: index and clock columns only; the
                     # numeric feature vectors never leave the file.
-                    frame = pl.read_parquet(
-                        handle,
-                        columns=None
-                        if materialise
-                        else [
-                            c
-                            for c in ("episode_index", TIME_COLUMN, "frame_index")
-                            if c in schema
-                        ],
+                    frame = storage_columns(
+                        pl.read_parquet(
+                            handle,
+                            columns=None
+                            if materialise
+                            else [
+                                c
+                                for c in ("episode_index", TIME_COLUMN, "frame_index")
+                                if c in schema
+                            ],
+                        )
                     )
 
                 episode_frame = frame

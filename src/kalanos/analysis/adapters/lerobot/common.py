@@ -589,6 +589,31 @@ def episode_clock(
     return Clock.RECONSTRUCTED if within else Clock.UNKNOWN
 
 
+def storage_columns(frame: pl.DataFrame) -> pl.DataFrame:
+    """Replace every extension-typed column with its storage.
+
+    Parameters
+    ----------
+    frame : pl.DataFrame
+        A data parquet as `pl.read_parquet` loaded it.
+
+    Returns
+    -------
+    pl.DataFrame
+        `frame` with each `pl.Extension` column cast to its storage type,
+        or `frame` itself when it holds none.
+    """
+
+    # polars 2 loads Hugging Face `datasets` Array2D/3D columns as extension types,
+    # where polars 1 loads them as their storage, which every reader here expects.
+    extension_columns = [
+        name for name, dtype in frame.schema.items() if isinstance(dtype, pl.Extension)
+    ]
+    if not extension_columns:
+        return frame
+    return frame.with_columns(pl.col(name).ext.storage() for name in extension_columns)
+
+
 def series_stream(
     frame: pl.DataFrame,
     feature: str,
