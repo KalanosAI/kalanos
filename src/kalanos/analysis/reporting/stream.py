@@ -4,7 +4,9 @@
 and the header's diagnostic results one at a time too,
 so the whole report is never held as one dict.
 The reason-code table and the compact key table both depend on the whole document,
-so it makes two passes over the episodes: one to build the tables, one to write.
+so the writer builds and codes each episode once,
+holding it compressed until the tables are complete,
+and the write then replays it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -18,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 # External
-from pydantic_core import to_json
+from pydantic_core import from_json, to_json
 
 # Internal
 from kalanos.analysis.models.compact_keys import TABLE_KEY as COMPACT_KEY
@@ -171,7 +173,7 @@ def write_report_stream(
         Every field of the report but `episodes`, which it must leave empty.
     episodes : Callable[[], Iterable[dict[str, Any]]]
         Yields each episode as `episode_data` dumps it, in report order.
-        Called once per pass, so twice.
+        Called once.
     out : BinaryIO
         Where the JSON goes.
     compact : bool
@@ -243,10 +245,17 @@ def write_report_stream(
             feed(result)
         feed({k: diagnostics[k] for k in behind})
 
+    # Building an episode's dict is most of a write,
+    # so each is built once and held as compressed coded JSON until it is written,
+    # about a ninth of its written size (48 MiB on taco_play's 448 MiB report).
+    built: list[bytes] = []
     for key in before:
         feed_member(key)
     for episode in episodes():
-        feed(episode)
+        coded = coder.walk(episode)
+        if counter is not None:
+            counter.count(coded)
+        built.append(zlib.compress(_json(coded), 1))
     for key in after:
         feed_member(key)
     if counter is not None:
@@ -289,11 +298,14 @@ def write_report_stream(
     for key in before:
         write_member(key)
     out.write(b"," + name("episodes") + b":[")
-    for k, episode in enumerate(episodes()):
-        coded = coder.walk(episode)
+    for k in range(len(built)):
+        blob = built[k]
+        # Let go of each episode as it is written, so the cache shrinks with the write.
+        built[k] = b""
+        data = zlib.decompress(blob)
         if counter is not None:
-            coded = counter.walk(coded)
-        out.write((b"," if k else b"") + _json(coded))
+            data = _json(counter.walk(from_json(data)))
+        out.write((b"," if k else b"") + data)
     out.write(b"]")
     for key in after:
         write_member(key)

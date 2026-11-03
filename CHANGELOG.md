@@ -12,6 +12,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged.
 - Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads.
 - Grading converts decoded camera frames with one reusable converter per video read instead of building one per frame, so reading video takes less time. Metric values are unchanged.
+- Writing a JSON report builds each episode's JSON once instead of twice, so the write takes about half as long. The written file is unchanged.
 
 ## [0.9.2] - 2026-10-29
 
