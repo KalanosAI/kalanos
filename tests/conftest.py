@@ -11,6 +11,7 @@ import os
 import pytest
 
 # Internal
+from kalanos.analysis.adapters import video
 from kalanos.assets.dictionary import clear_active_dictionary
 from kalanos.core.settings import get_settings
 
@@ -52,3 +53,15 @@ def _clear_active_dictionary():
 
     yield
     clear_active_dictionary()
+
+
+@pytest.fixture(autouse=True)
+def _close_video_files():
+    """Close every video file a test left in the pool of open files.
+
+    The pool is keyed on the path, and fixtures reuse paths,
+    so one test's open container would otherwise serve the next test's file.
+    """
+
+    yield
+    video.close_video_files()

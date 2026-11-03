@@ -12,15 +12,18 @@ import polars as pl
 import pytest
 
 # Internal
-from kalanos.analysis.metrics import vision
+from kalanos.analysis.metrics import continuity, vision
 from kalanos.analysis.metrics.continuity import (
     _EDGE,
+    _plan_cuts,
     cut_count,
     dropped_chunk_count,
     video_control_lag_ms,
 )
+from kalanos.analysis.metrics.vision import sharpness_score
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import FramePayload, Stream
-from kalanos.analysis.models.metrics import MetricStatus
+from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
     check_metric,
@@ -295,6 +298,68 @@ def test_cut_count_passes_the_contract():
         defective=_context(cut_video, *cut_controls),
         policy=load_default_policy(),
     )
+
+
+def test_cut_count_decodes_nothing_after_the_shared_read(monkeypatch):
+    """cut_count takes its windows from the read the vision metrics made."""
+
+    calls: list[int] = []
+    gray_windows = SyntheticFrames.gray_windows
+
+    def counting(self, windows, size, native=frozenset(), **caps):
+        calls.append(0)
+        for item in gray_windows(self, windows, size, native, **caps):
+            calls[-1] += 1
+            yield item
+
+    monkeypatch.setattr(SyntheticFrames, "gray_windows", counting)
+    video, state, action = _tracking()
+    cut_video, cut_controls = cut_frames(video, [state, action], start=150, length=40)
+    ctx = _context(cut_video, *cut_controls)
+
+    sharpness_score(ctx)
+    result = cut_count(ctx)
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert len(calls) == 1
+
+
+def test_cut_count_matches_its_own_read():
+    """The shared read holds the thumbnails cut_count's own read of its windows does."""
+
+    video, state, action = _tracking()
+    cut_video, cut_controls = cut_frames(video, [state, action], start=150, length=40)
+    ctx = _context(cut_video, *cut_controls)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    assert isinstance(cut_video.payload, SyntheticFrames)
+
+    read = vision._shared_read(ctx)
+    alone, failure = continuity._window_thumbnails(cut_video.payload, plan.windows)
+
+    assert not isinstance(read, MetricResult)
+    assert (read.cut_failure, failure) == (None, None)
+    assert read.cut.keys() == alone.keys()
+    assert all(numpy.array_equal(read.cut[index], alone[index]) for index in alone)
+    assert cut_count(ctx).value == 1
+
+
+def test_the_decode_cap_counts_cut_frames():
+    """A decode cap that stops the shared read inside a cut window stops cut_count."""
+
+    video, state, action = _tracking()
+    cut_video, cut_controls = cut_frames(video, [state, action], start=150, length=40)
+    ctx = _context(cut_video, *cut_controls)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    # The whole stream is one vision window, so the cap is the index it stops at.
+    capped = ctx.model_copy(
+        update={"vision": VisionSpec(max_decode_frames=plan.windows[0][0] + 1)}
+    )
+
+    result = cut_count(capped)
+
+    assert result.evidence["decode_error"] == "max_decode_frames reached"
 
 
 def test_a_padded_drop_is_located():

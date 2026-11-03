@@ -55,12 +55,16 @@ from kalanos.analysis.models.mapping import MappingOverride, OverrideOrigin
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.report import AnalysedEpisode, Report
 from kalanos.analysis.models.scoring import Finding
-from kalanos.analysis.reporting import assemble
+from kalanos.analysis.reporting import assemble, stream
 from kalanos.analysis.reporting.assemble import assemble_report
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.render import render_compact_json, render_json
-from kalanos.analysis.reporting.stream import StreamedReport
+from kalanos.analysis.reporting.stream import (
+    StreamedReport,
+    episode_data,
+    write_report_stream,
+)
 from kalanos.analysis.reporting.write import write_report
 from kalanos.assets.policy import load_default_policy
 from kalanos.cli import app
@@ -427,6 +431,48 @@ def test_both_paths_write_the_same_report_file(graded, tmp_path, compact):
         streamed.write(out, compact=compact)
 
     assert streamed_path.read_bytes() == kept_path.read_bytes()
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_a_report_write_builds_each_episode_once(graded, monkeypatch, compact):
+    _, streamed = graded
+    built: list[str] = []
+
+    def counted(episode):
+        built.append(episode.id)
+        return episode_data(episode)
+
+    monkeypatch.setattr(stream, "episode_data", counted)
+    streamed.write(io.BytesIO(), compact=compact)
+
+    assert len(built) == len(streamed.blobs)
+
+
+def test_a_compact_write_keeps_every_value_of_the_full_one(report):
+    header = report.model_copy(update={"episodes": []})
+    values = {
+        "sum": 0.1 + 0.2,
+        "subnormal": 5e-324,
+        "negative_zero": -0.0,
+        "big": 2**64 + 1,
+        "nan": float("nan"),
+        "none": None,
+        "text": "é ",
+        "findings": [
+            {"reason": "too short", "detail": "under 2 s"},
+            {"reasons": ["too short", "gappy"], "value": 1.5},
+        ],
+    }
+
+    def episodes():
+        return [values]
+
+    full, compact = io.BytesIO(), io.BytesIO()
+    write_report_stream(header, episodes, full, compact=False)
+    write_report_stream(header, episodes, compact, compact=True)
+
+    expected = to_json(encode_keys(json.loads(full.getvalue())), inf_nan_mode="null")
+    assert compact.getvalue() == expected
 
 
 def test_a_streamed_episode_reads_back_as_the_kept_one(graded):

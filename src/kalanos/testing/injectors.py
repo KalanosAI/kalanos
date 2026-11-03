@@ -25,7 +25,7 @@ import polars as pl
 from upath import UPath
 
 # Internal
-from kalanos.analysis.adapters.video import DecodeLimitReached
+from kalanos.analysis.adapters.video import DecodeLimitReached, PixelLimitReached
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -168,8 +168,9 @@ class SyntheticFrames:
         RuntimeError
             If numpy is not installed.
         DecodeLimitReached
-            If the read would pass `max_decode_frames`,
-            or a frame in `native` holds more than `max_pixels`.
+            If the read would pass `max_decode_frames`.
+        PixelLimitReached
+            If a frame in `native` holds more than `max_pixels`.
         """
 
         numpy = load_numpy()
@@ -189,7 +190,7 @@ class SyntheticFrames:
                     and index in native
                     and frame.shape[0] * frame.shape[1] > max_pixels
                 ):
-                    raise DecodeLimitReached("frame exceeds max_pixels")
+                    raise PixelLimitReached("frame exceeds max_pixels")
                 luma = (
                     0.299 * frame[..., 0]
                     + 0.587 * frame[..., 1]

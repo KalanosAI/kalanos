@@ -245,7 +245,7 @@ def test_the_benchmark_keeps_vision_report_only_outside_a_video_scope():
     """Verify the benchmark scopes vision as grade does, and closes remote video."""
 
     closed: list[None] = []
-    with patch.object(benchmark, "close_remote_handles", lambda: closed.append(None)):
+    with patch.object(benchmark, "close_video_files", lambda: closed.append(None)):
         dataset = benchmark.benchmark_dataset(
             str(FIXTURES_DIR / "lerobot_v3_tiny"), sample=0
         )

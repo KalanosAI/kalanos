@@ -24,8 +24,10 @@ from kalanos.analysis.adapters.lerobot.common import (
     episode_clock,
     resolve_taxonomy,
     series_stream,
+    storage_columns,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
+from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -59,6 +61,19 @@ _MOTOR_NAMES = [
     "wrist_roll.pos",
     "gripper.pos",
 ]
+
+# How polars 2 loads a Hugging Face `datasets` Array2D column.
+# polars 1 loads the same column as its storage.
+_ARRAY2D = pl.Extension(
+    "datasets.features.features.Array2DExtensionType",
+    pl.List(pl.List(pl.Int16)),
+    '[[2, 2], "int16"]',
+)
+
+_POLARS_2 = pytest.mark.skipif(
+    int(pl.__version__.split(".")[0]) < 2,
+    reason="polars 1 loads extension columns as their storage",
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -362,6 +377,73 @@ def test_a_fixed_size_array_feature_unnests_into_one_column_per_channel():
     assert stream.payload.frame["y"].to_list() == [1.0, 3.0]
 
 
+@_POLARS_2
+def test_an_extension_column_is_read_as_its_storage():
+    """Verify an extension column reads as its storage, other columns as they were."""
+
+    grids = pl.Series(
+        "observation.tactile", [[[1, 2], [3, 4]]], dtype=pl.List(pl.List(pl.Int16))
+    )
+    frame = pl.DataFrame(
+        [grids.ext.to(_ARRAY2D), pl.Series("x", [0.5], dtype=pl.Float32)]
+    )
+
+    read = storage_columns(frame)
+
+    assert read.schema == pl.Schema(
+        {"observation.tactile": pl.List(pl.List(pl.Int16)), "x": pl.Float32}
+    )
+    assert read["observation.tactile"].to_list() == [[[1, 2], [3, 4]]]
+
+
+@_POLARS_2
+def test_a_2d_feature_grades_under_polars_2(tmp_path):
+    """Verify a 2-D extension column reads as one channel per row of its grid."""
+
+    copy_root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy_root)
+    info_path = copy_root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.tactile"] = {
+        "dtype": "int16",
+        "shape": [2, 2],
+        "names": None,
+    }
+    info_path.write_text(json.dumps(info))
+    data_path = copy_root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data_path)
+    grids = pl.Series(
+        "observation.tactile",
+        [[[i, i + 1], [i + 2, i + 3]] for i in range(frame.height)],
+        dtype=pl.List(pl.List(pl.Int16)),
+    )
+    frame.with_columns(grids.ext.to(_ARRAY2D)).write_parquet(data_path)
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(copy_root)))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        tactile = next(
+            s for s in episode.streams if s.source_field == "observation.tactile"
+        )
+        assert len(tactile.channels) == 2
+
+
+def test_storage_columns_leaves_a_frame_without_extensions_unchanged():
+    """Verify a frame with no extension column passes through as it was."""
+
+    frame = pl.DataFrame(
+        {
+            "observation.tactile": pl.Series(
+                [[[1, 2], [3, 4]]], dtype=pl.List(pl.List(pl.Int16))
+            ),
+            "x": pl.Series([0.5], dtype=pl.Float32),
+        }
+    )
+
+    assert storage_columns(frame).schema == frame.schema
+
+
 def test_frame_number_stamps_are_labelled_a_reconstructed_float32_clock():
     """LeRobot stamps frames as float32 `frame_index / fps`; so does the fixture."""
 
@@ -397,3 +479,98 @@ def test_an_episode_carries_no_split_when_info_declares_none():
 
     assert episodes
     assert all(e.split is None for e in episodes)
+
+
+def test_an_episode_index_without_data_columns_is_refused(tmp_path):
+    """Verify an episode index missing the data file columns is refused, naming them."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.drop("data/chunk_index", "data/file_index").write_parquet(index_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"lacks .*data/chunk_index, data/file_index"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_an_episode_index_without_episode_index_is_refused(tmp_path):
+    """Verify an episode index missing `episode_index` is refused, naming it."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.drop("episode_index").write_parquet(index_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"lacks the LeRobot v3 columns episode_index$"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_an_episode_index_out_of_order_is_read_in_episode_order(tmp_path):
+    """Verify episodes come out in `episode_index` order whatever the row order."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.reverse().write_parquet(index_path)
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]
+
+
+def test_list_typed_index_columns_are_refused(tmp_path):
+    """Verify a `frame_index` holding one list per frame is refused with its type."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    data_path = root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data_path)
+    frame.with_columns(pl.concat_list("frame_index")).write_parquet(data_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"'frame_index' is stored as List\(Int64\)"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_a_video_path_templated_per_episode_is_refused(tmp_path):
+    """Verify a `video_path` naming a field v3 never fills is refused by name."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["video_path"] = (
+        "videos/{video_key}/chunk-{chunk_index:03d}/episode_{episode_index:06d}.mp4"
+    )
+    info_path.write_text(json.dumps(info))
+
+    with pytest.raises(AdapterRefusal, match=r"video_path .* uses \{episode_index\}"):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_episode_index_files_that_disagree_on_an_unread_column_still_read(tmp_path):
+    """Verify a stats column typed differently across episode index files is ignored."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_dir = root / "meta" / "episodes" / "chunk-000"
+    index = pl.read_parquet(index_dir / "file-000.parquet")
+    first, second = index.head(1), index.tail(1)
+    first.with_columns(
+        pl.Series("stats/frame_index/min", [[0]], dtype=pl.List(pl.Int64))
+    ).write_parquet(index_dir / "file-000.parquet")
+    second.with_columns(
+        pl.Series("stats/frame_index/min", [[0.0]], dtype=pl.List(pl.Float64))
+    ).write_parquet(index_dir / "file-001.parquet")
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]

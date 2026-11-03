@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 try:
     import av
     import av.error
+    import av.video.reformatter
 except ImportError:
     av = None
 
@@ -51,15 +52,19 @@ logger = logging.getLogger(__name__)
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
-# Opening a remote video re-reads its index through many small range requests,
-# and many payloads may share one file. So remote files stay open across payloads,
-# keyed on their URL, which assumes a remote file does not change during a run.
-# Each handle's block cache holds at most 32 blocks (fsspec's default) of this size.
+# Opening a video re-reads its index, through many small range requests when remote,
+# and many payloads may share one file. So files stay open across payloads,
+# keyed on their path, which assumes a file does not change during a run.
+# A container has one read position, so a read checks it out of the pool
+# and puts it back when done; no two reads ever share one.
+# Each remote handle's block cache holds at most 32 blocks (fsspec's default)
+# of this size.
 _REMOTE_BLOCK_SIZE = 1 << 20
-_MAX_REMOTE_HANDLES = 4
-_REMOTE_HANDLES: "OrderedDict[str, Any]" = OrderedDict()
-# A shared handle has one read position, so only one container may use it at a time.
-_REMOTE_LOCK = threading.Lock()
+_MAX_OPEN_FILES = 4
+# Idle files only, least recently used first.
+_OPEN_FILES: "OrderedDict[str, _VideoFile]" = OrderedDict()
+# Guards `_OPEN_FILES` alone, never held during a read.
+_OPEN_LOCK = threading.Lock()
 
 # FFmpeg's names for its colour codes, as libavutil/pixdesc.c gives them.
 # Unspecified and reserved codes are left out, so they read as unstated.
@@ -160,6 +165,10 @@ class DecodeLimitReached(RuntimeError):
     """Raised when a read stops at `max_decode_frames` or `max_pixels`."""
 
 
+class PixelLimitReached(DecodeLimitReached):
+    """Raised when a frame in `native` holds more than `max_pixels`."""
+
+
 @runtime_checkable
 class SampledFrames(Protocol):
     """A payload that can hand out a few frames as small gray images.
@@ -221,8 +230,9 @@ class SampledFrames(Protocol):
         Raises
         ------
         DecodeLimitReached
-            If the read would pass `max_decode_frames`,
-            or a frame in `native` holds more than `max_pixels`.
+            If the read would pass `max_decode_frames`.
+        PixelLimitReached
+            If a frame in `native` holds more than `max_pixels`.
         """
 
         ...
@@ -354,6 +364,36 @@ class ContainerHeader:
     encoder: str | None = None
 
 
+@dataclass
+class _VideoFile:
+    """An open video file, as the pool of open files holds it.
+
+    Attributes
+    ----------
+    container : Any
+        The PyAV input container.
+    handle : Any or None
+        The fsspec file object a remote container reads, `None` for a local file.
+    header : ContainerHeader or None
+        The header read at open, `None` when the file has no video stream.
+        Decoding updates the codec context from the bitstream,
+        so a header read after a decode could differ from one read at open.
+    """
+
+    container: Any
+    handle: Any | None
+    header: ContainerHeader | None
+
+    def close(self) -> None:
+        """Close the container, then the file object it reads."""
+
+        try:
+            self.container.close()
+        finally:
+            if self.handle is not None:
+                self.handle.close()
+
+
 @dataclass(frozen=True)
 class VideoPayload:
     """A video stream's frames, decoded only when `fetch` is called.
@@ -395,29 +435,23 @@ class VideoPayload:
         return self.frame_count
 
     @contextmanager
-    def _open(self, av: ModuleType) -> Generator[Any, None, None]:
-        """Open `path` as a PyAV container, local or remote, and close it on exit.
+    def _open(self, av: ModuleType) -> Generator["_VideoFile", None, None]:
+        """Check `path` out of the pool of open files, opening it when none is idle.
 
-        A remote file object outlives the container, cached for the next payload.
+        The file goes back into the pool when the read ends or is abandoned.
+        A read that fails may leave the container broken, so it is closed instead.
         """
 
-        if self.path.protocol in ("", "file"):
-            container = av.open(str(self.path))
-            try:
-                yield container
-            finally:
-                container.close()
-            return
-
-        # PyAV cannot resolve an fsspec URL such as hf://, so it reads a file object.
-        with _REMOTE_LOCK:
-            handle = _remote_handle(self.path)
-            handle.seek(0)
-            container = av.open(handle)
-            try:
-                yield container
-            finally:
-                container.close()
+        file = _check_out(self.path) or _open_file(av, self.path)
+        try:
+            yield file
+        except GeneratorExit:
+            _check_in(self.path, file)
+            raise
+        except BaseException:
+            file.close()
+            raise
+        _check_in(self.path, file)
 
     def _bounds(self, stream: Any) -> tuple[int, int, float]:
         """Return this segment's `[lo, hi)` in the stream's time base, and its fps.
@@ -460,8 +494,8 @@ class VideoPayload:
 
         Each window costs one seek back to a keyframe and a decode forward through it,
         so a full scan is the single window `[(0, frame_count)]`.
-        The file stays open, and a remote one locked, until the iterator is exhausted
-        or closed.
+        The file stays checked out, so no other read reuses its container,
+        until the iterator is exhausted or closed.
 
         Parameters
         ----------
@@ -500,8 +534,9 @@ class VideoPayload:
             If the file cannot be opened, seeked or decoded,
             or has no frame rate to place the segment by.
         DecodeLimitReached
-            If the read would pass `max_decode_frames`,
-            or a frame in `native` holds more than `max_pixels`.
+            If the read would pass `max_decode_frames`.
+        PixelLimitReached
+            If a frame in `native` holds more than `max_pixels`.
         """
 
         return self._windows(
@@ -525,7 +560,8 @@ class VideoPayload:
             or the segment holds no frame at `index`.
         """
 
-        # Closed here rather than left to the collector, which would hold a remote lock.
+        # Closed here rather than left to the collector,
+        # which would keep the file checked out and its container unshared.
         with closing(self._windows([(index, index + 1)], 0, None)) as frames:
             for _, frame, _native, _pts in frames:
                 return frame
@@ -581,10 +617,15 @@ class VideoPayload:
             raise DecoderUnavailable(self.path)
         decoded = 0
         try:
-            with self._open(av) as container:
+            with self._open(av) as file:
+                container = file.container
                 stream = container.streams.video[0]
                 lo, hi, fps = self._bounds(stream)
                 time_base = float(stream.time_base)
+                # A reformatter per frame rebuilds its scaler context,
+                # and on PyAV 17+ its thread pool, for every frame,
+                # which costs more than the conversion itself.
+                reformatter = av.video.reformatter.VideoReformatter()
                 for position, (start, end) in enumerate(windows):
                     # lo already sits half a frame early, so both bounds do too.
                     start_pts = min(lo + round(start / fps / time_base), hi - 1)
@@ -607,21 +648,23 @@ class VideoPayload:
                             and index in native
                             and frame.width * frame.height > max_pixels
                         ):
-                            raise DecodeLimitReached("frame exceeds max_pixels")
+                            raise PixelLimitReached("frame exceeds max_pixels")
                         if pixel_format is None:
-                            image = frame.to_ndarray(format="rgb24")
-                        else:
-                            image = frame.reformat(
-                                width=size, height=size, format=pixel_format
+                            image = reformatter.reformat(
+                                frame, format="rgb24"
                             ).to_ndarray()
-                        full = _luminance(frame) if index in native else None
+                        else:
+                            image = reformatter.reformat(
+                                frame, width=size, height=size, format=pixel_format
+                            ).to_ndarray()
+                        full = (
+                            _luminance(frame, reformatter) if index in native else None
+                        )
                         pts = float(frame.time) if frame.time is not None else None
                         yield position, image, full, pts
                         index += 1
         # A remote open fails with OSError from fsspec, not with an FFmpegError.
         except (av.error.FFmpegError, OSError) as exc:
-            # A handle that failed mid-read may be broken; the next payload reopens.
-            _forget_remote_handle(self.path)
             raise _read_failure(self.path, exc) from exc
 
     def header(self) -> ContainerHeader:
@@ -647,46 +690,12 @@ class VideoPayload:
         if av is None:
             raise DecoderUnavailable(self.path)
         try:
-            with self._open(av) as container:
-                if not container.streams.video:
+            with self._open(av) as file:
+                if file.header is None:
                     raise DecodeFailed(f"{self.path}: no video stream")
-                stream = container.streams.video[0]
-                codec = stream.codec_context
-                rate = stream.average_rate
-                # PyAV 17 segfaults reading codec.pix_fmt on a stream with none set;
-                # codec.format is None there instead.
-                pixel_format = codec.format
-                bit_rate = codec.bit_rate or stream.bit_rate
-                duration = stream.duration
-                time_base = stream.time_base
-                return ContainerHeader(
-                    width=int(codec.width),
-                    height=int(codec.height),
-                    fps=float(rate) if rate else None,
-                    pix_fmt=pixel_format.name if pixel_format is not None else None,
-                    # codec.name is the decoder FFmpeg picked, libdav1d for AV1.
-                    codec=codec.codec.canonical_name or None,
-                    profile=codec.profile or None,
-                    # An unset count, length or bitrate reads as 0, not as missing.
-                    bit_rate=int(bit_rate) if bit_rate else None,
-                    frame_count=int(stream.frames) if stream.frames else None,
-                    duration_s=float(duration * time_base)
-                    if duration and time_base
-                    else None,
-                    color_range=_color_name(codec, "color_range", _COLOR_RANGES),
-                    color_primaries=_color_name(
-                        codec, "color_primaries", _COLOR_PRIMARIES
-                    ),
-                    color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),
-                    color_space=_color_name(codec, "colorspace", _COLOR_SPACES),
-                    camera_make=_tag(container, stream, _MAKE_TAGS),
-                    camera_model=_tag(container, stream, _MODEL_TAGS),
-                    encoder=_tag(container, stream, _ENCODER_TAGS),
-                )
+                return file.header
         # A remote open fails with OSError from fsspec, not with an FFmpegError.
         except (av.error.FFmpegError, OSError) as exc:
-            # A handle that failed mid-read may be broken; the next payload reopens.
-            _forget_remote_handle(self.path)
             raise _read_failure(self.path, exc) from exc
 
     def packet_times(self) -> SegmentPackets:
@@ -708,7 +717,8 @@ class VideoPayload:
             raise DecoderUnavailable(self.path)
         collected: list[int] = []
         try:
-            with self._open(av) as container:
+            with self._open(av) as file:
+                container = file.container
                 stream = container.streams.video[0]
                 lo, hi, fps = self._bounds(stream)
                 time_base = float(stream.time_base)
@@ -728,8 +738,6 @@ class VideoPayload:
                         collected.append(packet.pts)
         # A remote open fails with OSError from fsspec, not with an FFmpegError.
         except (av.error.FFmpegError, OSError) as exc:
-            # A handle that failed mid-read may be broken; the next payload reopens.
-            _forget_remote_handle(self.path)
             raise _read_failure(self.path, exc) from exc
         return SegmentPackets(
             pts=tuple(sorted(collected)), time_base=time_base, fps=fps
@@ -760,6 +768,7 @@ class VideoPayload:
             if stream.time_base is None:
                 raise DecodeFailed(f"{self.path}: the video stream has no time base")
             container.seek(int(self.start_s / stream.time_base), stream=stream)
+            reformatter = av.video.reformatter.VideoReformatter()
             # end_s is the exclusive upper bound: it is the next segment's own start_s,
             # so a frame landing exactly on it belongs there, not here.
             # The count is also capped at frame_count, so a float-precision mismatch
@@ -772,7 +781,7 @@ class VideoPayload:
                     break
                 if frame.time is not None and frame.time < self.start_s:
                     continue
-                frames.append(frame.to_ndarray(format="rgb24"))
+                frames.append(reformatter.reformat(frame, format="rgb24").to_ndarray())
         finally:
             container.close()
 
@@ -848,41 +857,144 @@ def _tag(container: Any, stream: Any, keys: Sequence[str]) -> str | None:
     return None
 
 
-def _remote_handle(path: UPath) -> Any:
-    """Return an open, block-cached file object for `path`, reusing a cached one.
+def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
+    """Open `path` as a PyAV container, local or remote, and read its header.
 
-    The caller holds `_REMOTE_LOCK`.
+    Parameters
+    ----------
+    av : ModuleType
+        The PyAV module.
+    path : UPath
+        The video file to open.
+
+    Returns
+    -------
+    _VideoFile
+        The open container, its file object when remote, and its header.
     """
 
+    if path.protocol in ("", "file"):
+        handle = None
+        container = av.open(str(path))
+    else:
+        # PyAV cannot resolve an fsspec URL such as hf://, so it reads a file object.
+        handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
+        try:
+            container = av.open(handle)
+        except BaseException:
+            handle.close()
+            raise
+    file = _VideoFile(container=container, handle=handle, header=None)
+    try:
+        if container.streams.video:
+            file.header = _read_header(container)
+    except BaseException:
+        file.close()
+        raise
+    return file
+
+
+def _read_header(container: Any) -> ContainerHeader:
+    """Read the format an open container states for its first video stream.
+
+    Parameters
+    ----------
+    container : Any
+        A PyAV container with at least one video stream, not yet decoded from.
+
+    Returns
+    -------
+    ContainerHeader
+        The stream's frame size, rate, pixel format, codec, bitrate,
+        length and colour, and the camera and encoder its tags name.
+    """
+
+    stream = container.streams.video[0]
+    codec = stream.codec_context
+    rate = stream.average_rate
+    # PyAV 17 segfaults reading codec.pix_fmt on a stream with none set;
+    # codec.format is None there instead.
+    pixel_format = codec.format
+    bit_rate = codec.bit_rate or stream.bit_rate
+    duration = stream.duration
+    time_base = stream.time_base
+    return ContainerHeader(
+        width=int(codec.width),
+        height=int(codec.height),
+        fps=float(rate) if rate else None,
+        pix_fmt=pixel_format.name if pixel_format is not None else None,
+        # codec.name is the decoder FFmpeg picked, libdav1d for AV1.
+        # PyAV 13 has no canonical_name, so the codec reads as unstated there.
+        codec=getattr(codec.codec, "canonical_name", None) or None,
+        profile=codec.profile or None,
+        # An unset count, length or bitrate reads as 0, not as missing.
+        bit_rate=int(bit_rate) if bit_rate else None,
+        frame_count=int(stream.frames) if stream.frames else None,
+        duration_s=float(duration * time_base) if duration and time_base else None,
+        color_range=_color_name(codec, "color_range", _COLOR_RANGES),
+        color_primaries=_color_name(codec, "color_primaries", _COLOR_PRIMARIES),
+        color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),
+        color_space=_color_name(codec, "colorspace", _COLOR_SPACES),
+        camera_make=_tag(container, stream, _MAKE_TAGS),
+        camera_model=_tag(container, stream, _MODEL_TAGS),
+        encoder=_tag(container, stream, _ENCODER_TAGS),
+    )
+
+
+def _check_out(path: UPath) -> _VideoFile | None:
+    """Take the idle open file for `path` out of the pool, if there is one.
+
+    Parameters
+    ----------
+    path : UPath
+        The video file a read wants.
+
+    Returns
+    -------
+    _VideoFile or None
+        The file, now held by the caller alone, or `None` when none is idle.
+    """
+
+    with _OPEN_LOCK:
+        return _OPEN_FILES.pop(str(path), None)
+
+
+def _check_in(path: UPath, file: _VideoFile) -> None:
+    """Put an open file back into the pool as the most recently used.
+
+    When two reads of `path` ran at once, the pool already holds an idle file for it
+    and the incoming one is closed.
+    Files past `_MAX_OPEN_FILES` are closed oldest first.
+
+    Parameters
+    ----------
+    path : UPath
+        The video file `file` reads.
+    file : _VideoFile
+        The open file, no longer used by any read.
+    """
+
+    evicted: list[_VideoFile] = []
     key = str(path)
-    if key in _REMOTE_HANDLES:
-        _REMOTE_HANDLES.move_to_end(key)
-        return _REMOTE_HANDLES[key]
-
-    handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
-    _REMOTE_HANDLES[key] = handle
-    while len(_REMOTE_HANDLES) > _MAX_REMOTE_HANDLES:
-        _key, evicted = _REMOTE_HANDLES.popitem(last=False)
-        evicted.close()
-    return handle
-
-
-def close_remote_handles() -> None:
-    """Close and forget every cached remote file object, at the end of a run."""
-
-    with _REMOTE_LOCK:
-        for handle in _REMOTE_HANDLES.values():
-            handle.close()
-        _REMOTE_HANDLES.clear()
+    with _OPEN_LOCK:
+        if key in _OPEN_FILES:
+            evicted.append(file)
+        else:
+            _OPEN_FILES[key] = file
+            while len(_OPEN_FILES) > _MAX_OPEN_FILES:
+                evicted.append(_OPEN_FILES.popitem(last=False)[1])
+    for stale in evicted:
+        stale.close()
 
 
-def _forget_remote_handle(path: UPath) -> None:
-    """Close and forget the cached file object for `path`, if there is one."""
+def close_video_files() -> None:
+    """Close and forget every pooled video file, at the end of a run."""
 
-    with _REMOTE_LOCK:
-        handle = _REMOTE_HANDLES.pop(str(path), None)
-        if handle is not None:
-            handle.close()
+    with _OPEN_LOCK:
+        files = list(_OPEN_FILES.values())
+        _OPEN_FILES.clear()
+    for file in files:
+        file.close()
 
 
 def _read_failure(path: UPath, exc: Exception) -> DecodeFailed:
@@ -911,8 +1023,22 @@ def _read_failure(path: UPath, exc: Exception) -> DecodeFailed:
     return ReadInterrupted(f"{path}: {exc}")
 
 
-def _luminance(frame: Any) -> "np.ndarray":
-    """The frame's native-resolution luminance, the Y plane itself for planar YUV."""
+def _luminance(frame: Any, reformatter: Any = None) -> "np.ndarray":
+    """The frame's native-resolution luminance, the Y plane itself for planar YUV.
+
+    Parameters
+    ----------
+    frame : av.VideoFrame
+        The decoded frame.
+    reformatter : av.video.reformatter.VideoReformatter, optional
+        Converts a frame that is not 8-bit planar YUV to gray.
+        A new one is built when omitted.
+
+    Returns
+    -------
+    numpy.ndarray
+        A `(height, width)` uint8 array.
+    """
 
     numpy = load_numpy()
     assert numpy is not None
@@ -930,4 +1056,6 @@ def _luminance(frame: Any) -> "np.ndarray":
             plane.height, plane.line_size
         )
         return rows[:, : plane.width].copy()
-    return frame.reformat(format="gray").to_ndarray().copy()
+    assert av is not None
+    converter = reformatter or av.video.reformatter.VideoReformatter()
+    return converter.reformat(frame, format="gray").to_ndarray().copy()

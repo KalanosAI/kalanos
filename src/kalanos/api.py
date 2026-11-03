@@ -17,7 +17,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis import pipeline
-from kalanos.analysis.adapters.video import close_remote_handles
+from kalanos.analysis.adapters.video import close_video_files
 from kalanos.analysis.compare import compare_reports as compare
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.models.binding import Bundle
@@ -312,9 +312,9 @@ def _grade(
             keep_episodes=keep_episodes,
         )
     finally:
-        # Remote video stays open across episodes; a later grade must not
-        # read a file that changed since through a stale handle.
-        close_remote_handles()
+        # Video files stay open across episodes, local and remote; a later grade
+        # must not read a file that changed since through a stale container.
+        close_video_files()
     report = result.header if isinstance(result, StreamedReport) else result
     graded = result.blobs if isinstance(result, StreamedReport) else report.episodes
     if not (graded or report.skipped or report.unresolved):

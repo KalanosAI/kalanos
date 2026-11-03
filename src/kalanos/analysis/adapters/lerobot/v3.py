@@ -23,6 +23,8 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    check_path_template,
+    check_scalar_index,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -32,6 +34,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     sampling_is_regular,
     series_streams,
     split_of,
+    storage_columns,
     timestamp_dtype_of,
     with_episode_clock,
 )
@@ -75,7 +78,10 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     Returns
     -------
     pl.DataFrame
-        Every episode's row, one per episode, sorted by `episode_index`.
+        Every episode's row, one per episode, sorted by `episode_index`
+        when the index has that column; the caller checks that it does.
+        Only `episode_index`, `tasks` and the `data/*` and `videos/*` columns
+        are read; any other column has to be added here before a caller reads it.
 
     Raises
     ------
@@ -93,14 +99,28 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
         frames = []
         for parquet_path in parquet_paths:
             with parquet_path.open("rb") as handle:
-                frames.append(pl.read_parquet(handle))
+                names = list(pl.read_parquet_schema(handle))
+            # Every other column, `stats/*` among them, is left unread: its type can
+            # differ from one file to the next, which would fail the concat below.
+            columns = [
+                name
+                for name in names
+                if name in ("episode_index", "tasks")
+                or name.startswith(("data/", "videos/"))
+            ]
+            with parquet_path.open("rb") as handle:
+                frames.append(pl.read_parquet(handle, columns=columns))
     except AdapterRefusal:
         raise
     except Exception as exc:
         raise AdapterRefusal(
             path, f"could not read episode index under {episodes_dir}: {exc}"
         ) from exc
-    return pl.concat(frames).sort("episode_index")
+    index = pl.concat(frames)
+    # A missing `episode_index` is refused by name in `episodes`.
+    if "episode_index" not in index.columns:
+        return index
+    return index.sort("episode_index")
 
 
 def _video_stream(
@@ -258,8 +278,30 @@ class LeRobotV3Adapter(LeRobotAdapter):
 
         try:
             info = read_info(path)
+            check_path_template(
+                path, info, "data_path", frozenset({"chunk_index", "file_index"})
+            )
+            check_path_template(
+                path,
+                info,
+                "video_path",
+                frozenset({"video_key", "chunk_index", "file_index"}),
+            )
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
+            required = {"episode_index", "data/chunk_index", "data/file_index"}
+            for video_key in plan.video:
+                required |= {
+                    f"videos/{video_key}/chunk_index",
+                    f"videos/{video_key}/file_index",
+                    f"videos/{video_key}/from_timestamp",
+                    f"videos/{video_key}/to_timestamp",
+                }
+            missing = ", ".join(sorted(required - set(episode_index.columns)))
+            if missing:
+                raise AdapterRefusal(
+                    path, f"the episode index lacks the LeRobot v3 columns {missing}"
+                )
             fps = float(info["fps"]) if "fps" in info else None
             # Each row of the episode index lists its task instructions, when the
             # dataset records any; read for every episode, not just the sampled ones,
@@ -305,17 +347,25 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         # A metadata-tier run projects the index and clock
                         # columns only: the numeric feature vectors never leave
                         # the file. The schema still says which columns exist.
-                        cached_schema = list(pl.read_parquet_schema(handle))
+                        parquet_schema = pl.read_parquet_schema(handle)
+                    check_scalar_index(path, parquet_schema)
+                    cached_schema = list(parquet_schema)
                     with data_path.open("rb") as handle:
-                        cached_frame = pl.read_parquet(
-                            handle,
-                            columns=None
-                            if materialise
-                            else [
-                                c
-                                for c in ("episode_index", TIME_COLUMN, "frame_index")
-                                if c in cached_schema
-                            ],
+                        cached_frame = storage_columns(
+                            pl.read_parquet(
+                                handle,
+                                columns=None
+                                if materialise
+                                else [
+                                    c
+                                    for c in (
+                                        "episode_index",
+                                        TIME_COLUMN,
+                                        "frame_index",
+                                    )
+                                    if c in cached_schema
+                                ],
+                            )
                         )
                     cached_path = data_path
                 assert cached_frame is not None
