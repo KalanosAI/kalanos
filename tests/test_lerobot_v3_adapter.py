@@ -496,6 +496,35 @@ def test_an_episode_index_without_data_columns_is_refused(tmp_path):
         list(LeRobotV3Adapter().episodes(UPath(root)))
 
 
+def test_an_episode_index_without_episode_index_is_refused(tmp_path):
+    """Verify an episode index missing `episode_index` is refused, naming it."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.drop("episode_index").write_parquet(index_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"lacks the LeRobot v3 columns episode_index$"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_an_episode_index_out_of_order_is_read_in_episode_order(tmp_path):
+    """Verify episodes come out in `episode_index` order whatever the row order."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.reverse().write_parquet(index_path)
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]
+
+
 def test_list_typed_index_columns_are_refused(tmp_path):
     """Verify a `frame_index` holding one list per frame is refused with its type."""
 
