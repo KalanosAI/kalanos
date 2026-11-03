@@ -4,24 +4,27 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
-## [Unreleased]
+## [0.9.3] - 2026-11-03
+
+Report schema 8.0.0.
+LeRobot datasets with 2-D features read under polars 2, malformed ones are refused with a reason that names the problem, grading spends less time reading video and writing reports, and every runtime dependency declares a lower bound.
 
 ### Fixed
 
-- The LeRobot reader reads 2-D features (Hugging Face Array2D columns) under polars 2, which loads them as extension types. Before, such a dataset was refused with "too many values to unpack".
-- A LeRobot dataset whose path templates, episode index or index columns don't follow the format is refused with a reason that names the problem, instead of the raw Python error.
-- A LeRobot v3 dataset whose episode index files store a statistics column with different types is read. Before, it was refused with "failed to vstack column". The reader now loads only the episode index columns it uses.
-- A LeRobot v3 dataset whose episode index has no `episode_index` column is refused with a reason that names the column, instead of polars' raw "unable to find column" error.
+- The LeRobot reader reads 2-D features (Hugging Face Array2D columns) under polars 2, which loads them as extension types. Before, such a dataset was refused with "too many values to unpack". ([#85](https://github.com/KalanosAI/kalanos/pull/85))
+- A LeRobot dataset whose path templates, episode index or index columns don't follow the format is refused with a reason that names the problem, instead of the raw Python error. ([#85](https://github.com/KalanosAI/kalanos/pull/85))
+- A LeRobot v3 dataset whose episode index files store a statistics column with different types is read. Before, it was refused with "failed to vstack column". The reader now loads only the episode index columns it uses. ([#85](https://github.com/KalanosAI/kalanos/pull/85))
+- A LeRobot v3 dataset whose episode index has no `episode_index` column is refused with a reason that names the column, instead of polars' raw "unable to find column" error. ([#86](https://github.com/KalanosAI/kalanos/pull/86))
 
 ### Changed
 
-- kalanos now requires polars 1.44.2 or later.
-- kalanos now requires pydantic 2.10.4, pydantic-settings 2.0.0, PyYAML 6.0 and typer 0.16.0 or later, and the video extra numpy 2.2.6 or later.
-- Grading measures each decoded camera frame with one gray-level histogram and integer block sums, so vision metrics spend less time per frame. Metric values are unchanged.
-- Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged.
-- Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads.
-- Grading converts decoded camera frames with one reusable converter per video read instead of building one per frame, so reading video takes less time. Metric values are unchanged.
-- Writing a JSON report builds each episode's JSON once instead of twice, so the write takes about half as long. The written file is unchanged.
+- kalanos now requires polars 1.44.2 or later. ([#85](https://github.com/KalanosAI/kalanos/pull/85))
+- kalanos now requires pydantic 2.10.4, pydantic-settings 2.0.0, PyYAML 6.0 and typer 0.16.0 or later, and the video extra numpy 2.2.6 or later. ([#87](https://github.com/KalanosAI/kalanos/pull/87))
+- Grading measures each decoded camera frame with one gray-level histogram and integer block sums, so vision metrics spend less time per frame. Metric values are unchanged. ([#80](https://github.com/KalanosAI/kalanos/pull/80))
+- Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged. ([#81](https://github.com/KalanosAI/kalanos/pull/81))
+- Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads. ([#82](https://github.com/KalanosAI/kalanos/pull/82))
+- Grading converts decoded camera frames with one reusable converter per video read instead of building one per frame, so reading video takes less time. Metric values are unchanged. ([#83](https://github.com/KalanosAI/kalanos/pull/83))
+- Writing a JSON report builds each episode's JSON once instead of twice, so the write takes about half as long. The written file is unchanged. ([#84](https://github.com/KalanosAI/kalanos/pull/84))
 
 ## [0.9.2] - 2026-10-29
 
@@ -308,6 +311,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.9.3]: https://github.com/KalanosAI/kalanos/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/KalanosAI/kalanos/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/KalanosAI/kalanos/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/KalanosAI/kalanos/compare/v0.8.2...v0.9.0
