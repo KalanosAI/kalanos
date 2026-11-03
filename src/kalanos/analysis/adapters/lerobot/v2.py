@@ -25,6 +25,8 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    check_path_template,
+    check_scalar_index,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -267,6 +269,15 @@ class LeRobotV2Adapter(LeRobotAdapter):
 
         try:
             info = read_info(path)
+            check_path_template(
+                path, info, "data_path", frozenset({"episode_chunk", "episode_index"})
+            )
+            check_path_template(
+                path,
+                info,
+                "video_path",
+                frozenset({"video_key", "episode_chunk", "episode_index"}),
+            )
             plan = feature_plan(info, self._resolve_dictionary())
             total = int(info["total_episodes"])
             fps = float(info["fps"])
@@ -289,7 +300,9 @@ class LeRobotV2Adapter(LeRobotAdapter):
                 # no episode_index filter and no chunk cache are needed here.
                 materialise = reads_numeric_payloads()
                 with data_path.open("rb") as handle:
-                    schema = list(pl.read_parquet_schema(handle))
+                    parquet_schema = pl.read_parquet_schema(handle)
+                check_scalar_index(path, parquet_schema)
+                schema = list(parquet_schema)
                 with data_path.open("rb") as handle:
                     # Metadata tier: index and clock columns only; the
                     # numeric feature vectors never leave the file.

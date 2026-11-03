@@ -9,6 +9,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Fixed
 
 - The LeRobot reader reads 2-D features (Hugging Face Array2D columns) under polars 2, which loads them as extension types. Before, such a dataset was refused with "too many values to unpack".
+- A LeRobot dataset whose path templates, episode index or index columns don't follow the format is refused with a reason that names the problem, instead of the raw Python error.
 
 ### Changed
 

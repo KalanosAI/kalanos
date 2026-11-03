@@ -8,7 +8,8 @@
 import json
 import logging
 import math
-from collections.abc import Iterable
+import string
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -132,6 +133,45 @@ def read_info(path: UPath) -> dict[str, Any]:
             return json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise AdapterRefusal(path, f"could not read {info_path}: {exc}") from exc
+
+
+def check_path_template(
+    path: UPath, info: dict[str, Any], key: str, fields: frozenset[str]
+) -> None:
+    """Refuse a path template that names a field the reader never fills.
+
+    A template that is absent or null passes,
+    since a dataset without cameras declares no `video_path`.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+    info : dict
+        The parsed `info.json`.
+    key : str
+        The template's key in `info.json`, such as `data_path`.
+    fields : frozenset[str]
+        The fields this reader fills into that template.
+
+    Raises
+    ------
+    AdapterRefusal
+        If the template names a field outside `fields`.
+    """
+
+    template = info.get(key)
+    if not isinstance(template, str):
+        return
+    version = info.get("codebase_version", "?")
+    filled = ", ".join(sorted(fields))
+    for _, name, _, _ in string.Formatter().parse(template):
+        if name is not None and name not in fields:
+            raise AdapterRefusal(
+                path,
+                f"info.json {key} {template!r} uses {{{name}}}, which this LeRobot "
+                f"{version} reader does not fill (it fills {filled})",
+            )
 
 
 def video_keys(info: dict[str, Any]) -> list[str]:
@@ -612,6 +652,32 @@ def storage_columns(frame: pl.DataFrame) -> pl.DataFrame:
     if not extension_columns:
         return frame
     return frame.with_columns(pl.col(name).ext.storage() for name in extension_columns)
+
+
+def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:
+    """Refuse a data parquet whose index columns hold lists instead of scalars.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+    schema : Mapping[str, pl.DataType]
+        The data parquet's schema, as `pl.read_parquet_schema` reads it.
+
+    Raises
+    ------
+    AdapterRefusal
+        If `episode_index`, `frame_index` or the timestamp column is a List or Array.
+    """
+
+    for name in ("episode_index", "frame_index", TIME_COLUMN):
+        dtype = schema.get(name)
+        if isinstance(dtype, (pl.List, pl.Array)):
+            raise AdapterRefusal(
+                path,
+                f"column {name!r} is stored as {dtype}; "
+                "LeRobot stores one scalar per frame",
+            )
 
 
 def series_stream(

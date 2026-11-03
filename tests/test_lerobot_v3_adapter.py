@@ -27,6 +27,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     storage_columns,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
+from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -478,3 +479,49 @@ def test_an_episode_carries_no_split_when_info_declares_none():
 
     assert episodes
     assert all(e.split is None for e in episodes)
+
+
+def test_an_episode_index_without_data_columns_is_refused(tmp_path):
+    """Verify an episode index missing the data file columns is refused, naming them."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_path)
+    index.drop("data/chunk_index", "data/file_index").write_parquet(index_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"lacks .*data/chunk_index, data/file_index"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_list_typed_index_columns_are_refused(tmp_path):
+    """Verify a `frame_index` holding one list per frame is refused with its type."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    data_path = root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data_path)
+    frame.with_columns(pl.concat_list("frame_index")).write_parquet(data_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"'frame_index' is stored as List\(Int64\)"
+    ):
+        list(LeRobotV3Adapter().episodes(UPath(root)))
+
+
+def test_a_video_path_templated_per_episode_is_refused(tmp_path):
+    """Verify a `video_path` naming a field v3 never fills is refused by name."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["video_path"] = (
+        "videos/{video_key}/chunk-{chunk_index:03d}/episode_{episode_index:06d}.mp4"
+    )
+    info_path.write_text(json.dumps(info))
+
+    with pytest.raises(AdapterRefusal, match=r"video_path .* uses \{episode_index\}"):
+        list(LeRobotV3Adapter().episodes(UPath(root)))

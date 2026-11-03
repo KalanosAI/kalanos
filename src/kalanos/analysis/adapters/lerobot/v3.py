@@ -23,6 +23,8 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    check_path_template,
+    check_scalar_index,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -259,8 +261,30 @@ class LeRobotV3Adapter(LeRobotAdapter):
 
         try:
             info = read_info(path)
+            check_path_template(
+                path, info, "data_path", frozenset({"chunk_index", "file_index"})
+            )
+            check_path_template(
+                path,
+                info,
+                "video_path",
+                frozenset({"video_key", "chunk_index", "file_index"}),
+            )
             episode_index = _read_episode_index(path)
             plan = feature_plan(info, self._resolve_dictionary())
+            required = {"data/chunk_index", "data/file_index"}
+            for video_key in plan.video:
+                required |= {
+                    f"videos/{video_key}/chunk_index",
+                    f"videos/{video_key}/file_index",
+                    f"videos/{video_key}/from_timestamp",
+                    f"videos/{video_key}/to_timestamp",
+                }
+            missing = ", ".join(sorted(required - set(episode_index.columns)))
+            if missing:
+                raise AdapterRefusal(
+                    path, f"the episode index lacks the LeRobot v3 columns {missing}"
+                )
             fps = float(info["fps"]) if "fps" in info else None
             # Each row of the episode index lists its task instructions, when the
             # dataset records any; read for every episode, not just the sampled ones,
@@ -306,7 +330,9 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         # A metadata-tier run projects the index and clock
                         # columns only: the numeric feature vectors never leave
                         # the file. The schema still says which columns exist.
-                        cached_schema = list(pl.read_parquet_schema(handle))
+                        parquet_schema = pl.read_parquet_schema(handle)
+                    check_scalar_index(path, parquet_schema)
+                    cached_schema = list(parquet_schema)
                     with data_path.open("rb") as handle:
                         cached_frame = storage_columns(
                             pl.read_parquet(
