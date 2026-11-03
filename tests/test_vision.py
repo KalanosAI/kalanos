@@ -631,6 +631,7 @@ def test_a_failing_control_stream_fails_cut_count_alone(monkeypatch):
     """A control payload that cannot be fetched leaves the vision read whole."""
 
     action = _moving_actions(1000)
+    assert action.payload is not None
     payload_type = type(action.payload)
     fetch = payload_type.fetch
     calls: list[int] = []
