@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 try:
     import av
     import av.error
+    import av.video.reformatter
 except ImportError:
     av = None
 
@@ -621,6 +622,10 @@ class VideoPayload:
                 stream = container.streams.video[0]
                 lo, hi, fps = self._bounds(stream)
                 time_base = float(stream.time_base)
+                # A reformatter per frame rebuilds its scaler context,
+                # and on PyAV 17+ its thread pool, for every frame,
+                # which costs more than the conversion itself.
+                reformatter = av.video.reformatter.VideoReformatter()
                 for position, (start, end) in enumerate(windows):
                     # lo already sits half a frame early, so both bounds do too.
                     start_pts = min(lo + round(start / fps / time_base), hi - 1)
@@ -645,12 +650,16 @@ class VideoPayload:
                         ):
                             raise PixelLimitReached("frame exceeds max_pixels")
                         if pixel_format is None:
-                            image = frame.to_ndarray(format="rgb24")
-                        else:
-                            image = frame.reformat(
-                                width=size, height=size, format=pixel_format
+                            image = reformatter.reformat(
+                                frame, format="rgb24"
                             ).to_ndarray()
-                        full = _luminance(frame) if index in native else None
+                        else:
+                            image = reformatter.reformat(
+                                frame, width=size, height=size, format=pixel_format
+                            ).to_ndarray()
+                        full = (
+                            _luminance(frame, reformatter) if index in native else None
+                        )
                         pts = float(frame.time) if frame.time is not None else None
                         yield position, image, full, pts
                         index += 1
@@ -759,6 +768,7 @@ class VideoPayload:
             if stream.time_base is None:
                 raise DecodeFailed(f"{self.path}: the video stream has no time base")
             container.seek(int(self.start_s / stream.time_base), stream=stream)
+            reformatter = av.video.reformatter.VideoReformatter()
             # end_s is the exclusive upper bound: it is the next segment's own start_s,
             # so a frame landing exactly on it belongs there, not here.
             # The count is also capped at frame_count, so a float-precision mismatch
@@ -771,7 +781,7 @@ class VideoPayload:
                     break
                 if frame.time is not None and frame.time < self.start_s:
                     continue
-                frames.append(frame.to_ndarray(format="rgb24"))
+                frames.append(reformatter.reformat(frame, format="rgb24").to_ndarray())
         finally:
             container.close()
 
@@ -1013,8 +1023,22 @@ def _read_failure(path: UPath, exc: Exception) -> DecodeFailed:
     return ReadInterrupted(f"{path}: {exc}")
 
 
-def _luminance(frame: Any) -> "np.ndarray":
-    """The frame's native-resolution luminance, the Y plane itself for planar YUV."""
+def _luminance(frame: Any, reformatter: Any = None) -> "np.ndarray":
+    """The frame's native-resolution luminance, the Y plane itself for planar YUV.
+
+    Parameters
+    ----------
+    frame : av.VideoFrame
+        The decoded frame.
+    reformatter : av.video.reformatter.VideoReformatter, optional
+        Converts a frame that is not 8-bit planar YUV to gray.
+        A new one is built when omitted.
+
+    Returns
+    -------
+    numpy.ndarray
+        A `(height, width)` uint8 array.
+    """
 
     numpy = load_numpy()
     assert numpy is not None
@@ -1032,4 +1056,6 @@ def _luminance(frame: Any) -> "np.ndarray":
             plane.height, plane.line_size
         )
         return rows[:, : plane.width].copy()
-    return frame.reformat(format="gray").to_ndarray().copy()
+    assert av is not None
+    converter = reformatter or av.video.reformatter.VideoReformatter()
+    return converter.reformat(frame, format="gray").to_ndarray().copy()

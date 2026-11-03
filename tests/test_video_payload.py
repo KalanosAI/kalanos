@@ -7,6 +7,7 @@
 # Built-in
 import random
 from fractions import Fraction
+from itertools import islice
 
 # External
 import polars as pl
@@ -453,6 +454,71 @@ def test_native_luminance_drops_row_padding_and_reads_deep_formats_as_gray():
 
     assert (video._luminance(frame) == planes[:40]).all()
     assert (deep.shape, str(deep.dtype)) == ((40, 50), "uint8")
+
+
+def test_gray_windows_match_a_per_frame_conversion():
+    """Verify gray_windows yields what converting each frame on its own gives."""
+
+    av = pytest.importorskip("av")
+    payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
+    with av.open(str(LEROBOT_VIDEO)) as container:
+        expected = [
+            frame.reformat(width=64, height=64, format="gray").to_ndarray()
+            for frame in islice(container.decode(video=0), 8)
+        ]
+
+    (frames,) = _windows(payload, [(0, 8)], 64)
+
+    assert len(frames) == len(expected)
+    for frame, converted in zip(frames, expected, strict=True):
+        assert (frame == converted).all()
+
+
+def test_one_read_converts_every_frame_through_one_reformatter(monkeypatch):
+    """Verify a read builds one reformatter and converts each frame through it."""
+
+    reformatters = pytest.importorskip("av.video.reformatter")
+    real = reformatters.VideoReformatter
+    built = []
+
+    # PyAV's reformatter can't be subclassed, so a wrapper counts its conversions.
+    # Counting conversions also catches a frame.reformat call,
+    # which builds its own reformatter in compiled code that the patch can't see.
+    class Counting:
+        """Wrap a real reformatter, counting the frames it converts."""
+
+        def __init__(self) -> None:
+            """Build the real reformatter and record this wrapper."""
+
+            self.real = real()
+            self.calls = 0
+            built.append(self)
+
+        def reformat(self, frame, **options):
+            """Convert `frame` with the real reformatter and count the call.
+
+            Parameters
+            ----------
+            frame : av.VideoFrame
+                The frame to convert.
+            **options
+                Passed on to the real `reformat`.
+
+            Returns
+            -------
+            av.VideoFrame
+                The converted frame.
+            """
+
+            self.calls += 1
+            return self.real.reformat(frame, **options)
+
+    monkeypatch.setattr(reformatters, "VideoReformatter", Counting)
+    payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30)
+
+    list(payload.gray_windows([(0, 8)], 64))
+
+    assert [reformatter.calls for reformatter in built] == [8]
 
 
 def test_counting_a_segment_past_the_end_of_the_file_finds_fewer_frames():
