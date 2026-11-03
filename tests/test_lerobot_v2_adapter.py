@@ -8,8 +8,10 @@ chunk rollover at a small `chunks_size`, and a camera-less tree.
 
 # Built-in
 import json
+import shutil
 
 # External
+import polars as pl
 import pytest
 from upath import UPath
 
@@ -17,6 +19,7 @@ from upath import UPath
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import split_of
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
+from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import Clock, Kind, TimestampDtype
 from kalanos.testing import check_adapter
 
@@ -192,3 +195,34 @@ def test_channels_carry_the_declared_dtype():
 
     assert state.channels
     assert {c.source_dtype for c in state.channels} == {"float32"}
+
+
+def test_a_data_path_with_a_placeholder_v2_does_not_fill_is_refused(tmp_path):
+    """Verify a `data_path` naming a field v2 never fills is refused by name."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["data_path"] = (
+        "data/chunk-{chunk_index:03d}/episode_{episode_index:06d}.parquet"
+    )
+    info_path.write_text(json.dumps(info))
+
+    with pytest.raises(AdapterRefusal, match=r"data_path .* uses \{chunk_index\}"):
+        list(LeRobotV2Adapter().episodes(UPath(root)))
+
+
+def test_list_typed_index_columns_are_refused(tmp_path):
+    """Verify a `frame_index` holding one list per frame is refused with its type."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    data_path = root / "data" / "chunk-000" / "episode_000000.parquet"
+    frame = pl.read_parquet(data_path)
+    frame.with_columns(pl.concat_list("frame_index")).write_parquet(data_path)
+
+    with pytest.raises(
+        AdapterRefusal, match=r"'frame_index' is stored as List\(Int64\)"
+    ):
+        list(LeRobotV2Adapter().episodes(UPath(root)))

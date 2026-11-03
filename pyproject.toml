@@ -38,7 +38,7 @@ classifiers = [
 dependencies = [
     "pydantic",
     "pydantic-settings",
-    "polars",
+    "polars>=1.44.2",
     "pyyaml",
     "typer",
     "jinja2>=3.1.6",

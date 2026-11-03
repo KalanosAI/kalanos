@@ -6,8 +6,15 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Fixed
+
+- The LeRobot reader reads 2-D features (Hugging Face Array2D columns) under polars 2, which loads them as extension types. Before, such a dataset was refused with "too many values to unpack".
+- A LeRobot dataset whose path templates, episode index or index columns don't follow the format is refused with a reason that names the problem, instead of the raw Python error.
+- A LeRobot v3 dataset whose episode index files store a statistics column with different types is read. Before, it was refused with "failed to vstack column". The reader now loads only the episode index columns it uses.
+
 ### Changed
 
+- kalanos now requires polars 1.44.2 or later.
 - Grading measures each decoded camera frame with one gray-level histogram and integer block sums, so vision metrics spend less time per frame. Metric values are unchanged.
 - Grading keeps up to four video files open and reuses each across the episodes and reads that share it, closing them when grading ends, so a dataset whose episodes share video files opens each far fewer times. Metric values are unchanged.
 - Grading decodes each camera segment once for the vision metrics, `cut_count` and `camera_stream_present`, instead of three times, so a grade spends less time reading video. Metric values are unchanged. `max_decode_frames` now also counts the frames `cut_count` reads.
