@@ -226,3 +226,34 @@ def test_list_typed_index_columns_are_refused(tmp_path):
         AdapterRefusal, match=r"'frame_index' is stored as List\(Int64\)"
     ):
         list(LeRobotV2Adapter().episodes(UPath(root)))
+
+
+def test_language_features_are_skipped_and_the_rest_reads(tmp_path):
+    """Verify language features are dropped and every numeric feature still reads."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    for feature in ("language_persistent", "language_events"):
+        info["features"][feature] = {"dtype": "language", "shape": [1], "names": None}
+    info_path.write_text(json.dumps(info))
+    for data_path in (root / "data").rglob("*.parquet"):
+        frame = pl.read_parquet(data_path)
+        frame.with_columns(
+            pl.Series(
+                "language_persistent",
+                [[{"role": "user", "content": "hang the keys"}]] * frame.height,
+                dtype=pl.List(pl.Struct({"role": pl.String, "content": pl.String})),
+            ),
+            pl.Series("language_events", [[]] * frame.height, dtype=pl.List(pl.Null)),
+        ).write_parquet(data_path)
+
+    plain = _episodes(LEROBOT_V2_1_FIXTURE)
+    episodes = _episodes(UPath(root))
+
+    assert len(episodes) == len(plain)
+    for episode, expected in zip(episodes, plain, strict=True):
+        assert {s.source_field for s in episode.streams} == {
+            s.source_field for s in expected.streams
+        }

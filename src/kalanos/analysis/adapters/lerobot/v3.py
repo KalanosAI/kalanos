@@ -329,7 +329,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # So only the current chunk is ever needed, and a one-entry cache is enough.
         cached_path: UPath | None = None
         cached_frame: pl.DataFrame | None = None
-        cached_schema: list[str] = []
+        cached_schema: dict[str, pl.DataType] = {}
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -349,7 +349,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         # the file. The schema still says which columns exist.
                         parquet_schema = pl.read_parquet_schema(handle)
                     check_scalar_index(path, parquet_schema)
-                    cached_schema = list(parquet_schema)
+                    cached_schema = dict(parquet_schema)
                     with data_path.open("rb") as handle:
                         cached_frame = storage_columns(
                             pl.read_parquet(

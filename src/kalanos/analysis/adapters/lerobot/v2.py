@@ -302,7 +302,6 @@ class LeRobotV2Adapter(LeRobotAdapter):
                 with data_path.open("rb") as handle:
                     parquet_schema = pl.read_parquet_schema(handle)
                 check_scalar_index(path, parquet_schema)
-                schema = list(parquet_schema)
                 with data_path.open("rb") as handle:
                     # Metadata tier: index and clock columns only; the
                     # numeric feature vectors never leave the file.
@@ -314,7 +313,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                             else [
                                 c
                                 for c in ("episode_index", TIME_COLUMN, "frame_index")
-                                if c in schema
+                                if c in parquet_schema
                             ],
                         )
                     )
@@ -340,7 +339,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                     if materialise
                     else declared_series_streams(
                         plan,
-                        schema,
+                        parquet_schema,
                         timestamps,
                         data_path,
                         clock=clock,
