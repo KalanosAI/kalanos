@@ -22,11 +22,13 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     declared_format,
     episode_clock,
+    holds_numbers,
     resolve_taxonomy,
     series_stream,
     storage_columns,
 )
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import (
     Channel,
@@ -36,8 +38,10 @@ from kalanos.analysis.models.domain import (
     MappingSource,
     TimestampDtype,
 )
+from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
+from kalanos.api import grade
 from kalanos.assets.dictionary import load_default_dictionary
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import check_adapter
@@ -574,3 +578,187 @@ def test_episode_index_files_that_disagree_on_an_unread_column_still_read(tmp_pa
     episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
 
     assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected"),
+    [
+        (pl.Float32, True),
+        (pl.Int64, True),
+        (pl.Boolean, True),
+        (pl.List(pl.Float32), True),
+        (pl.Array(pl.Float32, 6), True),
+        (pl.List(pl.List(pl.Int16)), True),
+        pytest.param(_ARRAY2D, True, marks=_POLARS_2),
+        (pl.List(pl.Null), False),
+        (pl.Struct({"role": pl.String}), False),
+        (pl.String, False),
+        (pl.List(pl.Struct({"role": pl.String, "content": pl.String})), False),
+        (pl.Datetime(), False),
+        (pl.Null, False),
+    ],
+)
+def test_holds_numbers(dtype, expected):
+    """Verify a column holds numbers when its innermost type is numeric or Boolean."""
+
+    assert holds_numbers(dtype) is expected
+
+
+def _with_features(root, features, columns):
+    """Copy the fixture to `root` with extra features declared and stored.
+
+    Parameters
+    ----------
+    root : Path
+        Where to copy the fixture.
+    features : dict[str, dict]
+        The `info.json` entries to add, by feature key.
+    columns : Callable[[int], list[pl.Series]]
+        Builds the columns to add, given the data parquet's row count.
+
+    Returns
+    -------
+    UPath
+        The copied dataset root.
+    """
+
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"].update(features)
+    info_path.write_text(json.dumps(info))
+    data_path = root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data_path)
+    frame.with_columns(columns(frame.height)).write_parquet(data_path)
+    return UPath(root)
+
+
+_LANGUAGE_FEATURES = {
+    "language_persistent": {"dtype": "language", "shape": [1], "names": None},
+    "language_events": {"dtype": "language", "shape": [1], "names": None},
+}
+
+
+def _language_columns(height):
+    """Build the two language columns of a LeRobot dataset with annotations.
+
+    Parameters
+    ----------
+    height : int
+        The number of rows to build.
+
+    Returns
+    -------
+    list[pl.Series]
+        `language_persistent` as one role/content item per row, and
+        `language_events` as an empty list per row.
+    """
+
+    return [
+        pl.Series(
+            "language_persistent",
+            [[{"role": "user", "content": "hang the keys"}]] * height,
+            dtype=pl.List(pl.Struct({"role": pl.String, "content": pl.String})),
+        ),
+        pl.Series("language_events", [[]] * height, dtype=pl.List(pl.Null)),
+    ]
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_language_features_are_skipped_and_the_rest_reads(tmp_path, tier):
+    """Verify language features are dropped and every numeric feature still reads."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny", _LANGUAGE_FEATURES, _language_columns
+    )
+
+    with use_tier(tier):
+        plain = list(LeRobotV3Adapter().episodes(LEROBOT_FIXTURE))
+        episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 2
+    for episode, expected in zip(episodes, plain, strict=True):
+        assert {s.source_field for s in episode.streams} == {
+            s.source_field for s in expected.streams
+        }
+
+
+def test_a_column_that_holds_no_numbers_is_skipped_whatever_info_declares(tmp_path):
+    """Verify the parquet type decides, even when `info.json` declares a number."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny",
+        {"language_events": {"dtype": "float32", "shape": [1], "names": None}},
+        lambda height: [
+            pl.Series("language_events", [[]] * height, dtype=pl.List(pl.Null))
+        ],
+    )
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert all(s.source_field != "language_events" for s in episode.streams)
+
+
+def test_a_text_feature_leaves_the_episodes_gradable(tmp_path):
+    """Verify a scalar text feature is dropped instead of marking episodes unknown."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny",
+        {"note": {"dtype": "string", "shape": [1], "names": None}},
+        lambda height: [pl.Series("note", ["calm"] * height, dtype=pl.String)],
+    )
+
+    report = grade(root)
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert (
+        report.eligibility_counts is not None
+        and report.eligibility_counts.pass_count == 2
+    )
+    for episode in episodes:
+        assert all(s.source_field != "note" for s in episode.streams)
+
+
+def test_a_boolean_feature_is_still_read(tmp_path):
+    """Verify a Boolean feature still reads as a stream."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny",
+        {"gripper.closed": {"dtype": "bool", "shape": [1], "names": None}},
+        lambda height: [pl.Series("gripper.closed", [True] * height, dtype=pl.Boolean)],
+    )
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert any(s.source_field == "gripper.closed" for s in episode.streams)
+
+
+@_POLARS_2
+def test_a_2d_feature_is_declared_at_the_metadata_tier(tmp_path):
+    """Verify a 2-D extension column counts as numbers in the raw parquet schema."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny",
+        {"observation.tactile": {"dtype": "int16", "shape": [2, 2], "names": None}},
+        lambda height: [
+            pl.Series(
+                "observation.tactile",
+                [[[i, i + 1], [i + 2, i + 3]] for i in range(height)],
+                dtype=pl.List(pl.List(pl.Int16)),
+            ).ext.to(_ARRAY2D)
+        ],
+    )
+
+    with use_tier(ExecutionTier.METADATA):
+        episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        tactile = next(
+            s for s in episode.streams if s.source_field == "observation.tactile"
+        )
+        assert len(tactile.channels) == 2

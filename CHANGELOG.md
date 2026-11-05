@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Fixed
+
+- A LeRobot dataset with language annotations or other features that hold no numbers is graded on its numeric features. Before, a feature stored as lists of text or as empty lists refused the whole dataset with "get index is out of bounds", and a text feature marked every episode unknown.
+
 ## [0.9.3] - 2026-11-03
 
 Report schema 8.0.0.

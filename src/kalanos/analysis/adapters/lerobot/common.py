@@ -9,7 +9,7 @@ import json
 import logging
 import math
 import string
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -654,6 +654,33 @@ def storage_columns(frame: pl.DataFrame) -> pl.DataFrame:
     return frame.with_columns(pl.col(name).ext.storage() for name in extension_columns)
 
 
+def holds_numbers(dtype: pl.DataType) -> bool:
+    """Whether a column of `dtype` holds values grading can read as channels.
+
+    Parameters
+    ----------
+    dtype : pl.DataType
+        A data parquet column's type, as stored or as `storage_columns` left it.
+
+    Returns
+    -------
+    bool
+        True when the innermost type, past any extension, List and Array
+        wrappers, is numeric or Boolean.
+    """
+
+    innermost = dtype
+    while True:
+        if isinstance(innermost, pl.Extension):
+            innermost = innermost.ext_storage()
+        elif isinstance(innermost, (pl.List, pl.Array)):
+            innermost = innermost.inner
+        else:
+            break
+    # polars counts Boolean as non-numeric, yet Booleans grade as channels.
+    return innermost.is_numeric() or innermost == pl.Boolean
+
+
 def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:
     """Refuse a data parquet whose index columns hold lists instead of scalars.
 
@@ -750,7 +777,7 @@ def series_stream(
 
 def declared_series_streams(
     plan: FeaturePlan,
-    present_columns: Iterable[str],
+    schema: Mapping[str, pl.DataType],
     timestamps: pl.Series,
     source_path: UPath,
     *,
@@ -769,29 +796,39 @@ def declared_series_streams(
     ----------
     plan : FeaturePlan
         The dataset's resolved feature plan.
-    present_columns : Iterable[str]
-        The columns the data parquet's schema declares, from
-        `pl.read_parquet_schema`, so a missing column is still noticed.
+    schema : Mapping[str, pl.DataType]
+        The data parquet's schema, as `pl.read_parquet_schema` reads it, so a
+        missing column is still noticed and a column holding no numbers is skipped.
     """
 
-    present = set(present_columns)
-    return [
-        Stream(
-            taxonomy_type=taxonomy_type,
-            kind=Kind.SERIES,
-            timestamps=timestamps,
-            payload=None,
-            source_path=source_path,
-            source_field=feature,
-            mapping_source=mapping_source,
-            clock=clock,
-            timestamp_dtype=timestamp_dtype,
-            is_regular=is_regular,
-            channels=channels,
+    streams = []
+    for feature, (taxonomy_type, mapping_source, channels) in plan.series.items():
+        if feature not in schema:
+            continue
+        if not holds_numbers(schema[feature]):
+            logger.debug(
+                "%s: feature %r is stored as %s, not numbers; not graded",
+                source_path,
+                feature,
+                schema[feature],
+            )
+            continue
+        streams.append(
+            Stream(
+                taxonomy_type=taxonomy_type,
+                kind=Kind.SERIES,
+                timestamps=timestamps,
+                payload=None,
+                source_path=source_path,
+                source_field=feature,
+                mapping_source=mapping_source,
+                clock=clock,
+                timestamp_dtype=timestamp_dtype,
+                is_regular=is_regular,
+                channels=channels,
+            )
         )
-        for feature, (taxonomy_type, mapping_source, channels) in plan.series.items()
-        if feature in present
-    ]
+    return streams
 
 
 def series_streams(
@@ -809,7 +846,8 @@ def series_streams(
     """Build one series Stream per `plan.series` feature present in `episode_frame`.
 
     A feature `plan.series` declares but `episode_frame` does not carry is
-    skipped with a debug log rather than raised.
+    skipped with a debug log rather than raised. A feature whose column holds
+    no numbers is skipped the same way.
 
     Parameters
     ----------
@@ -842,6 +880,15 @@ def series_streams(
                 path,
                 episode_label,
                 feature,
+            )
+            continue
+        if not holds_numbers(episode_frame.schema[feature]):
+            logger.debug(
+                "%s: episode %s: feature %r is stored as %s, not numbers; not graded",
+                path,
+                episode_label,
+                feature,
+                episode_frame.schema[feature],
             )
             continue
         streams.append(
