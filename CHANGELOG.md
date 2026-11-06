@@ -6,8 +6,17 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Added
+
+- A policy metric can set `overrides`, which change its `weight` or `report_only` under scopes that require none of the capabilities its `when` lists, and `graded_in_every_scope`, which keeps a vision metric grading under a scope that grades no video quality.
+
+### Changed
+
+- Under the default scope and the packaged policies, an episode is blocked when a camera video holds a different number of frames than its timestamps imply, or when a camera file is missing, unreadable or holds no frame. Before, these two checks blocked only under a scope that grades video quality. Image-quality metrics stay report-only in the default scope, and the two checks carry no weight in its score.
+
 ### Fixed
 
+- A policy that `extends` another and retunes a metric keeps that metric's `route` from its base. Before, it kept only `weight` and `core`, so a retuned contract check fell back to the statistical route and could request review instead of blocking.
 - A LeRobot dataset with language annotations or other features that hold no numbers is graded on its numeric features. Before, a feature stored as lists of text or as empty lists refused the whole dataset with "get index is out of bounds", and a text feature marked every episode unknown.
 
 ## [0.9.3] - 2026-11-03

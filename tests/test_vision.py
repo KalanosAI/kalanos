@@ -7,7 +7,9 @@
 # Built-in
 import json
 import random
+import shutil
 from fractions import Fraction
+from pathlib import Path
 
 # External
 import polars as pl
@@ -100,7 +102,7 @@ from kalanos.testing import (
 from kalanos.testing.injectors import SyntheticFrames, blur_frames
 
 # Local
-from helpers import LEROBOT_FIXTURE
+from helpers import LEROBOT_FIXTURE, LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE
 
 
 numpy = pytest.importorskip("numpy")
@@ -123,6 +125,13 @@ VISION_METRICS = [
 ]
 
 ACTION_TYPE = "action.joint_position_command"
+
+# Vision metrics the default policy grades in every scope.
+STRUCTURAL_VISION_METRICS = frozenset(
+    key
+    for key, entry in load_default_policy().metrics.items()
+    if entry.graded_in_every_scope
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -331,8 +340,8 @@ def test_a_corrupt_video_is_not_applicable_and_the_stream_still_grades(tmp_path)
     assert graded.metrics["sharpness_score"].availability == Availability.UNAVAILABLE
 
 
-def test_a_short_video_blocks_only_under_a_video_scope():
-    """A frame-count mismatch blocks through its contract under a video scope."""
+def test_a_short_video_blocks_in_every_scope():
+    """A frame-count mismatch blocks through its contract in either scope."""
 
     truncated = _video_stream(
         VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30),
@@ -345,13 +354,12 @@ def test_a_short_video_blocks_only_under_a_video_scope():
     default_scope = scope_policy(load_default_policy(), RequirementsSection())
     metric_id = "vision.frame_count_vs_timebase"
 
-    finding = _grade(truncated, video_scope)[metric_id]
-    assert (finding.consequence, finding.route) == (
-        Consequence.BLOCK,
-        BlockingRoute.CONTRACT,
-    )
-    reported = _grade(truncated, default_scope).get(metric_id)
-    assert reported is None or reported.consequence != Consequence.BLOCK
+    for scoped in (video_scope, default_scope):
+        finding = _grade(truncated, scoped)[metric_id]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
 
 
 CAMERA_FIELD = "observation.images.up"
@@ -404,7 +412,7 @@ def _unreadable(tmp_path) -> UPath:
     ],
     ids=["missing", "unreadable", "frameless", "segment_past_the_end", "remote"],
 )
-def test_an_absent_camera_blocks_only_under_a_video_scope(tmp_path, build):
+def test_an_absent_camera_blocks_in_every_scope(tmp_path, build):
     """A camera with no first frame to read blocks through its contract, naming it."""
 
     stream = build(tmp_path)
@@ -415,16 +423,13 @@ def test_an_absent_camera_blocks_only_under_a_video_scope(tmp_path, build):
     default_scope = scope_policy(load_default_policy(), RequirementsSection())
     metric_id = "vision.camera_stream_present"
 
-    finding = _grade(stream, video_scope)[metric_id]
-    assert (finding.consequence, finding.route) == (
-        Consequence.BLOCK,
-        BlockingRoute.CONTRACT,
-    )
-    assert finding.source_field == CAMERA_FIELD
-    assert all(
-        finding.consequence != Consequence.BLOCK
-        for finding in _grade(stream, default_scope).values()
-    )
+    for scoped in (video_scope, default_scope):
+        finding = _grade(stream, scoped)[metric_id]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
+        assert finding.source_field == CAMERA_FIELD
 
 
 @pytest.mark.parametrize("failing", ["open", "read"])
@@ -826,6 +831,177 @@ def test_an_absent_camera_alone_gives_vision_no_score(tmp_path):
     episode = score_episode([stream_grade], {}, policy=video_scope)
     assert "vision" not in episode.families
     assert episode.metrics["vision.camera_stream_present"].points == 0.0
+
+
+def test_the_default_scope_grades_only_the_structural_vision_checks():
+    """Outside a video scope only the structural checks grade, and at weight 0."""
+
+    scoped = scope_policy(load_default_policy(), RequirementsSection())
+
+    vision_keys = [key for key in scoped.metrics if key.startswith("vision.")]
+    assert STRUCTURAL_VISION_METRICS == {
+        "vision.frame_count_vs_timebase",
+        "vision.camera_stream_present",
+    }
+    for key in vision_keys:
+        entry = scoped.metrics[key]
+        if key in STRUCTURAL_VISION_METRICS:
+            assert (entry.report_only, entry.weight) == (False, 0), key
+        else:
+            assert entry.report_only, key
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    assert video_scope.metrics["vision.frame_count_vs_timebase"].weight == 4
+
+
+def test_a_users_report_only_structural_check_stays_report_only():
+    """The default scope keeps a policy's own report_only on a structural check."""
+
+    policy = load_default_policy()
+    key = "vision.frame_count_vs_timebase"
+    policy.metrics[key] = policy.metrics[key].model_copy(update={"report_only": True})
+
+    assert scope_policy(policy, RequirementsSection()).metrics[key].report_only
+
+
+@pytest.mark.parametrize("truncated", [False, True], ids=["clean", "truncated"])
+def test_the_structural_checks_leave_the_default_score_unchanged(truncated):
+    """At weight 0 the structural checks score an episode as report-only ones do."""
+
+    stream = (
+        _video_stream(
+            VideoPayload(
+                path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30
+            ),
+            8,
+        ).model_copy(update={"source_field": CAMERA_FIELD})
+        if truncated
+        else _camera(LEROBOT_VIDEO)
+    )
+    requirements = RequirementsSection()
+    graded = scope_policy(load_default_policy(), requirements)
+    reported = load_default_policy()
+    for key in STRUCTURAL_VISION_METRICS:
+        reported.metrics[key] = reported.metrics[key].model_copy(
+            update={"report_only": True}
+        )
+    reported = scope_policy(reported, requirements)
+
+    def scored(policy):
+        """Grade the camera beside a clean numeric stream, scored as one episode."""
+
+        stream_grade, findings = grade_stream(
+            stream, policy=policy, is_regular=True, episode_id="e0", category=None
+        )
+        # Without a numeric stream the episode has no score to move.
+        numeric, _findings = grade_stream(
+            clean_recording(),
+            policy=policy,
+            is_regular=True,
+            episode_id="e0",
+            category=None,
+        )
+        episode = score_episode([stream_grade, numeric], {}, policy=policy)
+        return stream_grade, findings, episode
+
+    stream_grade, findings, episode = scored(graded)
+    _reported_stream, _reported_findings, baseline = scored(reported)
+    assert "vision" not in stream_grade.score.families
+    assert "vision" not in episode.families
+    assert episode.score is not None
+    assert (episode.score, episode.n_contributing) == (
+        baseline.score,
+        baseline.n_contributing,
+    )
+    blocking = [
+        finding.metric_id
+        for finding in findings
+        if finding.consequence == Consequence.BLOCK
+    ]
+    assert blocking == (["vision.frame_count_vs_timebase"] if truncated else [])
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [LEROBOT_FIXTURE, LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE],
+    ids=lambda fixture: fixture.name,
+)
+def test_the_video_fixtures_keep_their_decisions_in_the_default_scope(fixture):
+    """Clean video datasets block nothing and keep a full score in the default scope."""
+
+    report = kalanos.api.grade(str(fixture))
+
+    assert report.gate is not None and not report.gate.failing_episodes
+    assert not [
+        finding
+        for finding in report.findings
+        if finding.metric_id in STRUCTURAL_VISION_METRICS
+    ]
+    assert report.readiness is not None and report.readiness.score == 100.0
+
+
+def _lerobot_with_a_cut_short_video(tmp_path: Path) -> Path:
+    """The tiny LeRobot v3 fixture with its shared video cut after episode 0's frames.
+
+    Both episodes share one file: episode 0 holds frames 0-7 and episode 1 frames 8-13.
+    Keeping only the first 8 leaves episode 1's declared segment with no frame in it.
+    """
+
+    av = pytest.importorskip("av")
+
+    copy = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy)
+    video_file = copy / "videos" / CAMERA_FIELD / "chunk-000" / "file-000.mp4"
+    source = video_file.with_suffix(".source.mp4")
+    video_file.rename(source)
+    with av.open(str(source)) as reader, av.open(str(video_file), "w") as writer:
+        decoded = reader.streams.video[0]
+        encoded = writer.add_stream("libx264", rate=30, options={"bf": "0"})
+        encoded.width, encoded.height = decoded.width, decoded.height
+        encoded.pix_fmt = "yuv420p"
+        for index, frame in enumerate(reader.decode(decoded)):
+            if index == 8:
+                break
+            frame.pts, frame.time_base = index, Fraction(1, 30)
+            for packet in encoded.encode(frame):
+                writer.mux(packet)
+        for packet in encoded.encode():
+            writer.mux(packet)
+    source.unlink()
+    return copy
+
+
+def test_a_video_cut_short_blocks_only_the_episodes_it_lost(tmp_path):
+    """A shared video that ends early blocks the episode it lost, by contract."""
+
+    report = kalanos.api.grade(str(_lerobot_with_a_cut_short_video(tmp_path)))
+
+    assert report.gate is not None
+    failing = report.gate.failing_episodes
+    assert [item.episode_id.rpartition("::")[2] for item in failing] == [
+        "episode_000001"
+    ]
+    assert all(
+        reason.endswith(tuple(f".{metric}" for metric in STRUCTURAL_VISION_METRICS))
+        for reason in failing[0].reasons
+    )
+    findings = {
+        finding.metric_id: finding
+        for finding in report.findings
+        if finding.episode_id is not None
+        and finding.episode_id.endswith("episode_000001")
+    }
+    frame_count = findings["vision.frame_count_vs_timebase"]
+    assert (frame_count.consequence, frame_count.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    assert (frame_count.evidence["present"], frame_count.evidence["implied"]) == (0, 6)
+    assert frame_count.source_path is not None
+    assert frame_count.source_path.endswith(f"{CAMERA_FIELD}/chunk-000/file-000.mp4")
+    assert findings["vision.camera_stream_present"].consequence == Consequence.BLOCK
 
 
 @pytest.mark.parametrize(

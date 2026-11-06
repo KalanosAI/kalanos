@@ -19,7 +19,17 @@ import yaml
 # decorators, so the registry reflects the full built-in set below.
 import kalanos.analysis.metrics  # noqa: F401
 from kalanos.analysis.metrics.registry import registered_metrics
-from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
+from kalanos.analysis.models.binding import RequirementsSection
+from kalanos.analysis.models.eligibility import BlockingRoute
+from kalanos.analysis.models.policy import (
+    Band,
+    MetricOverride,
+    MetricPolicy,
+    OverrideCondition,
+    Policy,
+    ScoreMode,
+)
+from kalanos.analysis.reporting.assemble import scope_policy
 from kalanos.assets.policy import load_default_policy, load_policy
 
 
@@ -473,6 +483,111 @@ def test_an_extending_policy_merges_family_weights_key_by_key(tmp_path):
         **DEFAULT_FAMILY_WEIGHTS,
         "timing": 5,
     }
+
+
+def test_an_extending_policy_keeps_the_scope_keys_of_a_metric_it_retunes(tmp_path):
+    """Verify a thresholds-only retune keeps route, scope flag and overrides."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {
+                    "vision.frame_count_vs_timebase": {
+                        "thresholds": {"default": {"good": 0.02, "bad": 0.1}},
+                    }
+                },
+            }
+        )
+    )
+
+    retuned = _entry(load_policy(override), "frame_count_vs_timebase")
+    base = _entry(load_default_policy(), "frame_count_vs_timebase")
+
+    assert retuned.route == BlockingRoute.CONTRACT
+    assert retuned.graded_in_every_scope
+    assert retuned.overrides == base.overrides
+    assert retuned.thresholds == {"default": Band(good=0.02, bad=0.1)}
+
+
+def test_an_extending_policy_can_clear_a_metrics_overrides(tmp_path):
+    """Verify an explicit `overrides: []` replaces the base's overrides."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"vision.frame_count_vs_timebase": {"overrides": []}},
+            }
+        )
+    )
+
+    assert _entry(load_policy(override), "frame_count_vs_timebase").overrides == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        [{"when": {"capabilities_none": ["video_quality"]}}],
+        [{"when": {"capabilities_none": []}, "weight": 0}],
+        [{"when": {"capabilities_any": ["video_quality"]}, "weight": 0}],
+        [{"when": {"capabilities_none": ["video_quality"]}, "core": False}],
+        [
+            {"when": {"capabilities_none": ["video_quality"]}, "weight": 0},
+            {"when": {"capabilities_none": ["lidar"]}, "weight": 1},
+        ],
+    ],
+    ids=[
+        "sets-nothing",
+        "empty-condition",
+        "unknown-condition",
+        "unsupported-key",
+        "two-set-weight",
+    ],
+)
+def test_a_malformed_override_fails_to_load(tmp_path, overrides):
+    """Verify an empty, unknown or colliding override fails at load."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"timing.drop_rate": {"overrides": overrides}},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not match the policy schema"):
+        load_policy(override)
+
+
+def test_a_scope_applies_only_the_overrides_whose_condition_it_meets():
+    """Verify an override applies only under a scope lacking its capabilities."""
+
+    policy = load_default_policy()
+    key = "timing.drop_rate"
+    policy.metrics[key] = policy.metrics[key].model_copy(
+        update={
+            "overrides": [
+                MetricOverride(
+                    when=OverrideCondition(capabilities_none=["capture_timing"]),
+                    weight=9,
+                    report_only=True,
+                )
+            ]
+        }
+    )
+
+    without = scope_policy(policy, RequirementsSection()).metrics[key]
+    with_capability = scope_policy(
+        policy, RequirementsSection(required_capabilities=["capture_timing"])
+    ).metrics[key]
+
+    assert (without.weight, without.report_only) == (9, True)
+    assert (with_capability.weight, with_capability.report_only) == (4, False)
 
 
 def test_a_metric_key_without_exactly_one_dot_fails_to_construct():

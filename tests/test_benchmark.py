@@ -17,7 +17,7 @@ from kalanos import benchmark
 from kalanos.analysis.metrics.registry import registered_metrics
 from kalanos.analysis.models.binding import Bundle, RequirementsSection
 from kalanos.analysis.models.domain import Clock, ClockInfo, Episode
-from kalanos.assets.policy import load_policy
+from kalanos.assets.policy import load_default_policy, load_policy
 from kalanos.benchmark import (
     Benchmark,
     BenignRate,
@@ -38,6 +38,13 @@ from helpers import FIXTURES_DIR
 # ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
+
+# Vision metrics the default policy grades in every scope.
+STRUCTURAL_VISION_METRICS = frozenset(
+    key
+    for key, entry in load_default_policy().metrics.items()
+    if entry.graded_in_every_scope
+)
 
 # A scope under which vision grades, so cameras are decoded for injection.
 VIDEO_SCOPE = Bundle(
@@ -241,7 +248,7 @@ def test_blur_and_clipping_are_injected_into_in_memory_frames():
         assert defect not in rates.not_injected, rates.not_injected.get(defect)
 
 
-def test_the_benchmark_keeps_vision_report_only_outside_a_video_scope():
+def test_the_benchmark_keeps_image_quality_report_only_outside_a_video_scope():
     """Verify the benchmark scopes vision as grade does, and closes remote video."""
 
     closed: list[None] = []
@@ -251,9 +258,17 @@ def test_the_benchmark_keeps_vision_report_only_outside_a_video_scope():
         )
 
     vision_rows = [row for row in dataset.benign if row.family == "vision"]
-    assert vision_rows
+    structural = {
+        row.metric
+        for row in vision_rows
+        if f"{row.family}.{row.metric}" in STRUCTURAL_VISION_METRICS
+    }
+    assert {f"vision.{metric}" for metric in structural} == STRUCTURAL_VISION_METRICS
     for row in vision_rows:
-        assert row.observed_episodes == 0, row
+        if row.metric in structural:
+            assert row.firing_episodes == 0, row
+        else:
+            assert row.observed_episodes == 0, row
     assert closed
 
 
