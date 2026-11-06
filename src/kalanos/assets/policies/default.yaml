@@ -80,11 +80,17 @@ metrics:
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
   # real recordings. A count mismatch breaks a declared invariant with direct
   # evidence, so it blocks through the contract route without a calibration
-  # manifest; the band itself stays candidate.
+  # manifest, in every scope; the band itself stays candidate. Outside a scope
+  # that grades vision it carries weight 0, so the score does not move.
   vision.frame_count_vs_timebase:
     weight: 4
     core: true
     route: contract
+    graded_in_every_scope: true
+    overrides:
+      - when:
+          capabilities_none: [video_quality, sampled_video_quality]
+        weight: 0
     thresholds:
       default:
         good: 0.01
@@ -107,12 +113,13 @@ metrics:
 
   # A declared camera whose file is missing, unreadable or frameless breaks a
   # declared invariant with direct evidence, so it blocks through the contract
-  # route without a calibration manifest, under a scope that grades vision.
+  # route without a calibration manifest, in every scope.
   # The flag is only ever 0 or 1, so any bad bound between them grades it the same.
   # Weight 0: a pass/fail gate, not a quality measure, so it never moves the vision score.
   vision.camera_stream_present:
     weight: 0
     route: contract
+    graded_in_every_scope: true
     higher_is_better: true
     thresholds:
       default:

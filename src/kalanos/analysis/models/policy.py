@@ -59,6 +59,70 @@ class Band(BaseModel):
     bad: float | None = None
 
 
+class OverrideCondition(BaseModel):
+    """When a metric override applies, judged from the scope's required capabilities.
+
+    Attributes
+    ----------
+    capabilities_none : list[str]
+        The override applies when the scope requires none of these capabilities.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    capabilities_none: list[str] = Field(min_length=1)
+
+    def holds(self, required_capabilities: list[str]) -> bool:
+        """Whether a scope requiring `required_capabilities` meets this condition."""
+
+        return not set(self.capabilities_none) & set(required_capabilities)
+
+
+class MetricOverride(BaseModel):
+    """A change to one metric's policy under the scopes that meet `when`.
+
+    Attributes
+    ----------
+    when : OverrideCondition
+        Which scopes the change applies under.
+    weight : float or None
+        The metric's weight under those scopes, or `None` to keep its own.
+    report_only : bool or None
+        The metric's `report_only` under those scopes, or `None` to keep its own.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: OverrideCondition
+    weight: float | None = Field(default=None, ge=0)
+    report_only: bool | None = None
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> "MetricOverride":
+        """Refuse an override that sets no key.
+
+        Returns
+        -------
+        MetricOverride
+            `self`, unchanged, once it sets at least one key.
+
+        Raises
+        ------
+        ValueError
+            If neither `weight` nor `report_only` is set.
+        """
+
+        if not self.changes():
+            raise ValueError("an override must set weight or report_only")
+        return self
+
+    def changes(self) -> dict[str, float | bool]:
+        """The metric keys this override sets, with their values."""
+
+        values = {"weight": self.weight, "report_only": self.report_only}
+        return {key: value for key, value in values.items() if value is not None}
+
+
 class MetricPolicy(BaseModel):
     """One metric's policy: how its value is reduced, then interpolated.
 
@@ -106,6 +170,12 @@ class MetricPolicy(BaseModel):
         declared invariant with direct evidence; `statistical` (the default)
         for a threshold detector, which `Policy.enforce_calibration` may
         downgrade to review when no calibration manifest covers it.
+    graded_in_every_scope : bool
+        Whether a vision metric grades under a scope that grades no video quality,
+        where every other vision metric is report-only.
+    overrides : list[MetricOverride]
+        Changes to this entry under the scopes each one's condition names.
+        No two overrides set the same key.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -113,6 +183,8 @@ class MetricPolicy(BaseModel):
     report_only: bool = False
     consequence: Consequence | None = None
     route: BlockingRoute | None = None
+    graded_in_every_scope: bool = False
+    overrides: list[MetricOverride] = Field(default_factory=list)
     higher_is_better: bool = False
     mode: ScoreMode = ScoreMode.DIRECT
     target: str | None = None
@@ -142,6 +214,34 @@ class MetricPolicy(BaseModel):
             raise ValueError("mode: abs_dev requires a target")
         if self.mode == ScoreMode.DIRECT and self.target is not None:
             raise ValueError("target is only meaningful under mode: abs_dev")
+        return self
+
+    @model_validator(mode="after")
+    def _overrides_set_disjoint_keys(self) -> "MetricPolicy":
+        """Refuse two overrides that set the same key.
+
+        Conditions can overlap,
+        so two overrides setting one key would need a precedence rule.
+
+        Returns
+        -------
+        MetricPolicy
+            `self`, unchanged, once every key is set by at most one override.
+
+        Raises
+        ------
+        ValueError
+            If two overrides set the same key.
+        """
+
+        seen: set[str] = set()
+        for override in self.overrides:
+            repeated = seen & override.changes().keys()
+            if repeated:
+                raise ValueError(
+                    f"more than one override sets {', '.join(sorted(repeated))}"
+                )
+            seen |= override.changes().keys()
         return self
 
     @model_validator(mode="after")

@@ -479,22 +479,30 @@ def grades_vision(requirements: RequirementsSection) -> bool:
 
 
 def scope_policy(policy: Policy, requirements: RequirementsSection) -> Policy:
-    """Make the vision metrics report-only unless the scope requires a video capability.
+    """Apply this scope's metric overrides; report-only vision outside a video scope.
 
+    An override whose condition the scope meets replaces the keys it sets.
     A scope that asks for neither sampled nor full video quality,
-    numeric-core among them, must not let a camera decide or score an episode,
+    numeric-core among them, must not let image quality decide or score an episode,
     so its vision results are measured and shown but never graded.
+    A vision metric marked `graded_in_every_scope` still grades there,
+    and keeps whatever `report_only` the policy and its overrides give it.
     """
 
-    if grades_vision(requirements):
-        return policy
+    vision_graded = grades_vision(requirements)
     prefix = f"{Family.VISION.value}."
-    metrics = {
-        key: entry.model_copy(update={"report_only": True})
-        if key.startswith(prefix)
-        else entry
-        for key, entry in policy.metrics.items()
-    }
+    metrics = {}
+    for key, entry in policy.metrics.items():
+        for override in entry.overrides:
+            if override.when.holds(requirements.required_capabilities):
+                entry = entry.model_copy(update=override.changes())
+        if (
+            not vision_graded
+            and key.startswith(prefix)
+            and not entry.graded_in_every_scope
+        ):
+            entry = entry.model_copy(update={"report_only": True})
+        metrics[key] = entry
     return policy.model_copy(update={"metrics": metrics})
 
 

@@ -46,7 +46,13 @@ _DEFAULT_POLICY_RESOURCE = ("policies", "default.yaml")
 PACKAGED_POLICIES = ("default", "language_conditioned")
 
 # Metric-entry keys an `extends` override keeps from its base unless it sets them.
-_INHERITED_METRIC_KEYS = ("weight", "core")
+_INHERITED_METRIC_KEYS = (
+    "weight",
+    "core",
+    "route",
+    "graded_in_every_scope",
+    "overrides",
+)
 
 
 def _packaged_yaml(name: str) -> str:
@@ -62,9 +68,11 @@ def _packaged_yaml(name: str) -> str:
 def _resolve_extends(payload: Any, *, source: str) -> Any:
     """Merge a policy that `extends` a packaged one over its base.
 
-    `metrics` merge entry by entry, each entry replacing the base's whole
-    entry except its `weight` and `core`, which the entry keeps from the base
-    unless it sets them (`weight: null` included). `family_weights` merge
+    `metrics` merge entry by entry, each entry replacing the base's whole entry
+    except its `weight`, `core`, `route`, `graded_in_every_scope` and `overrides`,
+    which the entry keeps from the base unless it sets them,
+    `weight: null` and `overrides: []` included.
+    `family_weights` merge
     family by family.
     Every other top-level key replaces the base's, so `gate: null` switches
     the gate off.
