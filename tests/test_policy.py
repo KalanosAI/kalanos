@@ -107,6 +107,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "vision.dark_frame_pct":               3,
     "vision.bright_frame_pct":             3,
     "vision.camera_stream_present":        0,
+    "vision.frames_readable":              0,
     "vision.video_format_consistency":     1,
     "vision.cut_count":                    4,
     "vision.dropped_chunk_count":          4,
