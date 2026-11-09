@@ -60,7 +60,8 @@ logger = logging.getLogger(__name__)
 # A container has one read position, so a read checks it out of the pool
 # and puts it back when done; no two reads ever share one.
 # Each remote handle's readahead cache holds a bounded number of blocks,
-# so read memory is capped by that bound times this many files.
+# so read memory is capped by that bound times this many idle files
+# plus the file being read, which is out of the pool while it is read.
 _MAX_OPEN_FILES = 4
 # Idle files only, least recently used first.
 _OPEN_FILES: "OrderedDict[str, _VideoFile]" = OrderedDict()

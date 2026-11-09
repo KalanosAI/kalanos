@@ -70,7 +70,8 @@ class Settings(BaseSettings):
         `(remote_readahead_blocks + 5) * remote_block_bytes`:
         the blocks fetched ahead, the block being read and the 4 before it.
         It briefly holds `(2 * remote_readahead_blocks + 5) * remote_block_bytes`
-        while fetches dropped by a seek finish. Up to 4 are open at once.
+        while fetches dropped by a seek finish.
+        Up to 4 idle files stay open, plus the one being read.
     vision_samples : int or None
         How many frames blur and exposure sample, and windows frozen frames read,
         overridden for one invocation by the CLI's `--vision-samples` option.
