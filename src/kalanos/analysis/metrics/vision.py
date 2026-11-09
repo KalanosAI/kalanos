@@ -1,6 +1,6 @@
 """The vision family.
 
-Fourteen metrics measure camera footage:
+Fifteen metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
@@ -14,7 +14,8 @@ Fourteen metrics measure camera footage:
   decoding nothing, under a full scan too;
 - camera_sync_skew_ms compares the cameras of one episode through the same probe;
 - camera_stream_present and video_format_consistency share one read of the
-  container header, and presence also takes the segment's first frame.
+  container header, and presence also takes the segment's first frame;
+  frames_readable judges the segment's packet probe and the shared decode.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
@@ -275,6 +276,8 @@ class _Frames:
         of its `_SAMPLE_SIZE` gray image, scaled to 0-1, keyed by position.
     stopped : tuple of (Availability, str) or None
         Why the read stopped early, `None` when it ran to the end.
+    failure : DecodeFailed or None
+        The decode failure that stopped the read, a `ReadInterrupted` included.
     """
 
     windows: list[tuple[int, int]]
@@ -296,6 +299,7 @@ class _Frames:
     evidence_positions: list[int]
     pooled: "dict[int, np.ndarray]"
     stopped: tuple[Availability, str] | None = None
+    failure: DecodeFailed | None = None
 
 
 @dataclass(frozen=True)
@@ -494,6 +498,9 @@ class _VisionAccumulator:
             What was kept, or `not_applicable` when no frame was read:
             a failure before any frame decoded, such as a file that cannot be opened,
             and a read that ended without a frame, are not camera footage to grade.
+            A failure in the file after a frame decoded is `unavailable`,
+            since `frames_readable` grades it,
+            and a failure outside the file, such as on the network, is an `error`.
         """
 
         numpy = load_numpy()
@@ -505,7 +512,12 @@ class _VisionAccumulator:
             # one that never yields a frame was never camera footage to read.
             if not n_read:
                 return not_applicable(str(failure))
-            stopped = (Availability.ERROR, str(failure))
+            stopped = (
+                Availability.ERROR
+                if isinstance(failure, ReadInterrupted)
+                else Availability.UNAVAILABLE,
+                str(failure),
+            )
         if not n_read and stopped is None:
             return not_applicable("no frame could be decoded")
 
@@ -534,6 +546,7 @@ class _VisionAccumulator:
             evidence_positions=list(self.evidence),
             pooled=self.pooled,
             stopped=stopped,
+            failure=failure,
             **self.kept,
         )
 
@@ -1231,7 +1244,9 @@ def _read(
     The reader the shared pass falls back on when a failure in another consumer's
     frames stopped it before the vision metrics' own.
     A read stopped by a decode cap, or by a decode failure after its first frame,
-    keeps what it read, with the reason in `stopped`.
+    keeps what it read, with the reason in `stopped`:
+    `unavailable` for a cap or a failure in the file, which `frames_readable` grades,
+    and `error` for a failure outside the file, such as on the network.
     A failure before any frame decoded, such as a file that cannot be opened,
     is `not_applicable`.
     """
@@ -2193,7 +2208,7 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
     That frame need not sit exactly at the segment's start,
     so a frame the encoder dropped there does not read as a missing camera.
     A decode failure after that frame is not this metric's to judge:
-    the sampled metrics report it, and the episode stays unknown.
+    `frames_readable` judges it.
 
     Parameters
     ----------
@@ -2293,6 +2308,95 @@ def _first_frame(
         return _stopped_result((Availability.UNAVAILABLE, str(exc)))
     except DecodeFailed as exc:
         return False, str(exc)
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="unreadable camera frames")
+def frames_readable(ctx: StreamContext) -> MetricResult:
+    """Whether the segment's packets demux and its frames decode past the first.
+
+    Judges the packet probe the timing metrics share
+    and the decode the other vision metrics share.
+    A file that does not open, or yields no frame of the segment,
+    is `camera_stream_present`'s to judge, so one cause raises one finding.
+    A failure outside the file, such as on the network, is `unavailable`.
+    The sampled read finds only failures in the frames it reads,
+    and the full tier reads every frame.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with 1.0 when every frame the segment's reads asked for
+        demuxed and decoded, and 0.0 when the file failed in the segment,
+        for the policy to regrade;
+        `not_applicable` when the stream is not backed by a video file
+        or no frame of it decoded.
+    """
+
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if load_numpy() is None:
+        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+
+    # A failure outside the file hides no defect another stage found,
+    # so it only decides the result when neither stage found one.
+    interrupted: ReadInterrupted | None = None
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(header, ReadInterrupted):
+        interrupted = header
+    elif isinstance(header, DecodeFailed):
+        return not_applicable("the file does not open; camera_stream_present judges it")
+
+    try:
+        read = _shared_read(ctx)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(read, MetricResult) or isinstance(read.frames, MetricResult):
+        if interrupted is not None:
+            return _stopped_result((Availability.UNAVAILABLE, str(interrupted)))
+        return not_applicable(
+            "no frame of the segment decoded; camera_stream_present judges it"
+        )
+
+    defect: DecodeFailed | None = None
+    stage: str | None = None
+    failure = read.frames.failure
+    if failure is None and isinstance(read.cut_failure, DecodeFailed):
+        failure = read.cut_failure
+    packets = _packets(payload)
+    # ReadInterrupted subclasses DecodeFailed, so it is checked first.
+    if isinstance(packets, ReadInterrupted):
+        interrupted = interrupted or packets
+    elif isinstance(packets, DecodeFailed):
+        defect, stage = packets, "demux"
+    if isinstance(failure, ReadInterrupted):
+        interrupted = interrupted or failure
+    elif failure is not None and defect is None:
+        defect, stage = failure, "decode"
+    if defect is None and interrupted is not None:
+        return _stopped_result((Availability.UNAVAILABLE, str(interrupted)))
+    if defect is None and read.frames.stopped is not None:
+        return _stopped_result(read.frames.stopped)
+
+    return MetricResult(
+        value=0.0 if defect is not None else 1.0,
+        unit="flag",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "camera": ctx.stream.source_field,
+            "path": str(payload.path),
+            "stage": stage,
+            "reason": str(defect) if defect is not None else None,
+        },
+    )
 
 
 def _fps_differs(found: float, declared: float) -> bool:

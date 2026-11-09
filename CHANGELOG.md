@@ -13,6 +13,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Changed
 
 - Under the default scope and the packaged policies, an episode is blocked when a camera video holds a different number of frames than its timestamps imply, or when a camera file is missing, unreadable or holds no frame. Before, these two checks blocked only under a scope that grades video quality. Image-quality metrics stay report-only in the default scope, and the two checks carry no weight in its score.
+- Under every scope and the packaged policies, an episode is blocked when a camera segment's packets can't be read or one of its frames fails to decode after the first, with a finding that names the camera and its file. Before, a decode failure left the episode unknown as an operational error, and a packet read failure let it pass. The check carries no weight in the score, and a failure outside the file, such as a dropped connection, still leaves the episode unknown.
 
 ### Fixed
 
