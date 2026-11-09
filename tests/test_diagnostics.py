@@ -676,7 +676,7 @@ def test_video_decoder_failure_preserves_already_examined_frames(monkeypatch):
 
     monkeypatch.setattr(SyntheticFrames, "gray_windows", broken)
     r = camera_read(audit([episode(camera())], DiagnosticPlan(vision=True)))
-    assert r.availability.value == "error"
+    assert r.availability.value == "unavailable"
     assert r.measurements["examined_frames"] == 1
     assert r.evidence["frames"][0]["source_row"] == 0
 

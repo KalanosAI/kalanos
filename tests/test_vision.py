@@ -8,6 +8,7 @@
 import json
 import random
 import shutil
+from contextlib import closing
 from fractions import Fraction
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from kalanos.analysis.adapters.video import (
     ContainerHeader,
     DeclaredFormat,
     DecodeFailed,
+    ReadInterrupted,
     SegmentPackets,
     VideoPayload,
 )
@@ -47,6 +49,7 @@ from kalanos.analysis.metrics.vision import (
     exposure_shift_pct,
     footage_vector,
     frame_count_vs_timebase,
+    frames_readable,
     frozen_frame_pct,
     max_gap_s,
     pts_defect_pct,
@@ -122,6 +125,7 @@ VISION_METRICS = [
     frame_count_vs_timebase,
     pts_defect_pct,
     max_gap_s,
+    frames_readable,
 ]
 
 ACTION_TYPE = "action.joint_position_command"
@@ -291,6 +295,77 @@ def _assert_not_applicable(result) -> str:
     return reason
 
 
+def _fail_after_the_first_frame(monkeypatch, failure: type[DecodeFailed]) -> None:
+    """Make every video read yield its first frame and then raise `failure`."""
+
+    windows = VideoPayload._windows
+
+    def failing(self, *args, **kwargs):
+        with closing(windows(self, *args, **kwargs)) as frames:
+            for count, item in enumerate(frames):
+                if count:
+                    raise failure(f"{self.path}: corrupt packet")
+                yield item
+
+    monkeypatch.setattr(VideoPayload, "_windows", failing)
+
+
+def _fail_the_packet_probe(monkeypatch, failure: type[DecodeFailed]) -> None:
+    """Make every packet probe raise `failure`."""
+
+    def failing(self):
+        raise failure(f"{self.path}: unreadable packet")
+
+    monkeypatch.setattr(VideoPayload, "packet_times", failing)
+
+
+def _scopes():
+    """The packaged policy under a video scope and under the default scope."""
+
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    return video_scope, scope_policy(load_default_policy(), RequirementsSection())
+
+
+def _grade_camera(stream: Stream, policy, full_frame_scan: bool = False):
+    """Grade `stream` under `policy`, returning its metrics and its findings by id."""
+
+    graded, findings = grade_stream(
+        stream,
+        policy=policy,
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+        full_frame_scan=full_frame_scan,
+    )
+    return graded, {finding.metric_id: finding for finding in findings}
+
+
+def _assert_blocks_the_camera(finding: Finding, stage: str, message: str) -> None:
+    """Assert `finding` blocks by contract, naming the camera, file and `stage`."""
+
+    assert (finding.consequence, finding.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    assert finding.source_field == CAMERA_FIELD
+    assert finding.source_path is not None
+    assert finding.source_path.endswith(LEROBOT_VIDEO.name)
+    assert finding.evidence["stage"] == stage
+    assert message in finding.evidence["reason"]
+
+
+def _eligibility_reasons(report) -> list[set[str]]:
+    """Each episode's eligibility reason ids."""
+
+    return [
+        {reason.id for reason in episode.eligibility.reasons}
+        for episode in report.episodes
+    ]
+
+
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
 # ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
 # ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
@@ -430,6 +505,7 @@ def test_an_absent_camera_blocks_in_every_scope(tmp_path, build):
             BlockingRoute.CONTRACT,
         )
         assert finding.source_field == CAMERA_FIELD
+        assert "vision.frames_readable" not in _grade(stream, scoped)
 
 
 @pytest.mark.parametrize("failing", ["open", "read"])
@@ -842,6 +918,7 @@ def test_the_default_scope_grades_only_the_structural_vision_checks():
     assert STRUCTURAL_VISION_METRICS == {
         "vision.frame_count_vs_timebase",
         "vision.camera_stream_present",
+        "vision.frames_readable",
     }
     for key in vision_keys:
         entry = scoped.metrics[key]
@@ -854,6 +931,7 @@ def test_the_default_scope_grades_only_the_structural_vision_checks():
         RequirementsSection(required_capabilities=["sampled_video_quality"]),
     )
     assert video_scope.metrics["vision.frame_count_vs_timebase"].weight == 4
+    assert video_scope.metrics["vision.frames_readable"].weight == 0
 
 
 def test_a_users_report_only_structural_check_stays_report_only():
@@ -1002,6 +1080,179 @@ def test_a_video_cut_short_blocks_only_the_episodes_it_lost(tmp_path):
     assert frame_count.source_path is not None
     assert frame_count.source_path.endswith(f"{CAMERA_FIELD}/chunk-000/file-000.mp4")
     assert findings["vision.camera_stream_present"].consequence == Consequence.BLOCK
+
+
+@pytest.mark.parametrize("full_frame_scan", [False, True], ids=["sampled", "full"])
+def test_a_frame_that_fails_to_decode_blocks_in_every_scope(
+    monkeypatch, full_frame_scan
+):
+    """A frame that fails to decode after the first blocks, naming camera and file."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        graded, findings = _grade_camera(stream, scoped, full_frame_scan)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "decode", "corrupt packet"
+        )
+        assert graded.metrics["sharpness_score"].availability == (
+            Availability.UNAVAILABLE
+        )
+        assert "vision.camera_stream_present" not in findings
+
+
+def test_unreadable_packets_block_in_every_scope(monkeypatch):
+    """A segment whose packets cannot be demuxed blocks, naming camera and file."""
+
+    _fail_the_packet_probe(monkeypatch, DecodeFailed)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "demux", "unreadable packet"
+        )
+
+
+def test_a_failure_only_in_cut_windows_reads_as_a_defect(monkeypatch, tmp_path):
+    """A frame that fails to decode in cut_count's windows alone is still a defect."""
+
+    stream = _paced_camera(
+        UPath(tmp_path / "long.mp4"), list(range(1000)), CAMERA_FIELD
+    )
+    ctx = stream_context(stream, episode_streams=[_moving_actions(1000)])
+    windows, _sampled = vision._layout(ctx, False)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    cut_only = [
+        (start, end)
+        for start, end in vision._merge(windows + plan.windows, 1000)
+        if not any(s < end and start < e for s, e in windows)
+    ]
+    failing_at = cut_only[0][0]
+
+    gray_windows = VideoPayload.gray_windows
+
+    def failing(self, windows, size, native=frozenset(), **caps):
+        counts = [0] * len(windows)
+        for item in gray_windows(self, windows, size, native, **caps):
+            index = windows[item[0]][0] + counts[item[0]]
+            counts[item[0]] += 1
+            if index == failing_at:
+                raise DecodeFailed("corrupt packet")
+            yield item
+
+    monkeypatch.setattr(VideoPayload, "gray_windows", failing)
+    result = frames_readable(ctx)
+
+    assert sharpness_score(ctx).value is not None
+    assert result.value == 0.0
+    assert (result.evidence["stage"], result.evidence["reason"]) == (
+        "decode",
+        "corrupt packet",
+    )
+
+
+@pytest.mark.parametrize("stage", ["decode", "demux"])
+def test_a_network_interruption_reads_no_defect(monkeypatch, stage):
+    """A read that fails outside the file says nothing about it, and blocks nothing."""
+
+    if stage == "decode":
+        _fail_after_the_first_frame(monkeypatch, ReadInterrupted)
+    else:
+        _fail_the_packet_probe(monkeypatch, ReadInterrupted)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        graded, findings = _grade_camera(stream, scoped)
+        result = graded.metrics["frames_readable"]
+        assert (result.value, result.availability) == (None, Availability.UNAVAILABLE)
+        assert "vision.frames_readable" not in findings
+        if stage == "decode":
+            assert graded.metrics["sharpness_score"].availability == (
+                Availability.ERROR
+            )
+
+
+@pytest.mark.parametrize("probe", ["header", "packets"])
+def test_a_network_failure_elsewhere_still_blocks_a_corrupt_frame(monkeypatch, probe):
+    """A corrupt frame blocks though another read of its file fails on the network."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    if probe == "header":
+
+        def interrupted(self):
+            raise ReadInterrupted(f"{self.path}: connection reset")
+
+        monkeypatch.setattr(VideoPayload, "header", interrupted)
+    else:
+        _fail_the_packet_probe(monkeypatch, ReadInterrupted)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "decode", "corrupt packet"
+        )
+
+
+def test_an_undecodable_frame_blocks_the_episode_by_name(monkeypatch):
+    """A corrupt frame blocks each episode it falls in, as an unreadable camera."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE))
+
+    assert report.gate is not None
+    failing = report.gate.failing_episodes
+    assert len(failing) == len(report.episodes) == 2
+    assert all(
+        reason.endswith(".vision.frames_readable")
+        for item in failing
+        for reason in item.reasons
+    )
+    assert all("analysis_error" not in ids for ids in _eligibility_reasons(report))
+    findings = [
+        finding
+        for finding in report.findings
+        if finding.metric_id == "vision.frames_readable"
+    ]
+    assert len(findings) == 2
+    for finding in findings:
+        assert finding.source_path is not None
+        assert finding.source_path.endswith(f"{CAMERA_FIELD}/chunk-000/file-000.mp4")
+
+
+def test_an_interrupted_read_leaves_the_episode_unknown(monkeypatch):
+    """A read that fails on the network keeps the episode unknown and blocks nothing."""
+
+    _fail_after_the_first_frame(monkeypatch, ReadInterrupted)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE))
+
+    assert not [
+        finding
+        for finding in report.findings
+        if finding.metric_id == "vision.frames_readable"
+    ]
+    assert all("analysis_error" in ids for ids in _eligibility_reasons(report))
+
+
+def test_the_metadata_tier_blocks_no_undecodable_frame(monkeypatch):
+    """The metadata tier reads no frame and no packet, so it blocks on neither."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    _fail_the_packet_probe(monkeypatch, DecodeFailed)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE), tier=ExecutionTier.METADATA)
+
+    assert report.gate is not None
+    assert not report.gate.failing_episodes
 
 
 @pytest.mark.parametrize(
@@ -2079,6 +2330,7 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         "pts_defect_pct",
         "max_gap_s",
         "camera_stream_present",
+        "frames_readable",
         "video_format_consistency",
     ):
         assert "metadata tier" in _assert_not_applicable(graded.metrics[name])
@@ -2190,25 +2442,34 @@ def test_a_full_scan_reads_past_the_decode_budget():
     assert len(frames.frames) == 100
 
 
-def test_a_decode_failure_is_an_error_and_keeps_its_frames(monkeypatch):
-    """A decode that fails part-way is an error, and the frame before it is kept."""
+@pytest.mark.parametrize(
+    ("failure", "availability"),
+    [
+        (DecodeFailed, Availability.UNAVAILABLE),
+        (ReadInterrupted, Availability.ERROR),
+    ],
+    ids=["in_the_file", "network"],
+)
+def test_a_decode_failure_keeps_its_frames(monkeypatch, failure, availability):
+    """A decode that fails part-way keeps the frame before it.
+
+    A failure in the file is unavailable, since frames_readable grades it,
+    and one outside the file is an error.
+    """
 
     gray_windows = SyntheticFrames.gray_windows
 
     def failing(self, windows, size, native=frozenset(), **caps):
         yield next(gray_windows(self, windows, size, native, **caps))
-        raise DecodeFailed("corrupt packet")
+        raise failure("corrupt packet")
 
     monkeypatch.setattr(SyntheticFrames, "gray_windows", failing)
     ctx = stream_context(clean_frames(frames=100))
 
-    assert sharpness_score(ctx).availability == Availability.ERROR
+    assert sharpness_score(ctx).availability == availability
     frames = camera_frames(ctx)
     assert frames is not None
-    assert (frames.availability, frames.reason) == (
-        Availability.ERROR,
-        "corrupt packet",
-    )
+    assert (frames.availability, frames.reason) == (availability, "corrupt packet")
     assert len(frames.frames) == 1
 
 
