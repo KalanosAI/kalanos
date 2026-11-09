@@ -13,8 +13,9 @@ optional decoder.
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from upath import UPath
 
 # Internal
+from kalanos.analysis.adapters.readahead import ReadaheadCache
 from kalanos.analysis.entry_points import MissingDependency
 from kalanos.analysis.optional import load_numpy
 
@@ -57,14 +59,18 @@ logger = logging.getLogger(__name__)
 # keyed on their path, which assumes a file does not change during a run.
 # A container has one read position, so a read checks it out of the pool
 # and puts it back when done; no two reads ever share one.
-# Each remote handle's block cache holds at most 32 blocks (fsspec's default)
-# of this size.
-_REMOTE_BLOCK_SIZE = 1 << 20
+# Each remote handle's readahead cache holds a bounded number of blocks,
+# so read memory is capped by that bound times this many files.
 _MAX_OPEN_FILES = 4
 # Idle files only, least recently used first.
 _OPEN_FILES: "OrderedDict[str, _VideoFile]" = OrderedDict()
 # Guards `_OPEN_FILES` alone, never held during a read.
 _OPEN_LOCK = threading.Lock()
+# Set for a run by `use_remote_reads`, so this module needs no access to settings.
+# Unset, a remote file is read with `RemoteReads()`'s defaults.
+_REMOTE_READS: "ContextVar[RemoteReads | None]" = ContextVar(
+    "kalanos_remote_reads", default=None
+)
 
 # FFmpeg's names for its colour codes, as libavutil/pixdesc.c gives them.
 # Unspecified and reserved codes are left out, so they read as unstated.
@@ -385,13 +391,34 @@ class _VideoFile:
     header: ContainerHeader | None
 
     def close(self) -> None:
-        """Close the container, then the file object it reads."""
+        """Close the container, then the file object it reads and its cache."""
 
         try:
             self.container.close()
         finally:
             if self.handle is not None:
+                # fsspec before 2026.7 drops the cache on close without closing it,
+                # which would leave its fetching threads alive.
+                cache = getattr(self.handle, "cache", None)
+                if isinstance(cache, ReadaheadCache):
+                    cache.close()
                 self.handle.close()
+
+
+@dataclass(frozen=True)
+class RemoteReads:
+    """How a remote video file is fetched.
+
+    Attributes
+    ----------
+    block_bytes : int
+        The size of each range request.
+    readahead_blocks : int
+        How many blocks are fetched ahead of a sequential read; `0` turns it off.
+    """
+
+    block_bytes: int = 4 * 1024 * 1024
+    readahead_blocks: int = 5
 
 
 @dataclass(frozen=True)
@@ -857,6 +884,27 @@ def _tag(container: Any, stream: Any, keys: Sequence[str]) -> str | None:
     return None
 
 
+@contextmanager
+def use_remote_reads(reads: RemoteReads) -> Iterator[None]:
+    """Fetch remote video files opened in the body as `reads` says.
+
+    Parameters
+    ----------
+    reads : RemoteReads
+        The block size and readahead for the run; restored on exit, even on error.
+
+    Yields
+    ------
+    None
+    """
+
+    token = _REMOTE_READS.set(reads)
+    try:
+        yield
+    finally:
+        _REMOTE_READS.reset(token)
+
+
 def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
     """Open `path` as a PyAV container, local or remote, and read its header.
 
@@ -878,7 +926,13 @@ def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
         container = av.open(str(path))
     else:
         # PyAV cannot resolve an fsspec URL such as hf://, so it reads a file object.
-        handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
+        reads = _REMOTE_READS.get() or RemoteReads()
+        handle = path.open(
+            "rb",
+            block_size=reads.block_bytes,
+            cache_type=ReadaheadCache.name,
+            cache_options={"readahead": reads.readahead_blocks},
+        )
         try:
             container = av.open(handle)
         except BaseException:

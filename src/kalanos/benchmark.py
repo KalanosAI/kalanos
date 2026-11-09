@@ -29,8 +29,10 @@ from kalanos.analysis.adapters.select import select_adapter
 from kalanos.analysis.adapters.video import (
     DecodeFailed,
     DecoderUnavailable,
+    RemoteReads,
     VideoPayload,
     close_video_files,
+    use_remote_reads,
 )
 from kalanos.analysis.bindings import (
     binding_records,
@@ -752,8 +754,12 @@ def benchmark_dataset(
             yield bound
 
     vision = config.vision
+    reads = RemoteReads(
+        block_bytes=settings.remote_block_bytes,
+        readahead_blocks=settings.remote_readahead_blocks,
+    )
     try:
-        with use_tier(config.scope.tier):
+        with use_tier(config.scope.tier), use_remote_reads(reads):
             rates = benchmark_episodes(
                 episodes=bound_episodes(),
                 policy=episode_policy,

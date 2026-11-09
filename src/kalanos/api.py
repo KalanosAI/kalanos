@@ -17,7 +17,11 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis import pipeline
-from kalanos.analysis.adapters.video import close_video_files
+from kalanos.analysis.adapters.video import (
+    RemoteReads,
+    close_video_files,
+    use_remote_reads,
+)
 from kalanos.analysis.compare import compare_reports as compare
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.models.binding import Bundle
@@ -297,20 +301,25 @@ def _grade(
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,
     # so an empty report means the path itself held nothing.
     vision = config.vision
+    reads = RemoteReads(
+        block_bytes=settings.remote_block_bytes,
+        readahead_blocks=settings.remote_readahead_blocks,
+    )
     try:
-        result = pipeline.run(
-            root,
-            policy=policy,
-            source=source,
-            overrides=config.overrides,
-            config=config,
-            producer=producer,
-            run_info=run_info,
-            vision_samples=vision.sample_frames,
-            full_frame_scan=vision.full_frame_scan,
-            vision=vision,
-            keep_episodes=keep_episodes,
-        )
+        with use_remote_reads(reads):
+            result = pipeline.run(
+                root,
+                policy=policy,
+                source=source,
+                overrides=config.overrides,
+                config=config,
+                producer=producer,
+                run_info=run_info,
+                vision_samples=vision.sample_frames,
+                full_frame_scan=vision.full_frame_scan,
+                vision=vision,
+                keep_episodes=keep_episodes,
+            )
     finally:
         # Video files stay open across episodes, local and remote; a later grade
         # must not read a file that changed since through a stale container.

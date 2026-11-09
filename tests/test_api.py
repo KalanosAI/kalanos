@@ -18,9 +18,12 @@ import yaml
 
 # Internal
 import kalanos
+from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.video import RemoteReads
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
 from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION
 from kalanos.assets.policy import load_default_policy, load_policy
+from kalanos.core.settings import get_settings
 
 # Local
 from helpers import FIXTURES_DIR
@@ -128,6 +131,27 @@ def test_grade_returns_a_report_for_a_fixture_dataset():
 
     assert isinstance(report, kalanos.Report)
     assert report.episodes
+
+
+def test_grade_passes_the_remote_read_settings(monkeypatch):
+    """Verify the remote block size and readahead reach the files a grade opens."""
+
+    monkeypatch.setenv("KALANOS_REMOTE_BLOCK_BYTES", "131072")
+    monkeypatch.setenv("KALANOS_REMOTE_READAHEAD_BLOCKS", "2")
+    get_settings.cache_clear()
+    seen = []
+    original = video._open_file
+
+    def recording(av, path):
+        seen.append(video._REMOTE_READS.get())
+        return original(av, path)
+
+    monkeypatch.setattr(video, "_open_file", recording)
+
+    kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert seen
+    assert set(seen) == {RemoteReads(block_bytes=131072, readahead_blocks=2)}
 
 
 def test_grade_accepts_a_plain_string():
