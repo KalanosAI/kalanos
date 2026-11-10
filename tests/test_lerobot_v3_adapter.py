@@ -38,6 +38,7 @@ from kalanos.analysis.models.domain import (
     MappingSource,
     TimestampDtype,
 )
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
@@ -78,6 +79,13 @@ _POLARS_2 = pytest.mark.skipif(
     int(pl.__version__.split(".")[0]) < 2,
     reason="polars 1 loads extension columns as their storage",
 )
+
+_MISMATCH_METRIC = "feature_mismatch_count"
+_MISMATCH_FINDING = f"schema.{_MISMATCH_METRIC}"
+
+_MISSING_FEATURE = {
+    "observation.effort": {"dtype": "float32", "shape": [6], "names": None}
+}
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -762,3 +770,65 @@ def test_a_2d_feature_is_declared_at_the_metadata_tier(tmp_path):
             s for s in episode.streams if s.source_field == "observation.tactile"
         )
         assert len(tactile.channels) == 2
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_every_fixture_episode_agrees_with_its_declared_features(tier):
+    """Verify each episode carries a schema check of its own data file, all clean."""
+
+    with use_tier(tier):
+        episodes = list(LeRobotV3Adapter().episodes(LEROBOT_FIXTURE))
+
+    chunk = LEROBOT_FIXTURE / "data" / "chunk-000" / "file-000.parquet"
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert episode.schema_check is not None
+        assert episode.schema_check.mismatches == []
+        assert "observation.images.up" not in episode.schema_check.checked
+        assert str(episode.schema_check.source_path) == str(chunk)
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_a_declared_feature_with_no_column_blocks_every_episode(tmp_path, tier):
+    """Verify a missing declared column blocks each episode, naming column and file."""
+
+    root = _with_features(tmp_path / "lerobot_v3_tiny", _MISSING_FEATURE, lambda _: [])
+
+    plain = grade(LEROBOT_FIXTURE, tier=tier)
+    report = grade(root, tier=tier)
+
+    assert len(report.episodes) == 2
+    for episode, expected in zip(report.episodes, plain.episodes, strict=True):
+        assert episode.metrics[_MISMATCH_METRIC].value == 1.0
+        assert episode.score.score == expected.score.score
+    findings = [f for f in report.findings if f.metric_id == _MISMATCH_FINDING]
+    assert len(findings) == 2
+    for finding in findings:
+        assert finding.consequence == Consequence.BLOCK
+        assert finding.evidence["path"].endswith("data/chunk-000/file-000.parquet")
+        assert [m["column"] for m in finding.evidence["mismatches"]] == [
+            "observation.effort"
+        ]
+        assert finding.evidence["mismatches"][0]["problem"] == "missing"
+    assert (
+        report.eligibility_counts is not None
+        and report.eligibility_counts.pass_count == 0
+    )
+
+
+def test_language_features_stored_as_lists_raise_no_mismatch(tmp_path):
+    """Verify language columns, including empty `List(Null)` ones, keep decisions."""
+
+    root = _with_features(
+        tmp_path / "lerobot_v3_tiny", _LANGUAGE_FEATURES, _language_columns
+    )
+
+    plain = grade(LEROBOT_FIXTURE)
+    report = grade(root)
+
+    assert not [f for f in report.findings if f.metric_id == _MISMATCH_FINDING]
+    assert all(e.metrics[_MISMATCH_METRIC].value == 0.0 for e in report.episodes)
+    assert (
+        report.eligibility_counts is not None and plain.eligibility_counts is not None
+    )
+    assert report.eligibility_counts.pass_count == plain.eligibility_counts.pass_count

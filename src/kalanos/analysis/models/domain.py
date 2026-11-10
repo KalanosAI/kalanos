@@ -607,6 +607,64 @@ class Stream(BaseModel):
         return self
 
 
+class SchemaProblem(str, Enum):
+    """How a stored column disagrees with the feature its source declares."""
+
+    # fmt: off
+    MISSING = "missing"  # No column for the declared feature
+    DTYPE   = "dtype"    # Stored in another dtype family
+    SHAPE   = "shape"    # A fixed-size array of another shape
+    # fmt: on
+
+
+class SchemaMismatch(BaseModel):
+    """One declared feature whose stored column disagrees with its declaration.
+
+    Attributes
+    ----------
+    column : str
+        The declared feature key, which names the expected column.
+    problem : SchemaProblem
+        How the column disagrees.
+    declared_dtype : str
+        The dtype the source declares, as written there.
+    declared_shape : list[int] or None
+        The shape the source declares, `None` when it declares none it can read.
+    found_dtype : str or None
+        The stored column's type as the file reports it, `None` when the
+        column is missing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    column: str
+    problem: SchemaProblem
+    declared_dtype: str
+    declared_shape: list[int] | None = None
+    found_dtype: str | None = None
+
+
+class SchemaCheck(BaseModel):
+    """A data file's column schema compared with the features its source declares.
+
+    Attributes
+    ----------
+    source_path : AnyPath
+        The data file whose schema was compared.
+    checked : list[str]
+        The declared feature keys compared, in declaration order.
+    mismatches : list[SchemaMismatch]
+        The checked features whose stored column disagrees, at most one each.
+    """
+
+    # Several episodes can share one instance when they share a data file.
+    model_config = ConfigDict(frozen=True)
+
+    source_path: AnyPath
+    checked: list[str] = Field(default_factory=list)
+    mismatches: list[SchemaMismatch] = Field(default_factory=list)
+
+
 class Episode(BaseModel):
     """One recording, which may draw on several files at once.
 
@@ -625,12 +683,17 @@ class Episode(BaseModel):
     split : str or None
         The dataset split the source assigns this episode, such as `train`,
         `None` when it assigns none.
+    schema_check : SchemaCheck or None
+        The episode's data file compared with the column schema its source
+        declares, set by an adapter whose format declares one.
+        `None` when nothing was declared to compare against.
     """
 
     id: str
     streams: list[Stream] = Field(default_factory=list)
     tasks: list[str] | None = None
     split: str | None = None
+    schema_check: SchemaCheck | None = None
 
     @property
     def source_paths(self) -> list[UPath]:

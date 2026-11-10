@@ -10,6 +10,8 @@ An adapter teaches Kalanos to read a format. It is the main extension point, and
 
 **Task instructions are optional, and exactly two states count.** If the format stores the natural-language instruction each episode was recorded under, set `Episode.tasks` to that episode's list of strings, blank ones included. Leave it `None` when the dataset carries no instruction for *any* episode, so the annotation metric reads it as not applicable rather than as every episode missing one. `kalanos.analysis.inference.tasks` holds the shared rule: `as_task_list` normalises what a source stored, and `dataset_tasks` returns `None` unless at least one episode has a non-blank instruction. Decide it from the whole dataset, not the sampled episodes.
 
+**A declared column schema is compared, when the format has one.** If the format declares which columns each data file holds and their dtypes, set `Episode.schema_check` to a `SchemaCheck` naming the file compared, the features checked and a `SchemaMismatch` for each column that is missing or disagrees with its declaration. The schema metric counts them, and the episode is blocked on any. Leave it `None` when the format declares nothing to compare against, so the metric reads as not applicable.
+
 ## Clock and row-order contract
 
 Preserve recorded row order and timestamp/payload alignment. Use `clock_info` to state origin, source field, native unit/dtype, known epoch/domain and transforms; leave unknown facts unset. `native_timestamps` retains numeric source ticks for precise differencing. For frame counters with a known rate, `tick_period_s` states seconds per native tick. These raw arrays stay inside the analysis stream.

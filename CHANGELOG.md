@@ -10,6 +10,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - A policy metric can set `overrides`, which change its `weight` or `report_only` under scopes that require none of the capabilities its `when` lists, and `graded_in_every_scope`, which keeps a vision metric grading under a scope that grades no video quality.
 - `KALANOS_REMOTE_BLOCK_BYTES` (default 4 MiB) sets the size of each range request for remote video, and `KALANOS_REMOTE_READAHEAD_BLOCKS` (default 5, `0` turns readahead off) sets how many blocks are fetched ahead of the reader. Each open remote video holds at most `readahead + 5` blocks (the blocks fetched ahead, the block being read and the 4 before it), 40 MiB with the defaults, or up to `2 * readahead + 5` for about one round trip after a seek. Up to four idle files stay open, plus the one being read, so remote video holds at most 200 MiB with the defaults.
+- Under every scope and tier, a LeRobot episode is blocked when its data file lacks a feature `meta/info.json` declares, stores it as another kind of value, or stores a fixed-size array of another shape than declared, with a finding that names the column, the declared and found dtypes, and the file. Video and image features are not checked, and the check carries no weight in the score.
 
 ### Changed
 

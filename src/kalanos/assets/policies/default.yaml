@@ -381,6 +381,18 @@ metrics:
   motion.energy_proxy:
     report_only: true
 
+  # A data file that lacks a declared feature, or stores it as another kind of value,
+  # breaks a declared invariant with direct evidence, so it blocks through the contract route.
+  # The count is a whole number, so any good bound below 1 grades it the same.
+  # Weight 0: it never moves the score.
+  schema.feature_mismatch_count:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
   # No bound decided; docs/METRICS.md marks it to define. Whether a missing
   # instruction should cost points depends on the policy being trained, so it
   # is measured and shown in every report and grades nothing until a band is

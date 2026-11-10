@@ -273,7 +273,7 @@ Two display rules hold in every format:
 ## What is not built yet
 
 - `--plugin` as a CLI flag for loading a single-file adapter without publishing a package.
-- Every metric family beyond `timing`, `integrity`, `annotation`, `motion` and `vision`: `consistency`, `coverage`, `calibration` and `schema`.
+- Every metric family beyond `timing`, `integrity`, `annotation`, `motion`, `vision` and `schema`: `consistency`, `coverage` and `calibration`.
 - Running an out-of-tree metric, or writing a report through an out-of-tree reporter. Both groups are discovered and listed; neither is wired into a run.
 - A `--fail-under` flag on `grade`.
 

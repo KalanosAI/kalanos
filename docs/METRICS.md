@@ -383,6 +383,14 @@ Whether the dataset is varied enough to train on. Five hundred near-identical de
 
 ---
 
+## schema
+
+Whether Kalanos read the file the way its format declares it. The metric runs at every tier from the data file's schema and the format's own declaration, without reading any column's values, and grades in every scope.
+
+| Metric | Family | Level | Unit | Definition | Threshold |
+|---|---|---|---|---|---|
+| `feature_mismatch_count` | schema | EPISODE | features | The number of declared features the episode's data file disagrees with. A feature disagrees when its column is missing, when the column stores another dtype family than declared, or when it is a fixed-size array of another shape than declared. Families compare the innermost stored type, past List and Array wrappers, and ignore width: `float16`/`float32`/`float64` match any float, `int8` to `uint64` any integer, `bool` Boolean, `string` String, and `language` a Struct, String or Null (an annotation column of empty lists). A declared dtype outside these is checked for presence only. Video and image features are not compared, and a variable-length list carries no shape to compare. The evidence names each column, how it disagrees, both dtypes and the file. **Not applicable** when the format declares no column schema. Blocks through the contract route. | good = 0.5, bad = 1: the count is a whole number, so any mismatch is critical · contract |
+
 ## calibration and annotation
 
 Two families the taxonomy supports. `annotation` holds its first metric; `calibration` has none yet.
@@ -432,6 +440,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `frame_count_vs_timebase` | default | 1% | 5% | candidate |
 | `camera_stream_present` | default | 1 | 0.5 | contract · higher is better |
 | `frames_readable` | default | 1 | 0.5 | contract · higher is better |
+| `feature_mismatch_count` | default | 0.5 | 1 | contract · lower is better |
 | `frozen_frame_pct` | default | 0.01% | 10% | calibrated (see *Calibration*) |
 | `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
 | `exposure_level` | default | — | — | reported, no band |
@@ -561,6 +570,7 @@ The report records, per metric, how many subjects it graded and how many it flag
 | vision | `frames_readable` | 0, a contract gate that never moves the score | false |
 | vision | `exposure_level` | none, report-only | false |
 | vision | `video_control_lag_ms` | none, report-only | false |
+| schema | `feature_mismatch_count` | 0, a contract gate that never moves the score | false |
 | annotation | `task_instruction_missing` | 5 | true |
 
 Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.
