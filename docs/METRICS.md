@@ -385,11 +385,13 @@ Whether the dataset is varied enough to train on. Five hundred near-identical de
 
 ## schema
 
-Whether Kalanos read the file the way its format declares it. The metric runs at every tier from the data file's schema and the format's own declaration, without reading any column's values, and grades in every scope.
+Whether Kalanos read the file the way its format declares it. The metrics run at every tier and grade in every scope. `feature_mismatch_count` compares the data file's schema with the format's own declaration, without reading any column's values. The two layout metrics compare an episode's metadata with the `episode_index` and `index` columns of its data, read on their own.
 
 | Metric | Family | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
 | `feature_mismatch_count` | schema | EPISODE | features | The number of declared features the episode's data file disagrees with. A feature disagrees when its column is missing, when the column stores another dtype family than declared, or when it is a fixed-size array of another shape than declared. Families compare the innermost stored type, past List and Array wrappers, and ignore width: `float16`/`float32`/`float64` match any float, `int8` to `uint64` any integer, `bool` Boolean, `string` String, and `language` a Struct, String or Null (an annotation column of empty lists). A declared dtype outside these is checked for presence only. Video and image features are not compared, and a variable-length list carries no shape to compare. The evidence names each column, how it disagrees, both dtypes and the file. **Not applicable** when the format declares no column schema. Blocks through the contract route. | good = 0.5, bad = 1: the count is a whole number, so any mismatch is critical · contract |
+| `episode_file_mismatch` | schema | EPISODE | episodes | 1 when the data file an episode's metadata names holds none of its rows and another data file does, else 0. The LeRobot v3 adapter scans the other data files only when an episode is missing from the file its metadata names, reading the `episode_index` column, and `index` when the data has it. It scans once per grade and reuses the result for every later miss. The evidence names the pointed file, the files that hold the rows and, on a mismatch, the `effect` the adapter states: what the format's own tooling does with the episode. For LeRobot v3, loading only that episode finds no rows, and `delete_episodes` and `split_dataset` raise `KeyError`. **Not applicable** when the format names no data file per episode, or when the episode has rows in no data file. Blocks through the contract route. | good = 0.5, bad = 1: the value is 0 or 1, so any mismatch is critical · contract |
+| `index_range_mismatch_count` | schema | EPISODE | fields | The number of the episode's `dataset_from_index`, `dataset_to_index` and `length` that disagree with its rows in the data: the lowest `index`, one past the highest, and the difference of the two. `length` is compared with the range found, so a declared range that agrees with itself can still be reported. The evidence gives each field's declared and found values and the files that hold the rows. **Not applicable** when the format names no data file per episode, when the metadata lacks one of the three fields, when the data has no `index` column, or when the episode has rows in no data file. Blocks through the contract route. | good = 0.5, bad = 1: the count is a whole number, so any mismatch is critical · contract |
 
 ## calibration and annotation
 
@@ -441,6 +443,8 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `camera_stream_present` | default | 1 | 0.5 | contract · higher is better |
 | `frames_readable` | default | 1 | 0.5 | contract · higher is better |
 | `feature_mismatch_count` | default | 0.5 | 1 | contract · lower is better |
+| `episode_file_mismatch` | default | 0.5 | 1 | contract · lower is better |
+| `index_range_mismatch_count` | default | 0.5 | 1 | contract · lower is better |
 | `frozen_frame_pct` | default | 0.01% | 10% | calibrated (see *Calibration*) |
 | `exposure_shift_pct` | default | 10% | 40% | calibrated (see *Calibration*) |
 | `exposure_level` | default | — | — | reported, no band |
@@ -571,6 +575,8 @@ The report records, per metric, how many subjects it graded and how many it flag
 | vision | `exposure_level` | none, report-only | false |
 | vision | `video_control_lag_ms` | none, report-only | false |
 | schema | `feature_mismatch_count` | 0, a contract gate that never moves the score | false |
+| schema | `episode_file_mismatch` | 0, a contract gate that never moves the score | false |
+| schema | `index_range_mismatch_count` | 0, a contract gate that never moves the score | false |
 | annotation | `task_instruction_missing` | 5 | true |
 
 Family weights: integrity 3, timing 2, motion 2, vision 2, annotation 1.

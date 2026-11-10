@@ -393,6 +393,26 @@ metrics:
         good: 0.5
         bad: 1
 
+  # Episode metadata that names a data file without the episode's rows contradicts
+  # the data with direct evidence, so it blocks through the contract route. Weight 0.
+  schema.episode_file_mismatch:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
+  # An episode index range that disagrees with the data's `index` column contradicts
+  # the data with direct evidence, so it blocks through the contract route. Weight 0.
+  schema.index_range_mismatch_count:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
   # No bound decided; docs/METRICS.md marks it to define. Whether a missing
   # instruction should cost points depends on the policy being trained, so it
   # is measured and shown in every report and grades nothing until a band is

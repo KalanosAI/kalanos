@@ -9,7 +9,7 @@
 
 # Built-in
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 # External
 import polars as pl
@@ -665,6 +665,64 @@ class SchemaCheck(BaseModel):
     mismatches: list[SchemaMismatch] = Field(default_factory=list)
 
 
+class RangeMismatch(BaseModel):
+    """One episode index range field that disagrees with the data's `index` column.
+
+    Attributes
+    ----------
+    field : str
+        The metadata field: `dataset_from_index`, `dataset_to_index` or `length`.
+    declared : int
+        The value the metadata declares.
+    found : int
+        The value the data's `index` column gives for the episode's rows.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    field: Literal["dataset_from_index", "dataset_to_index", "length"]
+    declared: int
+    found: int
+
+
+class LayoutCheck(BaseModel):
+    """An episode's metadata pointers compared with where its rows are stored.
+
+    Attributes
+    ----------
+    pointed_path : AnyPath
+        The data file the episode's metadata names.
+    holding_paths : list[AnyPath]
+        Every data file the episode's rows were found in, empty when none.
+    range_mismatches : list[RangeMismatch] or None
+        The index range fields that disagree with the rows found.
+        `None` when not compared: the metadata lacks one of the range fields,
+        the data has no `index` column, or no rows were found.
+    pointer_effect : str or None
+        What the format's own tooling does with the episode when `pointed_path`
+        lacks its rows, as the adapter states it. `None` when it states nothing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pointed_path: AnyPath
+    holding_paths: list[AnyPath] = Field(default_factory=list)
+    range_mismatches: list[RangeMismatch] | None = None
+    pointer_effect: str | None = None
+
+    @property
+    def pointer_matches(self) -> bool:
+        """Whether the pointed data file holds rows of the episode.
+
+        Returns
+        -------
+        bool
+            `True` when `pointed_path` is among `holding_paths`.
+        """
+
+        return self.pointed_path in self.holding_paths
+
+
 class Episode(BaseModel):
     """One recording, which may draw on several files at once.
 
@@ -687,6 +745,10 @@ class Episode(BaseModel):
         The episode's data file compared with the column schema its source
         declares, set by an adapter whose format declares one.
         `None` when nothing was declared to compare against.
+    layout_check : LayoutCheck or None
+        The data file the episode's metadata names compared with the files that hold
+        its rows, set by an adapter whose format points each episode at a data file.
+        `None` when the format has no such pointer.
     """
 
     id: str
@@ -694,6 +756,7 @@ class Episode(BaseModel):
     tasks: list[str] | None = None
     split: str | None = None
     schema_check: SchemaCheck | None = None
+    layout_check: LayoutCheck | None = None
 
     @property
     def source_paths(self) -> list[UPath]:

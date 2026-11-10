@@ -113,6 +113,8 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "vision.dropped_chunk_count":          4,
     "vision.video_control_lag_ms":         None,
     "schema.feature_mismatch_count":       0,
+    "schema.episode_file_mismatch":        0,
+    "schema.index_range_mismatch_count":   0,
     "annotation.task_instruction_missing": 5,
 }
 # fmt: on
