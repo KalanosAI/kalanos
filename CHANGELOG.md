@@ -9,12 +9,14 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Added
 
 - A policy metric can set `overrides`, which change its `weight` or `report_only` under scopes that require none of the capabilities its `when` lists, and `graded_in_every_scope`, which keeps a vision metric grading under a scope that grades no video quality.
+- `KALANOS_REMOTE_BLOCK_BYTES` (default 4 MiB) sets the size of each range request for remote video, and `KALANOS_REMOTE_READAHEAD_BLOCKS` (default 5, `0` turns readahead off) sets how many blocks are fetched ahead of the reader. Each open remote video holds at most `readahead + 5` blocks (the blocks fetched ahead, the block being read and the 4 before it), 40 MiB with the defaults, or up to `2 * readahead + 5` for about one round trip after a seek. Up to four idle files stay open, plus the one being read, so remote video holds at most 200 MiB with the defaults.
 - Under every scope and tier, a LeRobot episode is blocked when its data file lacks a feature `meta/info.json` declares, stores it as another kind of value, or stores a fixed-size array of another shape than declared, with a finding that names the column, the declared and found dtypes, and the file. Video and image features are not checked, and the check carries no weight in the score.
 
 ### Changed
 
 - Under the default scope and the packaged policies, an episode is blocked when a camera video holds a different number of frames than its timestamps imply, or when a camera file is missing, unreadable or holds no frame. Before, these two checks blocked only under a scope that grades video quality. Image-quality metrics stay report-only in the default scope, and the two checks carry no weight in its score.
 - Under every scope and the packaged policies, an episode is blocked when a camera segment's packets can't be read or one of its frames fails to decode after the first, with a finding that names the camera and its file. Before, a decode failure left the episode unknown as an operational error, and a packet read failure let it pass. The check carries no weight in the score, and a failure outside the file, such as a dropped connection, still leaves the episode unknown.
+- Grading a remote dataset fetches video in 4 MiB blocks, several ahead of the reader in parallel, and keeps the blocks a segment's second pass rewinds to. Before, it waited on one round trip per 1 MiB block. A 1,000-episode LeRobot v3 dataset with 15.5 GB of video, graded from `hf://`, took 11 to 13 minutes on a steady connection instead of 2 hours 20 minutes. Metric values are unchanged.
 
 ### Fixed
 
