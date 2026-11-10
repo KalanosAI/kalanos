@@ -22,6 +22,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - A policy that `extends` another and retunes a metric keeps that metric's `route` from its base. Before, it kept only `weight` and `core`, so a retuned contract check fell back to the statistical route and could request review instead of blocking.
 - A LeRobot dataset with language annotations or other features that hold no numbers is graded on its numeric features. Before, a feature stored as lists of text or as empty lists refused the whole dataset with "get index is out of bounds", and a text feature marked every episode unknown.
+- Computed LeRobot features (end-effector direction, speed and acceleration levels, gripper mode and activity, a simulated end-effector pose), a subtask label and a gripper open fraction, as RoboCOIN datasets carry them, no longer send episodes to review for repeated values or sudden changes. Before, they were graded as sensors, and every episode of such a dataset needed review.
 
 ## [0.9.3] - 2026-11-03
 

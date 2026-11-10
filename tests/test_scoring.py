@@ -1371,6 +1371,29 @@ def test_spike_pct_stays_report_only_for_a_frame_reward():
     assert resolved.points is None
 
 
+@pytest.mark.parametrize(
+    ("metric_name", "value"), [("flatline_pct", 100.0), ("spike_pct", 5.0)]
+)
+def test_sensor_checks_stay_report_only_for_a_computed_feature(
+    metric_name: str, value: float
+):
+    """Verify a computed feature's null bands reach scoring.
+
+    A direction level or an activity flag holds and steps by construction,
+    so neither a full flatline nor a high spike share earns points.
+    """
+
+    resolved = resolve_status(
+        _report_only(value, unit="%"),
+        metric_name=metric_name,
+        taxonomy_type="derived.computed_feature",
+        policy=load_default_policy(),
+    )
+
+    assert resolved.status == MetricStatus.REPORT_ONLY
+    assert resolved.points is None
+
+
 def test_drift_stays_report_only_by_policy_design():
     """Verify drift's ungraded reason names its design, not a missing band.
 

@@ -564,9 +564,12 @@ _DOCUMENTED_TYPES = {
 
 
 def test_the_packaged_dictionary_holds_every_reference_type():
-    """Verify the shipped dictionary carries all 202 types from the source tables."""
+    """Verify the shipped dictionary carries every reference type.
 
-    assert len(_PACKAGED.entries) == 202
+    That is all 202 types from the source tables, plus `derived.computed_feature`.
+    """
+
+    assert len(_PACKAGED.entries) == 203
 
 
 def test_the_packaged_dictionary_declares_every_category_and_only_two_sensors():
@@ -696,6 +699,34 @@ def test_the_csv_fixtures_pose_axes_resolve_through_the_packaged_dictionary():
 )
 def test_common_robot_learning_keys_resolve(name, taxonomy_type):
     """Verify names robosuite, robomimic, Isaac Lab and LeRobot write resolve."""
+
+    assert load_default_dictionary().resolve(name).taxonomy_type == taxonomy_type
+
+
+@pytest.mark.parametrize(
+    ("name", "taxonomy_type"),
+    [
+        # computed from the recorded state
+        ("eef_acc_mag_action", "derived.computed_feature"),
+        ("eef_acc_mag_state", "derived.computed_feature"),
+        ("eef_direction_action", "derived.computed_feature"),
+        ("eef_direction_state", "derived.computed_feature"),
+        ("eef_sim_pose_action", "derived.computed_feature"),
+        ("eef_sim_pose_state", "derived.computed_feature"),
+        ("eef_velocity_action", "derived.computed_feature"),
+        ("eef_velocity_state", "derived.computed_feature"),
+        ("gripper_activity_action", "derived.computed_feature"),
+        ("gripper_activity_state", "derived.computed_feature"),
+        ("gripper_mode_action", "derived.computed_feature"),
+        ("gripper_mode_state", "derived.computed_feature"),
+        # a continuous 0 to 1 opening grades as a gripper
+        ("gripper_open_scale_state", "proprio.gripper_width"),
+        ("gripper_open_scale_action", "action.gripper_command"),
+        ("subtask_annotation", "annotation.phase_boundary"),
+    ],
+)
+def test_robocoin_feature_keys_resolve(name, taxonomy_type):
+    """Verify the per-frame features RoboCOIN's LeRobot datasets carry resolve."""
 
     assert load_default_dictionary().resolve(name).taxonomy_type == taxonomy_type
 

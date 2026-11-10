@@ -840,6 +840,9 @@ def test_no_asset_loader_walks_file_relative_to_itself():
         "action.joint_position_command",
         "action.gripper_command",
         "reward.frame_reward",
+        "derived.computed_feature",
+        "annotation.phase_boundary",
+        "proprio.gripper_width",
     ],
 )
 def test_commands_and_rewards_are_exempt_from_flatline(taxonomy_type):
@@ -855,6 +858,29 @@ def test_frame_reward_is_exempt_from_spike():
     """A computed reward steps up and down with the task, which reads as spikes."""
 
     band = _entry(load_default_policy(), "spike_pct").thresholds["reward.frame_reward"]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+@pytest.mark.parametrize(
+    "taxonomy_type", ["derived.computed_feature", "annotation.phase_boundary"]
+)
+def test_computed_features_and_labels_are_exempt_from_spike(taxonomy_type):
+    """A level or a label steps between values, which a 6σ window reads as spikes."""
+
+    band = _entry(load_default_policy(), "spike_pct").thresholds[taxonomy_type]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_computed_features_are_exempt_from_snr():
+    """A computed level steps by construction, which the ratio would count as noise."""
+
+    band = _entry(load_default_policy(), "snr_db").thresholds[
+        "derived.computed_feature"
+    ]
 
     assert band.good is None
     assert band.bad is None
