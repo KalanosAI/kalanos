@@ -13,6 +13,7 @@ and `meta/episodes/**/*.parquet` maps each episode to the files that hold it.
 # Built-in
 import itertools
 from collections.abc import Iterator
+from pathlib import PurePosixPath
 from typing import Any
 
 # External
@@ -38,6 +39,11 @@ from kalanos.analysis.adapters.lerobot.common import (
     storage_columns,
     timestamp_dtype_of,
     with_episode_clock,
+)
+from kalanos.analysis.adapters.lerobot.layout import (
+    aggregate_episode_rows,
+    layout_check,
+    read_episode_rows,
 )
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
@@ -82,8 +88,9 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     pl.DataFrame
         Every episode's row, one per episode, sorted by `episode_index`
         when the index has that column; the caller checks that it does.
-        Only `episode_index`, `tasks` and the `data/*` and `videos/*` columns
-        are read; any other column has to be added here before a caller reads it.
+        Only `episode_index`, `tasks`, `dataset_from_index`, `dataset_to_index`,
+        `length` and the `data/*` and `videos/*` columns are read; any other
+        column has to be added here before a caller reads it.
 
     Raises
     ------
@@ -107,7 +114,14 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
             columns = [
                 name
                 for name in names
-                if name in ("episode_index", "tasks")
+                if name
+                in (
+                    "episode_index",
+                    "tasks",
+                    "dataset_from_index",
+                    "dataset_to_index",
+                    "length",
+                )
                 or name.startswith(("data/", "videos/"))
             ]
             with parquet_path.open("rb") as handle:
@@ -333,6 +347,9 @@ class LeRobotV3Adapter(LeRobotAdapter):
         cached_frame: pl.DataFrame | None = None
         cached_schema: dict[str, pl.DataType] = {}
         cached_check: SchemaCheck | None = None
+        # Where every episode's rows are, across all data files. Built on the first
+        # episode missing from the file its metadata names, then reused.
+        located: tuple[list[UPath], pl.DataFrame] | None = None
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -364,6 +381,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                                     c
                                     for c in (
                                         "episode_index",
+                                        "index",
                                         TIME_COLUMN,
                                         "frame_index",
                                     )
@@ -378,6 +396,25 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 episode_frame = frame.filter(
                     pl.col("episode_index") == row["episode_index"]
                 )
+                with_index = "index" in cached_schema
+                if episode_frame.height:
+                    source_paths = [data_path]
+                    holding = aggregate_episode_rows(
+                        episode_frame, with_index=with_index
+                    )
+                else:
+                    if located is None:
+                        data_root = path / PurePosixPath(info["data_path"]).parts[0]
+                        all_paths = sorted(data_root.rglob("*.parquet"))
+                        located = (
+                            all_paths,
+                            read_episode_rows(all_paths, with_index=with_index),
+                        )
+                    source_paths, all_rows = located
+                    holding = all_rows.filter(
+                        pl.col("episode_index") == row["episode_index"]
+                    )
+                episode_layout = layout_check(row, data_path, holding, source_paths)
                 timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                 clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -442,4 +479,5 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 else task_map.get(row["episode_index"], []),
                 split=split_of(info, row["episode_index"]),
                 schema_check=cached_check,
+                layout_check=episode_layout,
             )

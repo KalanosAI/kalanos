@@ -9,6 +9,9 @@ The metrics report what it found.
 # ░█░░░░█░░█▀▄░█▀▄░█▀█░█▀▄░░█░░█▀▀░▀▀█
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
+# Built-in
+from typing import Any
+
 # Internal
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
@@ -60,5 +63,89 @@ def feature_mismatch_count(ctx: EpisodeContext) -> MetricResult:
             "path": str(check.source_path),
             "n_checked": len(check.checked),
             "mismatches": [m.model_dump(mode="json") for m in check.mismatches],
+        },
+    )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
+    label="episode rows missing from the data file its metadata names",
+)
+def episode_file_mismatch(ctx: EpisodeContext) -> MetricResult:
+    """Report whether the data file the episode's metadata names holds its rows.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `layout_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source names no data file per episode,
+        or when the episode has rows in no data file.
+        `report_only` otherwise, `1.0` when the named file lacks the episode's rows and
+        `0.0` when it holds them, with the named file and the files holding the rows as
+        evidence, plus the adapter's `pointer_effect` on a mismatch when it states one.
+    """
+
+    check = ctx.episode.layout_check
+    if check is None:
+        return not_applicable("the source names no data file per episode")
+    if not check.holding_paths:
+        return not_applicable("the episode has rows in no data file")
+
+    evidence: dict[str, Any] = {
+        "pointed_path": str(check.pointed_path),
+        "holding_paths": [str(p) for p in check.holding_paths],
+    }
+    if not check.pointer_matches and check.pointer_effect is not None:
+        evidence["effect"] = check.pointer_effect
+    return MetricResult(
+        value=0.0 if check.pointer_matches else 1.0,
+        unit="episodes",
+        status=MetricStatus.REPORT_ONLY,
+        evidence=evidence,
+    )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
+    label="episode index range fields that disagree with the data",
+)
+def index_range_mismatch_count(ctx: EpisodeContext) -> MetricResult:
+    """Count the episode's index range fields that disagree with the data's `index`.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `layout_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source names no data file per episode, or when
+        the range was not compared. `report_only` otherwise, with the number of
+        disagreeing fields as the value and each field's declared and found value,
+        with the files holding the rows, as evidence.
+    """
+
+    check = ctx.episode.layout_check
+    if check is None:
+        return not_applicable("the source names no data file per episode")
+    if check.range_mismatches is None:
+        return not_applicable(
+            "the episode index range could not be compared with the data"
+        )
+
+    return MetricResult(
+        value=float(len(check.range_mismatches)),
+        unit="fields",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "paths": [str(p) for p in check.holding_paths],
+            "mismatches": [m.model_dump(mode="json") for m in check.range_mismatches],
         },
     )

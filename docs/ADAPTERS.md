@@ -12,6 +12,8 @@ An adapter teaches Kalanos to read a format. It is the main extension point, and
 
 **A declared column schema is compared, when the format has one.** If the format declares which columns each data file holds and their dtypes, set `Episode.schema_check` to a `SchemaCheck` naming the file compared, the features checked and a `SchemaMismatch` for each column that is missing or disagrees with its declaration. The schema metric counts them, and the episode is blocked on any. Leave it `None` when the format declares nothing to compare against, so the metric reads as not applicable.
 
+**Per-episode file pointers are checked, when the format has them.** If the format's metadata names the data file that holds each episode, set `Episode.layout_check` to a `LayoutCheck` naming that file, the files the episode's rows were found in, the index range fields that disagree with those rows and, in `pointer_effect`, what the format's own tooling does with an episode whose pointer misses, when you know it. The schema metrics report a pointer that misses and each range field that disagrees, and the episode is blocked on either. Leave it `None` when the format has no such pointer.
+
 ## Clock and row-order contract
 
 Preserve recorded row order and timestamp/payload alignment. Use `clock_info` to state origin, source field, native unit/dtype, known epoch/domain and transforms; leave unknown facts unset. `native_timestamps` retains numeric source ticks for precise differencing. For frame counters with a known rate, `tick_period_s` states seconds per native tick. These raw arrays stay inside the analysis stream.

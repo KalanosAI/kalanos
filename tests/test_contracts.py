@@ -72,6 +72,8 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "energy_proxy": None,
     "task_instruction_missing": None,
     "feature_mismatch_count": None,
+    "episode_file_mismatch": None,
+    "index_range_mismatch_count": None,
     "sharpness_score": Defect.BLUR,
     "exposure_shift_pct": None,
     "exposure_level": None,

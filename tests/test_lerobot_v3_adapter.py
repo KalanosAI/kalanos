@@ -18,6 +18,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.lerobot import v3
 from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     declared_format,
@@ -38,7 +39,7 @@ from kalanos.analysis.models.domain import (
     MappingSource,
     TimestampDtype,
 )
-from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.eligibility import Consequence, EligibilityStatus
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
@@ -87,6 +88,62 @@ _MISSING_FEATURE = {
     "observation.effort": {"dtype": "float32", "shape": [6], "names": None}
 }
 
+_POINTER_METRIC = "episode_file_mismatch"
+_POINTER_FINDING = f"schema.{_POINTER_METRIC}"
+_RANGE_METRIC = "index_range_mismatch_count"
+_RANGE_FINDING = f"schema.{_RANGE_METRIC}"
+
+_FEATURE_DTYPES = {"float32": pl.Float32, "int64": pl.Int64}
+
+# Real metadata rows and data `index` ranges, read 2026-11-10.
+# Pointer and declared ranges per episode: (episode, file index, from, to, length).
+_G1_META = [
+    (394, 0, 333583, 334664, 1081),
+    (395, 0, 334664, 335446, 782),
+    (396, 0, 335446, 336051, 605),
+    (397, 1, 605, 1224, 619),
+    (398, 1, 1224, 1888, 664),
+    (399, 1, 1888, 2773, 885),
+]
+_G1_DATA = {
+    0: [(394, 333583, 334664), (395, 334664, 335446)],
+    1: [
+        (396, 335446, 336051),
+        (397, 336051, 336670),
+        (398, 336670, 337334),
+        (399, 337334, 338219),
+    ],
+}
+_LIBERO_DATA = {
+    0: [(0, 0, 214), (1, 214, 498), (2, 498, 843)],
+    1: [(3, 843, 1128), (4, 1128, 1406), (5, 1406, 1646)],
+    2: [(6, 1646, 1925), (7, 1925, 2197)],
+}
+
+# Pointer and declared ranges for libero episodes 0-7, in the shape of `_G1_META`.
+# Both repos declare the data's own ranges. HuggingFaceVLA/libero points every episode
+# at file-000, lerobot/libero at the file that holds it.
+_STALE_LIBERO_META = [
+    (0, 0, 0, 214, 214),
+    (1, 0, 214, 498, 284),
+    (2, 0, 498, 843, 345),
+    (3, 0, 843, 1128, 285),
+    (4, 0, 1128, 1406, 278),
+    (5, 0, 1406, 1646, 240),
+    (6, 0, 1646, 1925, 279),
+    (7, 0, 1925, 2197, 272),
+]
+_CLEAN_LIBERO_META = [
+    (0, 0, 0, 214, 214),
+    (1, 0, 214, 498, 284),
+    (2, 0, 498, 843, 345),
+    (3, 1, 843, 1128, 285),
+    (4, 1, 1128, 1406, 278),
+    (5, 1, 1406, 1646, 240),
+    (6, 2, 1646, 1925, 279),
+    (7, 2, 1925, 2197, 272),
+]
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
@@ -103,6 +160,117 @@ def _episodes():
     """
 
     return list(LeRobotV3Adapter().episodes(LEROBOT_FIXTURE))
+
+
+def _layout_dataset(root, meta_rows, data_files):
+    """Write a LeRobot v3 tree with the given episode pointers and data layout.
+
+    Parameters
+    ----------
+    root : Path
+        Where to write it.
+    meta_rows : list[tuple[int, int, int, int, int]]
+        One metadata row per episode: episode index, data file index,
+        `dataset_from_index`, `dataset_to_index` and `length`.
+    data_files : dict[int, list[tuple[int, int, int]]]
+        The episodes each data file holds, by file index:
+        episode index and its `index` range, end exclusive.
+
+    Returns
+    -------
+    UPath
+        The dataset root.
+    """
+
+    info = json.loads((LEROBOT_FIXTURE / "meta" / "info.json").read_text())
+    del info["features"]["observation.images.up"]
+    ranges = [r for rows in data_files.values() for r in rows]
+    info["total_episodes"] = len(meta_rows)
+    info["total_frames"] = sum(hi - lo for _, lo, hi in ranges)
+    (root / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+
+    pl.DataFrame(
+        meta_rows,
+        schema=[
+            "episode_index",
+            "data/file_index",
+            "dataset_from_index",
+            "dataset_to_index",
+            "length",
+        ],
+        orient="row",
+    ).with_columns(
+        pl.lit(0, pl.Int64).alias("data/chunk_index"),
+        pl.lit(["pick up the cube"], pl.List(pl.String)).alias("tasks"),
+    ).write_parquet(root / "meta" / "episodes" / "chunk-000" / "file-000.parquet")
+
+    for file_index, episodes in data_files.items():
+        episode_index = [e for e, lo, hi in episodes for _ in range(lo, hi)]
+        index = [i for _, lo, hi in episodes for i in range(lo, hi)]
+        frame_index = [i - lo for _, lo, hi in episodes for i in range(lo, hi)]
+        columns = {
+            "episode_index": pl.Series(episode_index, dtype=pl.Int64),
+            "index": pl.Series(index, dtype=pl.Int64),
+            "frame_index": pl.Series(frame_index, dtype=pl.Int64),
+            "timestamp": pl.Series(frame_index, dtype=pl.Float32) / info["fps"],
+        }
+        for key, feature in info["features"].items():
+            if key in columns:
+                continue
+            dtype = _FEATURE_DTYPES[feature["dtype"]]
+            if feature["shape"] == [1]:
+                columns[key] = pl.Series([0] * len(index), dtype=dtype)
+            else:
+                width = feature["shape"][0]
+                columns[key] = pl.Series(
+                    [[0] * width] * len(index), dtype=pl.Array(dtype, width)
+                )
+        pl.DataFrame(columns).write_parquet(
+            root / "data" / "chunk-000" / f"file-{file_index:03d}.parquet"
+        )
+    return UPath(root)
+
+
+def _episode_findings(report, metric_id):
+    """Group a report's findings of one metric by episode.
+
+    Parameters
+    ----------
+    report : Report
+        The graded report.
+    metric_id : str
+        The finding's metric id.
+
+    Returns
+    -------
+    dict[str, list[Finding]]
+        The findings, by episode id.
+    """
+
+    grouped = {}
+    for finding in report.findings:
+        if finding.metric_id == metric_id:
+            grouped.setdefault(finding.episode_id, []).append(finding)
+    return grouped
+
+
+def _episode_number(episode_id):
+    """Read the episode index back from an episode id.
+
+    Parameters
+    ----------
+    episode_id : str
+        An id ending in `episode_<index>`.
+
+    Returns
+    -------
+    int
+        The episode index.
+    """
+
+    return int(episode_id.rsplit("episode_", 1)[1])
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -832,3 +1000,125 @@ def test_language_features_stored_as_lists_raise_no_mismatch(tmp_path):
         report.eligibility_counts is not None and plain.eligibility_counts is not None
     )
     assert report.eligibility_counts.pass_count == plain.eligibility_counts.pass_count
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_g1_episode_pointed_at_the_wrong_file_is_blocked(tmp_path, tier):
+    """Verify an episode whose metadata names a file without its rows is blocked."""
+
+    root = _layout_dataset(tmp_path / "g1", _G1_META, _G1_DATA)
+
+    report = grade(root, tier=tier)
+
+    findings = _episode_findings(report, _POINTER_FINDING)
+    assert [_episode_number(e) for e in findings] == [396]
+    [finding] = next(iter(findings.values()))
+    assert finding.consequence == Consequence.BLOCK
+    assert finding.evidence["pointed_path"].endswith("data/chunk-000/file-000.parquet")
+    [holding] = finding.evidence["holding_paths"]
+    assert holding.endswith("data/chunk-000/file-001.parquet")
+    assert "KeyError" in finding.evidence["effect"]
+    blocked = {
+        _episode_number(e.id)
+        for e in report.episodes
+        if e.eligibility is not None
+        and e.eligibility.status == EligibilityStatus.BLOCKED
+    }
+    assert 396 in blocked
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_g1_episodes_with_a_wrong_index_range_are_blocked(tmp_path, tier):
+    """Verify each episode whose declared range disagrees with the data is blocked."""
+
+    root = _layout_dataset(tmp_path / "g1", _G1_META, _G1_DATA)
+
+    report = grade(root, tier=tier)
+
+    findings = _episode_findings(report, _RANGE_FINDING)
+    assert sorted(_episode_number(e) for e in findings) == [397, 398, 399]
+    for episode_findings in findings.values():
+        [finding] = episode_findings
+        assert finding.consequence == Consequence.BLOCK
+        assert finding.value == 2
+        assert [m["field"] for m in finding.evidence["mismatches"]] == [
+            "dataset_from_index",
+            "dataset_to_index",
+        ]
+    [ep_397] = next(f for e, f in findings.items() if _episode_number(e) == 397)
+    assert ep_397.evidence["mismatches"][0] == {
+        "field": "dataset_from_index",
+        "declared": 605,
+        "found": 336051,
+    }
+    values = {
+        _episode_number(e.id): e.metrics[_RANGE_METRIC].value for e in report.episodes
+    }
+    assert values == {394: 0, 395: 0, 396: 0, 397: 2, 398: 2, 399: 2}
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_libero_stale_pointers_are_blocked(tmp_path, tier):
+    """Verify episodes pointed at a file that no longer holds them are blocked."""
+
+    root = _layout_dataset(tmp_path / "libero", _STALE_LIBERO_META, _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    findings = _episode_findings(report, _POINTER_FINDING)
+    assert sorted(_episode_number(e) for e in findings) == [3, 4, 5, 6, 7]
+    assert all(
+        f.consequence == Consequence.BLOCK for fs in findings.values() for f in fs
+    )
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_clean_libero_layout_raises_nothing(tmp_path, tier):
+    """Verify metadata that points each episode at its own file raises nothing."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META, _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    assert not _episode_findings(report, _POINTER_FINDING)
+    assert not _episode_findings(report, _RANGE_FINDING)
+    assert len(report.episodes) == 8
+    for episode in report.episodes:
+        assert episode.metrics[_POINTER_METRIC].value == 0.0
+        assert episode.metrics[_RANGE_METRIC].value == 0.0
+
+
+@pytest.mark.parametrize(
+    ("meta_rows", "calls"), [(_CLEAN_LIBERO_META, 0), (_STALE_LIBERO_META, 1)]
+)
+def test_the_scan_runs_only_on_a_miss(tmp_path, monkeypatch, meta_rows, calls):
+    """Verify the data files are scanned once, and only when an episode is missing."""
+
+    root = _layout_dataset(tmp_path / "libero", meta_rows, _LIBERO_DATA)
+    counted = []
+    original = v3.read_episode_rows
+
+    def counting(*args, **kwargs):
+        counted.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(v3, "read_episode_rows", counting)
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 8
+    assert len(counted) == calls
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_every_fixture_episode_is_where_its_metadata_says(tier):
+    """Verify each fixture episode's pointer and index range agree with its data."""
+
+    with use_tier(tier):
+        episodes = list(LeRobotV3Adapter().episodes(LEROBOT_FIXTURE))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert episode.layout_check is not None
+        assert episode.layout_check.pointer_matches
+        assert episode.layout_check.range_mismatches == []
