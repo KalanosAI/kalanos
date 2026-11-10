@@ -25,6 +25,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     LeRobotAdapter,
     check_path_template,
     check_scalar_index,
+    check_schema,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -50,6 +51,7 @@ from kalanos.analysis.models.domain import (
     Episode,
     Kind,
     MappingSource,
+    SchemaCheck,
     Stream,
     TimestampDtype,
 )
@@ -330,6 +332,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         cached_path: UPath | None = None
         cached_frame: pl.DataFrame | None = None
         cached_schema: dict[str, pl.DataType] = {}
+        cached_check: SchemaCheck | None = None
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -350,6 +353,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         parquet_schema = pl.read_parquet_schema(handle)
                     check_scalar_index(path, parquet_schema)
                     cached_schema = dict(parquet_schema)
+                    cached_check = check_schema(info, cached_schema, data_path)
                     with data_path.open("rb") as handle:
                         cached_frame = storage_columns(
                             pl.read_parquet(
@@ -437,4 +441,5 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 if task_map is None
                 else task_map.get(row["episode_index"], []),
                 split=split_of(info, row["episode_index"]),
+                schema_check=cached_check,
             )

@@ -9,12 +9,13 @@ import json
 import logging
 import math
 import string
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 # External
 import polars as pl
+from polars.datatypes import DataTypeClass
 from upath import UPath
 
 # Internal
@@ -33,6 +34,9 @@ from kalanos.analysis.models.domain import (
     Kind,
     MappingSource,
     OriginEvidence,
+    SchemaCheck,
+    SchemaMismatch,
+    SchemaProblem,
     Stream,
     TimestampDtype,
 )
@@ -56,6 +60,21 @@ INDEX_COLUMNS = frozenset(
 )
 
 VIDEO_DTYPE = "video"
+IMAGE_DTYPE = "image"
+
+# Each declared dtype LeRobot writes, mapped to a test on the innermost stored type.
+# Width is not compared: a declared float64 stored as Float32 matches.
+_FAMILIES: dict[str, Callable[[pl.DataType | DataTypeClass], bool]] = {
+    **dict.fromkeys(("float16", "float32", "float64"), lambda t: t.is_float()),
+    **dict.fromkeys(
+        ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"),
+        lambda t: t.is_integer(),
+    ),
+    "bool": lambda t: t == pl.Boolean,
+    "string": lambda t: t == pl.String,
+    # A dataset with no annotations stores empty lists, whose innermost type is Null.
+    "language": lambda t: isinstance(t, pl.Struct) or t in (pl.String, pl.Null),
+}
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -669,6 +688,25 @@ def holds_numbers(dtype: pl.DataType) -> bool:
         wrappers, is numeric or Boolean.
     """
 
+    innermost = _innermost(dtype)
+    # polars counts Boolean as non-numeric, yet Booleans grade as channels.
+    return innermost.is_numeric() or innermost == pl.Boolean
+
+
+def _innermost(dtype: pl.DataType | DataTypeClass) -> pl.DataType | DataTypeClass:
+    """Unwrap every extension, List and Array layer around a column's value type.
+
+    Parameters
+    ----------
+    dtype : pl.DataType | DataTypeClass
+        A data parquet column's type.
+
+    Returns
+    -------
+    pl.DataType | DataTypeClass
+        The type of the values the column ultimately holds.
+    """
+
     innermost = dtype
     while True:
         if isinstance(innermost, pl.Extension):
@@ -676,9 +714,86 @@ def holds_numbers(dtype: pl.DataType) -> bool:
         elif isinstance(innermost, (pl.List, pl.Array)):
             innermost = innermost.inner
         else:
-            break
-    # polars counts Boolean as non-numeric, yet Booleans grade as channels.
-    return innermost.is_numeric() or innermost == pl.Boolean
+            return innermost
+
+
+def _declared_shape(spec: Mapping[str, Any]) -> list[int] | None:
+    """Read a feature's declared shape, or `None` when it is not a list of ints.
+
+    Parameters
+    ----------
+    spec : Mapping[str, Any]
+        One `info.json` feature entry.
+
+    Returns
+    -------
+    list[int] or None
+        The declared shape.
+    """
+
+    shape = spec.get("shape")
+    if isinstance(shape, list) and all(
+        isinstance(n, int) and not isinstance(n, bool) for n in shape
+    ):
+        return shape
+    return None
+
+
+def check_schema(
+    info: dict[str, Any], schema: Mapping[str, pl.DataType], source_path: UPath
+) -> SchemaCheck:
+    """Compare a data parquet's schema with every feature `info.json` declares.
+
+    Video and image features live outside the data parquet and are not
+    compared. A feature whose declared dtype this reader does not know is
+    checked for presence only, so an unfamiliar vocabulary never counts as a
+    mismatch.
+
+    Parameters
+    ----------
+    info : dict
+        The parsed `info.json`.
+    schema : Mapping[str, pl.DataType]
+        The data parquet's schema, as `pl.read_parquet_schema` reads it.
+    source_path : UPath
+        The data parquet `schema` was read from.
+
+    Returns
+    -------
+    SchemaCheck
+        The features compared and, for each that disagrees, how.
+    """
+
+    checked = []
+    mismatches = []
+    for key, spec in info.get("features", {}).items():
+        dtype = spec.get("dtype") if isinstance(spec, dict) else None
+        if dtype in (VIDEO_DTYPE, IMAGE_DTYPE):
+            continue
+        checked.append(key)
+        declared_shape = _declared_shape(spec) if isinstance(spec, dict) else None
+        family = _FAMILIES.get(dtype) if isinstance(dtype, str) else None
+        found = schema.get(key)
+        problem = None
+        if found is None:
+            problem = SchemaProblem.MISSING
+        elif family is not None and not family(_innermost(found)):
+            problem = SchemaProblem.DTYPE
+        elif family is not None and declared_shape:
+            outer = found.ext_storage() if isinstance(found, pl.Extension) else found
+            if isinstance(outer, pl.Array) and list(outer.shape) != declared_shape:
+                problem = SchemaProblem.SHAPE
+        if problem is not None:
+            mismatches.append(
+                SchemaMismatch(
+                    column=key,
+                    problem=problem,
+                    declared_dtype=str(dtype),
+                    declared_shape=declared_shape,
+                    found_dtype=None if found is None else str(found),
+                )
+            )
+    return SchemaCheck(source_path=source_path, checked=checked, mismatches=mismatches)
 
 
 def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:

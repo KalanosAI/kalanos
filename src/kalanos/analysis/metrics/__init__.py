@@ -13,6 +13,7 @@ from kalanos.analysis.metrics import (  # noqa: F401
     continuity,
     integrity,
     motion,
+    schema,
     timing,
     vision,
 )

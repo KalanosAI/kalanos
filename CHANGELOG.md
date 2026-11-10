@@ -9,6 +9,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Added
 
 - A policy metric can set `overrides`, which change its `weight` or `report_only` under scopes that require none of the capabilities its `when` lists, and `graded_in_every_scope`, which keeps a vision metric grading under a scope that grades no video quality.
+- Under every scope and tier, a LeRobot episode is blocked when its data file lacks a feature `meta/info.json` declares, stores it as another kind of value, or stores a fixed-size array of another shape than declared, with a finding that names the column, the declared and found dtypes, and the file. Video and image features are not checked, and the check carries no weight in the score.
 
 ### Changed
 
