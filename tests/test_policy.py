@@ -79,6 +79,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "integrity.spike_pct":                 4,
     "integrity.drift":                     1,
     "integrity.snr_db":                    2,
+    "integrity.rotation_snr_db":           2,
     "integrity.dead_taxel_pct":            3,
     "integrity.hysteresis":                2,
     "motion.mean_jerk_norm":               1,

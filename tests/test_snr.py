@@ -9,13 +9,15 @@ import math
 import random
 
 # External
+import numpy as np
 import polars as pl
 import pytest
 from pydantic import ValidationError
+from upath import UPath
 
 # Internal
 from kalanos.analysis.coverage import state_of
-from kalanos.analysis.metrics.integrity import snr_db
+from kalanos.analysis.metrics.integrity import rotation_snr_db, snr_db
 from kalanos.analysis.models.binding import (
     ChannelBinding,
     NoiseFloor,
@@ -23,14 +25,33 @@ from kalanos.analysis.models.binding import (
     Representation,
     Validation,
 )
-from kalanos.analysis.models.domain import ClockInfo, SourceOrder
+from kalanos.analysis.models.coverage import Availability
+from kalanos.analysis.models.domain import (
+    Channel,
+    Clock,
+    ClockInfo,
+    FramePayload,
+    Kind,
+    SourceOrder,
+    Stream,
+    TimestampDtype,
+)
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Level, MetricStatus
 from kalanos.analysis.models.scoring import FindingLocation
 from kalanos.analysis.scoring.score import score_metrics
 from kalanos.assets.policy import load_default_policy
+from kalanos.testing import stream_context
 
 # Local
 from helpers import channel_ctx as _channel_ctx
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+_QUATERNION = ("qx", "qy", "qz", "qw")
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -100,6 +121,134 @@ def scored(ctx):
             episode_id="e", stream=ctx.taxonomy_type, channel="position"
         ),
     )
+
+
+def _quaternion_rows(
+    angle_deg,
+    *,
+    n=200,
+    rate_hz=50.0,
+    noise_deg=0.09,
+    seed=8,
+    canonical=False,
+):
+    """Rows `(qx, qy, qz, qw)` of a rotation about one fixed axis, with small noise.
+
+    The defaults are a 10° rms, 0.75 Hz swing near the identity rotation,
+    with 0.09° rms of noise: what episode 8 of the synthetic action-spike set reads.
+
+    Parameters
+    ----------
+    angle_deg : callable
+        The rotation angle in degrees at time `t` in seconds.
+    n : int
+        How many rows.
+    rate_hz : float
+        The sample rate the angle is evaluated at.
+    noise_deg : float
+        The rms angle of the random rotation applied to each row.
+    seed : int
+        The noise generator's seed.
+    canonical : bool
+        Whether to flip every row to `qw >= 0`, as many sensors store a quaternion.
+
+    Returns
+    -------
+    list[tuple[float, float, float, float]]
+    """
+
+    rng = random.Random(seed)
+    axis = np.array([1.0, 2.0, 3.0]) / math.sqrt(14.0)
+    sigma = math.radians(noise_deg) / math.sqrt(3.0)
+    rows = []
+    for i in range(n):
+        half = math.radians(angle_deg(i / rate_hz)) / 2
+        motion = np.array([*(math.sin(half) * axis), math.cos(half)])
+        rv = np.array([rng.gauss(0, sigma) for _ in range(3)])
+        theta = float(np.linalg.norm(rv))
+        noise = np.array([*(math.sin(theta / 2) * rv / theta), math.cos(theta / 2)])
+        # Hamilton product motion * noise, both stored as (x, y, z, w).
+        (x1, y1, z1, w1), (x2, y2, z2, w2) = motion, noise
+        q = (
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        )
+        if canonical and q[3] < 0:
+            q = tuple(-c for c in q)
+        rows.append(q)
+    return rows
+
+
+def _swing(t):
+    """A 0.75 Hz swing of 10° rms."""
+
+    return 10 * math.sqrt(2) * math.sin(2 * math.pi * 0.75 * t)
+
+
+def _quaternion_ctx(rows, *, rate_hz=50.0, names=_QUATERNION):
+    """Wrap quaternion rows in a stream whose four channels are bound as quaternion.
+
+    Parameters
+    ----------
+    rows : list of tuple
+        Rows `(qx, qy, qz, qw)`.
+    rate_hz : float
+        The rate of the regular clock the rows sit on.
+    names : tuple[str, ...]
+        The channel order; each name picks its component from the row.
+
+    Returns
+    -------
+    StreamContext
+    """
+
+    columns = {name: [row[_QUATERNION.index(name)] for row in rows] for name in names}
+    stream = Stream(
+        taxonomy_type="unmapped.observation.eef_quat",
+        kind=Kind.SERIES,
+        timestamps=pl.Series("time_s", [i / rate_hz for i in range(len(rows))]),
+        payload=FramePayload(frame=pl.DataFrame(columns)),
+        source_path=UPath("quaternion.parquet"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
+        clock=Clock.CAPTURE,
+        channels=[
+            Channel(
+                name=name,
+                binding=ChannelBinding(
+                    feature="observation.eef_quat",
+                    index=_QUATERNION.index(name),
+                    taxonomy_type="unmapped.observation.eef_quat",
+                    representation=Representation.QUATERNION,
+                ),
+            )
+            for name in names
+        ],
+    )
+    return stream_context(stream)
+
+
+def _probe_rotation_snr(rows):
+    """The investigation probe's rotation SNR in numpy, as an independent reference."""
+
+    q = np.array(rows, dtype=np.float64)
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    for i in range(1, len(q)):
+        if q[i] @ q[i - 1] < 0:
+            q[i] = -q[i]
+    k = np.ones(5) / 5
+    sm = np.stack([np.convolve(q[:, j], k, mode="valid") for j in range(4)], 1)
+    sm /= np.linalg.norm(sm, axis=1, keepdims=True)
+    mean = sm.mean(0)
+    mean /= np.linalg.norm(mean)
+
+    def angle(a, b):
+        return 2 * np.arccos(np.clip(np.abs((a * b).sum(1)), 0, 1))
+
+    signal = (angle(sm, np.broadcast_to(mean, sm.shape)) ** 2).mean()
+    noise = (angle(q[2:-2], sm) ** 2).mean()
+    return 10 * math.log10(signal / noise)
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -305,3 +454,120 @@ def test_explicit_report_only_noise_policy_stays_report_only():
         location=FindingLocation(episode_id="e", channel="position"),
     )
     assert findings[0].consequence == Consequence.REPORT_ONLY
+
+
+def test_qw_alone_reads_as_noise_near_the_identity_rotation():
+    """qw = cos(θ/2) barely moves near the identity, so per-component SNR flags it."""
+
+    qw = [row[3] for row in _quaternion_rows(_swing)]
+
+    value = snr_db(_channel_ctx(qw, rate_hz=50.0)).value
+
+    assert value is not None and value < 30.0
+
+
+def test_rotation_snr_reads_the_whole_rotation_above_the_warning_band():
+    result = rotation_snr_db(_quaternion_ctx(_quaternion_rows(_swing)))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value is not None and result.value >= 30.0
+    assert result.evidence["noise_assessment"]["status"] == "unassessed"
+
+
+def test_rotation_snr_ignores_quaternion_sign_and_component_order():
+    rows = _quaternion_rows(_swing)
+    flipped = [tuple(-c for c in row) if i % 2 else row for i, row in enumerate(rows)]
+
+    original = rotation_snr_db(_quaternion_ctx(rows)).value
+    reordered = rotation_snr_db(
+        _quaternion_ctx(flipped, names=("qw", "qx", "qy", "qz"))
+    ).value
+
+    assert reordered == pytest.approx(original, abs=1e-9)
+
+
+def test_rotation_snr_is_not_applicable_without_unit_length():
+    rows = [tuple(2 * c for c in row) for row in _quaternion_rows(_swing)]
+    result = rotation_snr_db(_quaternion_ctx(rows))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert "unit length" in result.evidence["reason"]
+    assert result.evidence["max_norm_error"] == pytest.approx(1.0)
+
+
+def test_rotation_snr_is_not_applicable_below_45_hz():
+    rows = _quaternion_rows(_swing, rate_hz=30.0)
+    result = rotation_snr_db(_quaternion_ctx(rows, rate_hz=30.0))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert "too slowly" in result.evidence["reason"]
+
+
+def test_snr_db_stands_down_on_a_quaternion_component():
+    ctx = _channel_ctx([row[3] for row in _quaternion_rows(_swing)], rate_hz=50.0)
+    ctx.channel.binding = ChannelBinding(
+        feature="observation.eef_quat",
+        index=3,
+        taxonomy_type="unmapped.observation.eef_quat",
+        representation=Representation.QUATERNION,
+    )
+    result = snr_db(ctx)
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert result.availability == Availability.NOT_APPLICABLE
+    assert "rotation_snr_db" in result.evidence["reason"]
+
+
+def test_rotation_snr_survives_a_half_turn():
+    """A 200° sweep stored with qw >= 0 flips sign mid-episode; alignment undoes it."""
+
+    rows = _quaternion_rows(lambda t: 50 * t, canonical=True)
+    assert any(
+        sum(x * y for x, y in zip(a, b, strict=True)) < 0
+        for a, b in zip(rows, rows[1:], strict=False)
+    )
+
+    result = rotation_snr_db(_quaternion_ctx(rows))
+
+    assert result.value == pytest.approx(_probe_rotation_snr(rows), abs=0.1)
+
+
+def test_a_critical_rotation_snr_finding_is_reviewed_never_blocked():
+    ctx = _quaternion_ctx(_quaternion_rows(_swing, noise_deg=10.0))
+    _, _, findings = score_metrics(
+        {"rotation_snr_db": rotation_snr_db(ctx)},
+        level=Level.STREAM,
+        taxonomy_type=ctx.taxonomy_type,
+        policy=load_default_policy(),
+        location=FindingLocation(episode_id="e", stream=ctx.taxonomy_type),
+    )
+
+    assert findings[0].severity.value == "critical"
+    assert findings[0].consequence == Consequence.REVIEW
+
+
+def test_rotation_snr_skips_invalid_rows_and_counts_them():
+    rows = _quaternion_rows(_swing)
+    rows[60] = (None, None, None, None)
+    rows[120] = (rows[120][0], math.nan, rows[120][2], rows[120][3])
+    result = rotation_snr_db(_quaternion_ctx(rows))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value is not None and result.value >= 30.0
+    assert result.evidence["n_invalid_samples"] == 2
+
+
+@pytest.mark.parametrize("is_regular", [True, False])
+def test_rotation_snr_is_inapplicable_on_a_short_stream_without_a_quaternion(
+    is_regular,
+):
+    """A stream with no quaternion is inapplicable whatever its length or sampling."""
+
+    from kalanos.analysis.metrics.registry import run_stream_metrics
+
+    ctx = _channel_ctx([0.0, 1.0, 0.5], rate_hz=50.0).stream
+    ctx.is_regular = is_regular
+
+    result = run_stream_metrics(ctx)["rotation_snr_db"]
+
+    assert result.availability == Availability.NOT_APPLICABLE

@@ -84,7 +84,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "8.0.0"
+CURRENT_SCHEMA_VERSION = "8.1.0"
 
 # Significant digits a stored near-duplicate distance keeps.
 # The near limit, 0.02, is exact at 4 digits,

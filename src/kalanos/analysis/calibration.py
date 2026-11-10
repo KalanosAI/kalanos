@@ -17,6 +17,7 @@ from kalanos.analysis.models.eligibility import BlockingRoute, Consequence
 from kalanos.analysis.models.policy import MetricPolicy, Policy
 from kalanos.analysis.models.provenance import Producer, RunInfo, content_digest
 from kalanos.analysis.models.scoring import Finding, Severity
+from kalanos.analysis.scoring.score import SMOOTH_RESIDUAL_METRICS
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -181,7 +182,7 @@ def _calibrated(finding: Finding, entry: MetricPolicy) -> bool:
         finding.severity == Severity.CRITICAL
         and (entry.consequence or Consequence.BLOCK) == Consequence.BLOCK
         and (
-            finding.metric_id == "integrity.snr_db"
+            finding.metric_id in SMOOTH_RESIDUAL_METRICS
             or (entry.route or BlockingRoute.STATISTICAL) == BlockingRoute.STATISTICAL
         )
     )
@@ -249,7 +250,7 @@ def apply_calibration(
                 ),
             )
             if (
-                f.metric_id == "integrity.snr_db"
+                f.metric_id in SMOOTH_RESIDUAL_METRICS
                 and f.evidence.get("noise_assessment", {}).get("status")
                 != "above_reference"
             ):

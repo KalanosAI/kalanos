@@ -1,8 +1,17 @@
 # Report schema
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 8.0.0 changes (written by Kalanos 0.9.0) below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0) and the 8.1.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 8.1.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `ChannelBinding.representation` | `str` | Takes a new value, `quaternion`: the channel is one of four whose names end in `qx`, `qy`, `qz` and `qw`, read together as a unit quaternion. Under `streams[].channels[].channel.binding`. |
+| `streams[].metrics["rotation_snr_db"]` | `MetricResult` | The signal-to-noise ratio of a stream's unit-quaternion rotation, in dB, measured on the angle between rotations. Present on every series stream, `not_applicable` where the stream holds no quaternion. Its `snr_db` on each of the four channels is `not_applicable`. |
+
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, and its streams have no `rotation_snr_db`.
 
 ## Changed in 8.0.0
 
@@ -173,7 +182,7 @@ A 7.0.0 report loads with `family_weights`, `duplicates`, every `metrics` and ev
 
 - `Stream.clock_info: ClockInfo` — `origin` (`capture`, `receive`, `publish`, `log`, `presentation`, `generated`, `simulation`, `unknown`), `origin_evidence` (`producer`, `adapter`, `inferred`, `none`), native unit/dtype, transforms. `ClockInfo.from_legacy(Clock.RECONSTRUCTED)` yields inferred generation, never certified capture. Adapters populate it and expose `clock`, `clock_info` and `source_order` on each graded stream. `tick_period_s` optionally expresses an adapter-generated grid. Legacy capture labels migrate with inferred evidence; they do not supply a producer declaration. Native ticks remain in `Stream.native_timestamps` during analysis and are omitted from the report JSON.
 - `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. LeRobot sample order is preserved; no sample timestamp sort remains.
-- `ChannelBinding` — `actuator`, `quantity`, `representation`, `unit`, `command`, `device`, `origin`, `status`, `validations[]`. Metrics are routed through typed views built from these.
+- `ChannelBinding` — `actuator`, `quantity`, `representation` (`continuous`, `discrete`, `angle`, `quaternion`, `unknown`), `unit`, `command`, `device`, `origin`, `status`, `validations[]`. Metrics are routed through typed views built from these.
 
 ## Policy additions
 
