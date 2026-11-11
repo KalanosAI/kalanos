@@ -6,6 +6,7 @@
 
 # Built-in
 import json
+import math
 import random
 import shutil
 from contextlib import closing
@@ -689,9 +690,9 @@ def test_the_shared_read_numbers_frames_as_each_read_alone(
 
     ranges = vision._split(windows + cut_windows + [(0, 1)], 60)
     shared = vision._pass(
-        payload, ranges, windows, sampled, sampled, cut_windows, **limits
+        payload, ranges, windows, sampled, sampled, sampled, cut_windows, **limits
     )
-    alone = vision._read(payload, windows, sampled, sampled, **limits)
+    alone = vision._read(payload, windows, sampled, sampled, sampled, **limits)
     cut, failure = _window_thumbnails(payload, cut_windows)
 
     assert isinstance(shared.frames, vision._Frames)
@@ -2046,9 +2047,15 @@ def test_a_different_read_decodes_its_own_frames():
     three = sharpness_score(stream_context(stream, vision_samples=3))
     full = sharpness_score(stream_context(stream, full_frame_scan=True))
 
+    full_ctx = stream_context(stream, full_frame_scan=True)
+    rows = camera_frames(full_ctx)
+
     assert ten.evidence["n_sampled"] == 10
     assert three.evidence["n_sampled"] == 3
-    assert full.evidence["n_sampled"] == 1000
+    assert rows is not None
+    assert full.evidence["n_sampled"] == len(rows.requested_rows)
+    assert 100 <= full.evidence["n_sampled"] <= 110
+    assert exposure_shift_pct(full_ctx).evidence["n_sampled"] == 1000
 
 
 def test_a_stream_without_a_frame_rate_samples_single_frames():
@@ -2077,6 +2084,106 @@ def test_a_full_scan_finds_a_blown_out_moment_the_windows_miss():
 
     assert sampled.value == 0
     assert full.value == pytest.approx(3.0)
+
+
+def _with_ratio(ctx: StreamContext, ratio: float) -> StreamContext:
+    """The same context with `VisionSpec.summary_ratio` set to `ratio`."""
+
+    return ctx.model_copy(update={"vision": VisionSpec(summary_ratio=ratio)})
+
+
+def _summary_count(n: int, ratio: float, sampled: list[int]) -> int:
+    """How many frames a full scan of `n` frames summarizes at `ratio`."""
+
+    return len(set(vision._spread(n, math.ceil(ratio * n))) | set(sampled))
+
+
+def test_a_full_scan_measures_native_frames_only_for_the_summary(monkeypatch):
+    """Blur runs once per summary frame, not once per decoded frame."""
+
+    stream = clean_frames(frames=1000)
+    sampled = camera_frames(stream_context(stream))
+    reblur = vision._reblur_loss
+    calls: list[int] = []
+
+    def counting(frame, laplacian):
+        calls.append(1)
+        return reblur(frame, laplacian)
+
+    monkeypatch.setattr(vision, "_reblur_loss", counting)
+    vision.clear_cache()
+    full = camera_frames(stream_context(stream, full_frame_scan=True))
+
+    assert sampled is not None and full is not None
+    assert full.decoded_frames == 1000
+    assert len(calls) == _summary_count(1000, 0.1, sampled.requested_rows)
+
+
+@pytest.mark.parametrize("ratio", [0.1, 0.5])
+def test_summary_metrics_use_the_ratio_and_the_sampled_frames(ratio):
+    """Sharpness, contrast and exposure level measure the ratio plus the sample."""
+
+    stream = clean_frames(frames=1000)
+    sampled = camera_frames(stream_context(stream))
+    ctx = _with_ratio(stream_context(stream, full_frame_scan=True), ratio)
+    assert sampled is not None
+    expected = _summary_count(1000, ratio, sampled.requested_rows)
+
+    counts = [
+        func(ctx).evidence["n_sampled"]
+        for func in (sharpness_score, contrast_score, exposure_level)
+    ]
+    rows = camera_frames(ctx)
+
+    assert counts == [expected] * 3
+    assert rows is not None
+    assert rows.parameters["summary_ratio"] == ratio
+
+
+def test_a_ratio_of_one_measures_every_frame():
+    """At a ratio of 1 a full scan summarizes, and lists, every frame."""
+
+    ctx = _with_ratio(
+        stream_context(clean_frames(frames=200), full_frame_scan=True), 1.0
+    )
+
+    rows = camera_frames(ctx)
+
+    assert sharpness_score(ctx).evidence["n_sampled"] == 200
+    assert rows is not None and len(rows.frames) == 200
+
+
+@pytest.mark.parametrize(
+    ("func", "level"),
+    [(blank_frame_pct, 128), (dark_frame_pct, 0), (bright_frame_pct, 255)],
+    ids=["blank", "dark", "bright"],
+)
+def test_event_metrics_read_every_frame_under_a_full_scan(func, level):
+    """A full scan's per-frame shares count frames outside the summary."""
+
+    stream = clean_frames(frames=1000)
+    assert isinstance(stream.payload, SyntheticFrames)
+    frames = list(stream.payload.frames)
+    for index in range(40, 70):
+        frames[index] = frames[index] * 0 + level
+    altered = stream.model_copy(update={"payload": SyntheticFrames(frames=frames)})
+
+    result = func(stream_context(altered, full_frame_scan=True))
+
+    assert result.evidence["n_sampled"] == 1000
+    assert result.value == pytest.approx(3.0)
+
+
+def test_a_sampled_read_ignores_the_ratio():
+    """Without a full scan the summary is the sample, whatever the ratio."""
+
+    stream = clean_frames(frames=1000)
+
+    default = sharpness_score(stream_context(stream))
+    vision.clear_cache()
+    halved = sharpness_score(_with_ratio(stream_context(stream), 0.5))
+
+    assert halved == default
 
 
 def test_exposure_catches_part_of_a_stream_blown_out():
@@ -2360,6 +2467,23 @@ def test_vision_metric_coverage_leaves_depth_out():
     assert vision_metric_coverage([camera, depth]) == (True, False)
 
 
+def test_full_coverage_needs_only_exposure_on_every_frame():
+    """A full scan reads every frame for exposure and covers the camera fully."""
+
+    graded, _findings = grade_stream(
+        clean_frames(frames=300),
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+        full_frame_scan=True,
+    )
+    sharpness = graded.metrics["sharpness_score"].evidence
+
+    assert sharpness["n_sampled"] < sharpness["n_frames"]
+    assert vision_metric_coverage([graded]) == (True, True)
+
+
 def test_a_read_that_runs_out_early_leaves_the_camera_unsampled(monkeypatch):
     """A truncated file the metrics still compute on has not finished its sample."""
 
@@ -2439,7 +2563,8 @@ def test_a_full_scan_reads_past_the_decode_budget():
 
     assert frames is not None
     assert frames.availability == Availability.COMPUTED
-    assert len(frames.frames) == 100
+    assert frames.decoded_frames == 100
+    assert not frames.missing_rows
 
 
 @pytest.mark.parametrize(
@@ -2539,26 +2664,35 @@ def test_frame_count_finds_frames_past_the_timestamps_on_every_read(full_frame_s
     assert result.value == pytest.approx(0.5)
 
 
-def test_evidence_frames_alone_carry_hashes_on_a_full_scan():
-    """A full scan lists every frame, hashing only the sample's frames and bad ones."""
+def test_a_full_scan_lists_and_hashes_the_summary_frames():
+    """A full scan lists its summary frames, hashing the sample's and bad ones.
 
-    clean = clean_frames(frames=100)
+    Each row carries its own frame's clipped share,
+    the one a scan listing every frame gives it.
+    """
+
+    clean = clean_frames(frames=300)
     assert isinstance(clean.payload, SyntheticFrames)
-    dim = [(frame * 0.3).astype(frame.dtype) for frame in clean.payload.frames]
-    stream = _with_frames(clean, dim, 20, 60)
+    dim = [(frame * 0.02).astype(frame.dtype) for frame in clean.payload.frames]
+    stream = _with_frames(clean, dim, 20, 120)
     sampled = camera_frames(stream_context(stream))
     full_ctx = stream_context(stream, full_frame_scan=True)
 
     full = camera_frames(full_ctx)
+    every = camera_frames(_with_ratio(full_ctx, 1.0))
     bad = exposure_shift_pct(full_ctx).evidence["bad_indices"]
 
-    assert sampled is not None and full is not None
-    assert len(full.frames) == 100
-    assert bad == list(range(20, 60))
+    assert sampled is not None and full is not None and every is not None
+    rows = [f.source_row for f in full.frames]
+    assert rows == sorted(set(vision._spread(300, 30)) | set(sampled.requested_rows))
+    assert bad == list(range(20, 120))
     assert {f.source_row for f in full.frames if f.luma_sha256} == {
         *sampled.requested_rows,
-        *bad,
+        *(row for row in bad if row in rows),
     }
+    clipped = {f.source_row: f.clipped_fraction for f in every.frames}
+    assert any(f.clipped_fraction > 0 for f in full.frames)
+    assert all(f.clipped_fraction == clipped[f.source_row] for f in full.frames)
 
 
 def test_a_critical_vision_result_carries_its_worst_frame():

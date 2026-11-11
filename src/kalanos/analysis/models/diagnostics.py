@@ -129,6 +129,8 @@ class VisionSpec(StrictModel):
     """How camera footage is read.
 
     Sample size, full scan, decode caps, previews and exposure levels.
+    Under a full scan, `summary_ratio` is the share of each episode's frames
+    sharpness, contrast and exposure level measure, besides the sampled frames.
     The vision diagnostic previews its blurriest sampled frame as one WebP image
     unless `preview_frames` is 0; any other value gives that one image.
     `preview_size` is the image's longest side, in pixels, at most.
@@ -136,6 +138,7 @@ class VisionSpec(StrictModel):
 
     sample_frames: int = Field(default=10, ge=1, le=10000)
     full_frame_scan: bool = False
+    summary_ratio: float = Field(default=0.1, gt=0, le=1)
     max_decode_frames: int = Field(default=20000, ge=2, le=1000000)
     max_pixels: int = Field(default=2097152, ge=64)
     preview_frames: int = Field(default=8, ge=0, le=32)

@@ -80,6 +80,11 @@ class Settings(BaseSettings):
         Make frame metrics read every frame instead of a sample,
         overridden for one invocation by the CLI's `--full-frame-scan` option.
         `None` leaves it to the bundle's `vision` section, off by default.
+    vision_summary_ratio : float or None
+        The share of each episode's frames sharpness, contrast and exposure level
+        measure under a full frame scan, set by `KALANOS_VISION_SUMMARY_RATIO`
+        and overridden for one invocation by the CLI's `--vision-summary-ratio` option.
+        `None` leaves it to the bundle's `vision` section, 0.1 by default.
     hub_url : str
         Where `kalanos publish` sends reports, set by `KALANOS_HUB_URL`.
     """
@@ -104,6 +109,7 @@ class Settings(BaseSettings):
     remote_readahead_blocks: int = Field(default=5, ge=0)
     vision_samples: int | None = Field(default=None, ge=1)
     full_frame_scan: bool | None = None
+    vision_summary_ratio: float | None = Field(default=None, gt=0, le=1)
     hub_url: str = "https://hub.kalanos.ai"
 
 

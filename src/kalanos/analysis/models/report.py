@@ -225,7 +225,9 @@ class CameraFrames(BaseModel):
     Attributes
     ----------
     requested_rows : list of int
-        The rows the sample asked for.
+        The rows the sample asked for;
+        under a full scan, the summary frames, `VisionSpec.summary_ratio`
+        of the stream's frames plus the ones a sample would take.
     missing_rows : list of int
         Requested rows the read did not measure.
     frames : list of CameraFrame
@@ -237,7 +239,8 @@ class CameraFrames(BaseModel):
     identical_adjacent_pairs : list of list of int
         `[row, row + 1]` for each compared pair with no difference at all.
     sample_plan : str
-        `evenly_spaced_v1` for a sample, `full_scan_v1` for every frame.
+        `evenly_spaced_v1` for a sample;
+        `full_scan_v1` when every frame was decoded, its rows the summary frames.
     parameters : dict
         The `VisionSpec` the read ran under.
     availability : Availability
