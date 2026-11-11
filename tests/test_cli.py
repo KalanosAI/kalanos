@@ -295,15 +295,18 @@ def test_the_summary_ratio_flag_reaches_every_camera_stream(monkeypatch):
     assert set(seen) == {0.5}
 
 
-def test_a_summary_ratio_of_zero_is_refused():
-    """Verify --vision-summary-ratio 0 exits with a usage error."""
+def test_a_summary_ratio_of_zero_is_refused(monkeypatch):
+    """Verify --vision-summary-ratio 0 exits with a usage error before grading."""
+
+    graded = []
+    monkeypatch.setattr(api, "_grade", lambda *args, **kwargs: graded.append(1))
 
     result = runner.invoke(
         app, ["grade", str(LEROBOT_FIXTURE), "--vision-summary-ratio", "0"]
     )
 
     assert result.exit_code == 2
-    assert "--vision-summary-ratio" in result.output
+    assert not graded
 
 
 def test_report_json_writes_a_file_that_parses_back_into_the_model(tmp_path):
