@@ -401,6 +401,7 @@ def resolve_vision(
     *,
     samples: int | None,
     full_frame_scan: bool | None,
+    summary_ratio: float | None = None,
     tier: ExecutionTier,
 ) -> VisionSpec:
     """Resolve how camera footage is read: CLI, then environment, then bundle.
@@ -411,7 +412,7 @@ def resolve_vision(
         The bundle's `vision` section.
     settings : Settings
         The process settings, carrying any `KALANOS_*` override.
-    samples, full_frame_scan : int, bool or None
+    samples, full_frame_scan, summary_ratio : int, bool, float or None
         The command line's values, `None` where it gave none.
     tier : ExecutionTier
         The run's tier; the full tier always scans every frame.
@@ -419,7 +420,8 @@ def resolve_vision(
     Returns
     -------
     VisionSpec
-        The bundle's section with the sample count and the full scan resolved.
+        The bundle's section with the sample count, the full scan
+        and the summary ratio resolved.
     """
 
     sample_frames = next(
@@ -436,11 +438,21 @@ def resolve_vision(
         )
         if value is not None
     )
+    ratio = next(
+        value
+        for value in (
+            summary_ratio,
+            settings.vision_summary_ratio,
+            bundle_vision.summary_ratio,
+        )
+        if value is not None
+    )
     return VisionSpec.model_validate(
         {
             **bundle_vision.model_dump(),
             "sample_frames": sample_frames,
             "full_frame_scan": scan or tier == ExecutionTier.FULL,
+            "summary_ratio": ratio,
         }
     )
 
@@ -464,10 +476,12 @@ def prepare_configuration(
     limits: SourceLimits | None = None,
     vision_samples: int | None = None,
     full_frame_scan: bool | None = None,
+    vision_summary_ratio: float | None = None,
 ) -> tuple[Policy, Dictionary, RunConfiguration]:
     """Load grade/benchmark inputs identically; explicit policy wins over bundle.
 
-    `vision_samples` and `full_frame_scan` are the command line's values,
+    `vision_samples`, `full_frame_scan` and `vision_summary_ratio`
+    are the command line's values,
     resolved with the environment and the bundle by `resolve_vision`.
     """
 
@@ -548,6 +562,7 @@ def prepare_configuration(
         settings,
         samples=vision_samples,
         full_frame_scan=full_frame_scan,
+        summary_ratio=vision_summary_ratio,
         tier=config.scope.tier,
     )
     config = replace(

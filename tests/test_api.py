@@ -176,6 +176,14 @@ def test_grade_refuses_a_sample_count_below_one(tmp_path):
         kalanos.grade(tmp_path / "missing", vision_samples=0)
 
 
+@pytest.mark.parametrize("ratio", [0, 1.5])
+def test_grade_refuses_a_summary_ratio_outside_zero_to_one(tmp_path, ratio):
+    """Verify a summary ratio of 0, or above 1, is refused before the path is read."""
+
+    with pytest.raises(ValueError, match="vision_summary_ratio"):
+        kalanos.grade(tmp_path / "missing", vision_summary_ratio=ratio)
+
+
 def test_grade_refuses_an_empty_folder(tmp_path):
     """Verify a folder holding nothing at all raises NothingToGrade."""
 
@@ -216,7 +224,7 @@ def test_the_full_tier_reads_every_camera_frame():
 
     for episode in report.episodes:
         camera = next(s for s in episode.streams if s.kind == "video")
-        evidence = camera.metrics["sharpness_score"].evidence
+        evidence = camera.metrics["exposure_shift_pct"].evidence
         assert evidence["n_sampled"] == evidence["n_frames"]
 
 

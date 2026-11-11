@@ -215,6 +215,37 @@ def test_vision_settings_follow_cli_then_environment_then_bundle():
     assert resolve(unset, tier=ExecutionTier.FULL).full_frame_scan
 
 
+def test_the_summary_ratio_follows_cli_then_environment_then_bundle():
+    """The summary ratio resolves like the sample count, 0.1 when nothing sets it."""
+
+    def resolve(bundle, settings, ratio=None):
+        return resolve_vision(
+            bundle,
+            settings,
+            samples=None,
+            full_frame_scan=None,
+            summary_ratio=ratio,
+            tier=ExecutionTier.STANDARD,
+        ).summary_ratio
+
+    bundle = VisionSpec(summary_ratio=0.3)
+    unset = Settings(vision_summary_ratio=None)
+    environment = Settings(vision_summary_ratio=0.2)
+
+    assert resolve(VisionSpec(), unset) == 0.1
+    assert resolve(bundle, unset) == 0.3
+    assert resolve(bundle, environment) == 0.2
+    assert resolve(bundle, environment, ratio=0.5) == 0.5
+
+
+@pytest.mark.parametrize("ratio", [0, 1.5])
+def test_a_summary_ratio_outside_zero_to_one_is_refused(ratio):
+    """A ratio of 0 measures nothing, and one above 1 more frames than exist."""
+
+    with pytest.raises(ValidationError):
+        VisionSpec(summary_ratio=ratio)
+
+
 def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
     """Only a changed vision section enters the execution digest."""
 
