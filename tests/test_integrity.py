@@ -47,6 +47,53 @@ from helpers import channel_ctx as _channel_ctx
 
 _SOURCE_PATH = UPath("test_integrity.csv")
 
+_DENSE_SPIKE_STEPS = (
+    [
+        13,
+        37,
+        49,
+        60,
+        63,
+        100,
+        102,
+        111,
+        116,
+        122,
+        131,
+        135,
+        142,
+        143,
+        144,
+        164,
+        176,
+        180,
+        188,
+        194,
+    ],
+    [
+        5,
+        6,
+        13,
+        16,
+        24,
+        27,
+        39,
+        41,
+        50,
+        56,
+        64,
+        76,
+        111,
+        114,
+        140,
+        153,
+        166,
+        175,
+        190,
+        191,
+    ],
+)
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
@@ -69,6 +116,34 @@ def _taxel_stream_ctx(columns: dict[str, list[float]]) -> StreamContext:
         channels=[Channel(name=name) for name in columns],
     )
     return StreamContext(stream=stream, is_regular=True)
+
+
+def _dense_spikes(steps: list[int], offsets: list[float]) -> list[float]:
+    """A 200-sample, 50 Hz slow sine with one offset added at each step.
+
+    Parameters
+    ----------
+    steps : list[int]
+        The sample indices that receive an offset.
+    offsets : list[float]
+        The offset added at each step, in the same order.
+
+    Returns
+    -------
+    list[float]
+        The channel's samples.
+    """
+
+    values = [0.2 * math.sin(2 * math.pi * 0.4 * i / 50.0) for i in range(200)]
+    for step, offset in zip(steps, offsets, strict=True):
+        values[step] += offset
+    return values
+
+
+def _alternating_offsets(n: int) -> list[float]:
+    """Offsets of +2.0 and -2.5 in turn, `n` of them."""
+
+    return [2.0 if index % 2 == 0 else -2.5 for index in range(n)]
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -300,6 +375,52 @@ def test_spike_marks_sample_and_wider_filter_support():
     match = next(i for i in result.support.intervals if i.start == 50)
     assert match.end_exclusive == 51
     assert (match.support_start, match.support_end_exclusive) == (25, 76)
+
+
+@pytest.mark.parametrize("steps", _DENSE_SPIKE_STEPS)
+def test_spike_pct_scores_only_samples_with_a_full_window(steps):
+    """Only samples with a full window are scored.
+
+    The first and last 25 of 200 have no full 51-sample window around them.
+    """
+
+    ctx = _channel_ctx(
+        _dense_spikes(steps, _alternating_offsets(len(steps))), rate_hz=50.0
+    )
+    result = spike_pct(ctx)
+
+    assert result.evidence["n_scored"] == 150
+    assert all(25 <= index <= 174 for index in result.evidence["sample_indices"])
+
+
+@pytest.mark.parametrize("steps", _DENSE_SPIKE_STEPS)
+def test_spike_pct_flags_nothing_outside_dense_injected_spikes(steps):
+    """Every flagged sample is an injected step, matched exactly."""
+
+    ctx = _channel_ctx(
+        _dense_spikes(steps, _alternating_offsets(len(steps))), rate_hz=50.0
+    )
+
+    assert set(spike_pct(ctx).evidence["sample_indices"]) <= set(steps)
+
+
+@pytest.mark.parametrize(
+    ("steps", "flagged"), list(zip(_DENSE_SPIKE_STEPS, ([], [114]), strict=True))
+)
+def test_spike_pct_misses_most_spikes_when_twenty_share_a_window(steps, flagged):
+    """Most of twenty spikes in 200 samples go unflagged.
+
+    The other spikes in each window inflate its mean and spread,
+    so few clear 6 standard deviations.
+    """
+
+    ctx = _channel_ctx(
+        _dense_spikes(steps, _alternating_offsets(len(steps))), rate_hz=50.0
+    )
+    found = spike_pct(ctx).evidence["sample_indices"]
+
+    assert found == flagged
+    assert len(found) / len(steps) < 0.5
 
 
 def test_empty_or_half_specified_intervals_are_rejected():

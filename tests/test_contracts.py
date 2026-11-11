@@ -55,6 +55,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "spike_pct": Defect.SPIKE,
     "drift": Defect.DRIFT,
     "snr_db": Defect.NOISE,
+    "rotation_snr_db": None,
     "dead_taxel_pct": Defect.DEAD_TAXEL,
     "hysteresis": Defect.HYSTERESIS,
     "mean_jerk_norm": Defect.SPIKE,

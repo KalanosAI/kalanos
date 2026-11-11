@@ -53,6 +53,10 @@ from kalanos.analysis.models.summaries import EpisodeSummary, MetricSubject
 # is a compatibility field that report assembly fills from the episode's
 # eligibility; scoring leaves it `None` at every level.
 
+# Smooth/residual ratios. Critical stays a review even under a contract label,
+# and calibration never promotes one whose noise was not measured above a reference.
+SMOOTH_RESIDUAL_METRICS = frozenset({"integrity.snr_db", "integrity.rotation_snr_db"})
+
 # A metric that lands exactly on the bad bound scores 0 points,
 # which this module treats as a failure for `fail_penalty` purposes.
 _FAILING_POINTS = 0.0
@@ -272,7 +276,7 @@ def consequence_for(
         return consequence, None
     route = metric_policy.route or BlockingRoute.STATISTICAL
     # A smooth/residual ratio is statistical even if a policy labels it contract.
-    if route == BlockingRoute.STATISTICAL or key == "integrity.snr_db":
+    if route == BlockingRoute.STATISTICAL or key in SMOOTH_RESIDUAL_METRICS:
         return Consequence.REVIEW, None
     return Consequence.BLOCK, route
 

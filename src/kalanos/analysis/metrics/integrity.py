@@ -1,9 +1,11 @@
 """The integrity family: missing_pct, flatline_pct, spike_pct, drift, snr_db,
-dead_taxel_pct and hysteresis.
+rotation_snr_db, dead_taxel_pct and hysteresis.
 
 Five gate on dtype and sample count only, so they run on any numeric channel
 regardless of taxonomy. dead_taxel_pct and hysteresis need an array of cells,
 so they attach at Level.STREAM and gate on `extero.taxel_pressure` instead.
+rotation_snr_db reads a unit quaternion's four channels together,
+so it attaches at Level.STREAM too.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -22,7 +24,8 @@ from kalanos.analysis.localization import finite, source_values, support_for
 # Internal
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
-from kalanos.analysis.models.domain import FramePayload
+from kalanos.analysis.models.binding import Representation
+from kalanos.analysis.models.domain import FramePayload, Stream
 from kalanos.analysis.models.metrics import (
     ChannelContext,
     Family,
@@ -69,6 +72,9 @@ _SNR_SMOOTHING_WINDOW = 5
 _SNR_MAX_SPAN_SECONDS = 0.1
 _SNR_SPAN_ALLOWANCE = 1.1
 _REQUIRES_REGULAR_AND_SMOOTHABLE = Requires(regular_sampling=True, min_samples=8)
+
+# How far a row's norm may stray from 1 and still be read as a rotation.
+_QUATERNION_NORM_TOLERANCE = 1e-3
 
 _REQUIRES_TAXEL_ARRAY = Requires(min_samples=2, taxonomy=[_TAXEL_PRESSURE])
 _REQUIRES_TAXEL_CYCLE = Requires(min_samples=8, taxonomy=[_TAXEL_PRESSURE])
@@ -386,6 +392,45 @@ def drift(ctx: ChannelContext) -> MetricResult:
     )
 
 
+def _smoothing_rate(
+    stream: Stream, is_regular: bool
+) -> tuple[float, float] | MetricResult:
+    """Check that a stream's clock lets the smoothing window separate noise from motion.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream whose clock is read.
+    is_regular : bool
+        Whether inference classified the stream's sampling as regular.
+
+    Returns
+    -------
+    tuple[float, float] or MetricResult
+        The median sampling rate in Hz and the span the smoothing window covers
+        in seconds, or a `not_applicable` result naming the gate that failed.
+    """
+
+    ticks = clock_samples(stream)
+    if ticks.reason:
+        return not_applicable("source row order is unavailable")
+    if not ticks.seconds:
+        return not_applicable("timestamp units do not establish seconds")
+    if ticks.invalid_rows or not ticks.gaps or any(g <= 0 for g in ticks.gaps):
+        return not_applicable("SNR needs a complete increasing time axis")
+    if not is_regular:
+        return not_applicable("sampling is not regular")
+    rate_hz = 1 / sorted(ticks.gaps)[len(ticks.gaps) // 2]
+    span_s = _SNR_SMOOTHING_WINDOW / rate_hz
+    if span_s > _SNR_MAX_SPAN_SECONDS * _SNR_SPAN_ALLOWANCE:
+        return not_applicable(
+            f"sampled at {rate_hz:.3g} Hz, too slowly to separate sensor noise from "
+            f"motion: the {_SNR_SMOOTHING_WINDOW}-sample smoothing window spans "
+            f"{span_s:.2g} s, more than {_SNR_MAX_SPAN_SECONDS} s"
+        )
+    return rate_hz, span_s
+
+
 @metric(
     level=Level.CHANNEL,
     family=Family.INTEGRITY,
@@ -411,24 +456,20 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
         return not_applicable(
             _SWITCH_REASON.format(what="a signal-to-noise ratio"), inapplicable=True
         )
-    ordered = source_values(ctx)
-    ticks = clock_samples(ctx.stream.stream)
-    if ordered is None or ticks.reason:
-        return not_applicable("source row order is unavailable")
-    if not ticks.seconds:
-        return not_applicable("timestamp units do not establish seconds")
-    if ticks.invalid_rows or not ticks.gaps or any(g <= 0 for g in ticks.gaps):
-        return not_applicable("SNR needs a complete increasing time axis")
-    if not ctx.is_regular:
-        return not_applicable("sampling is not regular")
-    rate_hz = 1 / sorted(ticks.gaps)[len(ticks.gaps) // 2]
-    span_s = _SNR_SMOOTHING_WINDOW / rate_hz
-    if span_s > _SNR_MAX_SPAN_SECONDS * _SNR_SPAN_ALLOWANCE:
+    binding = ctx.channel.binding
+    if binding is not None and binding.representation == Representation.QUATERNION:
         return not_applicable(
-            f"sampled at {rate_hz:.3g} Hz, too slowly to separate sensor noise from "
-            f"motion: the {_SNR_SMOOTHING_WINDOW}-sample smoothing window spans "
-            f"{span_s:.2g} s, more than {_SNR_MAX_SPAN_SECONDS} s"
+            "component of a unit quaternion; its noise is measured on the whole "
+            "rotation by rotation_snr_db",
+            inapplicable=True,
         )
+    ordered = source_values(ctx)
+    if ordered is None:
+        return not_applicable("source row order is unavailable")
+    rate = _smoothing_rate(ctx.stream.stream, ctx.is_regular)
+    if isinstance(rate, MetricResult):
+        return rate
+    rate_hz, span_s = rate
     ordered_values, _, _ = ordered
     values = ordered_values.cast(pl.Float64)
     invalid = values.is_null() | ~values.is_finite()
@@ -476,6 +517,204 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
         return result.model_copy(update={"evidence": {**evidence, **result.evidence}})
     return MetricResult(
         value=10.0 * (math.log10(signal_variance) - math.log10(noise_variance)),
+        unit="dB",
+        status=MetricStatus.REPORT_ONLY,
+        evidence=evidence,
+    )
+
+
+def _float_mean(values: pl.Series) -> float:
+    """Mean of a non-empty Float64 series, as a plain float.
+
+    Parameters
+    ----------
+    values : pl.Series
+        A Float64 series with at least one non-null value.
+
+    Returns
+    -------
+    float
+        The series mean.
+    """
+
+    mean = values.mean()
+    # a Float64 series with a non-null value has a float mean
+    assert isinstance(mean, float)
+    return mean
+
+
+def _rotation_angle(left: list[pl.Expr], right: list[pl.Expr]) -> pl.Expr:
+    """Angle in radians between two unit quaternions, row by row.
+
+    Parameters
+    ----------
+    left, right : list[pl.Expr]
+        The four components of each quaternion, in the same order.
+
+    Returns
+    -------
+    pl.Expr
+        `2·acos(|⟨left, right⟩|)`, so `q` and `-q` read as the same rotation.
+    """
+
+    dot = pl.sum_horizontal([a * b for a, b in zip(left, right, strict=True)])
+    return 2 * dot.abs().clip(upper_bound=1.0).arccos()
+
+
+@metric(
+    level=Level.STREAM,
+    family=Family.INTEGRITY,
+    label="low rotation signal-to-noise",
+)
+def rotation_snr_db(ctx: StreamContext) -> MetricResult:
+    """Measure a five-sample smooth/residual ratio on a unit quaternion's rotation.
+
+    Each component of a quaternion moves by a different share of the same rotation,
+    so the ratio is taken on the angle between rotations.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The stream holding the quaternion's four channels.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when:
+        - the stream does not hold exactly four channels bound as quaternion
+        - the stream has fewer than 8 samples
+        - the clock fails the same gates as `snr_db`
+        - the four components do not have unit length
+        - too few windows survive smoothing, or either mean square is zero
+        `report_only` otherwise, in dB.
+    """
+
+    names = [
+        channel.name
+        for channel in ctx.stream.channels
+        if channel.binding is not None
+        and channel.binding.representation == Representation.QUATERNION
+    ]
+    if len(names) != 4:
+        return not_applicable(
+            "stream holds no single unit quaternion", inapplicable=True
+        )
+    min_samples = _REQUIRES_REGULAR_AND_SMOOTHABLE.min_samples
+    if ctx.n_samples < min_samples:
+        return not_applicable(f"fewer than {min_samples} samples")
+    rate = _smoothing_rate(ctx.stream, ctx.is_regular)
+    if isinstance(rate, MetricResult):
+        return rate
+    rate_hz, span_s = rate
+    if not isinstance(ctx.payload, FramePayload):
+        return not_applicable("payload is not a FramePayload; there are no components")
+
+    frame = ctx.payload.frame.select(pl.col(names).cast(pl.Float64))
+    order = ctx.stream.source_order
+    if not order.preserved and order.original_index is not None:
+        index = order.original_index
+        frame = frame[sorted(range(frame.height), key=lambda i: index[i])]
+
+    components = [pl.col(name) for name in names]
+    invalid = pl.any_horizontal(
+        [c.is_null() | ~c.is_finite().fill_null(False) for c in components]
+    )
+    norm = pl.sum_horizontal([c**2 for c in components]).sqrt()
+    frame = frame.with_columns(
+        pl.when(~invalid).then(c).otherwise(None) for c in components
+    ).with_columns(
+        pl.when(~invalid).then(norm).alias("_norm"), invalid.alias("_invalid")
+    )
+    n_invalid = int(frame["_invalid"].sum())
+    norm_error = (frame["_norm"] - 1.0).abs().max()
+    max_norm_error = float(norm_error) if isinstance(norm_error, (int, float)) else None
+    if max_norm_error is not None and max_norm_error > _QUATERNION_NORM_TOLERANCE:
+        result = not_applicable(
+            "the four components do not have unit length, so they are not a rotation"
+        )
+        return result.model_copy(
+            update={"evidence": {**result.evidence, "max_norm_error": max_norm_error}}
+        )
+    frame = frame.with_columns(c / pl.col("_norm") for c in components)
+
+    # q and -q are the same rotation. Flip each row whose dot product with the
+    # previous valid row is negative, so consecutive rows sit on one hemisphere.
+    previous = [c.shift(1).forward_fill() for c in components]
+    dot = pl.sum_horizontal([c * p for c, p in zip(components, previous, strict=True)])
+    sign = pl.when(dot < 0).then(-1.0).otherwise(1.0).cum_prod()
+    frame = frame.with_columns(c * sign for c in components)
+
+    smoothed_names = [f"_smoothed_{name}" for name in names]
+    smoothed = [pl.col(name) for name in smoothed_names]
+    frame = frame.with_columns(
+        c.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True).alias(name)
+        for c, name in zip(components, smoothed_names, strict=True)
+    )
+    smoothed_norm = pl.sum_horizontal([c**2 for c in smoothed]).sqrt()
+    frame = frame.with_columns(c / smoothed_norm for c in smoothed).filter(
+        pl.all_horizontal([c.is_not_null() for c in smoothed])
+    )
+    if frame.height < 2:
+        return not_applicable("too few finite contiguous windows survive smoothing")
+
+    # Rotation SNR. With qᵢ the rows, q̃ᵢ their smoothed rotations, q̄ the episode mean:
+    #   θ(a, b) = 2·acos(|⟨a, b⟩|)
+    #   SNR = 10·log10( mean θ(q̃ᵢ, q̄)² / mean θ(qᵢ, q̃ᵢ)² )
+    # θ is the angle between two rotations: Markley et al. (2007), eq. 16b, gives
+    # cos(θ/2) = qᵢᵀq for the error rotation. The numerator is the geodesic variance
+    # of the motion around its mean, as defined by Pennec (2006).
+    # q̃ᵢ and q̄ are plain means of sign-aligned rows, renormalised. Markley et al.
+    # name a plain mean's two flaws, sign dependence and non-unit length, and the
+    # alignment and renormalising fix both. Against their eigenvector mean, the SNR
+    # differs by at most 0.016 dB on 36 TUM RGB-D segments.
+    # The smooth/residual ratio is the heuristic snr_db uses; no paper defines this
+    # exact SNR.
+    # - Markley, Cheng, Crassidis, Oshman (2007). Averaging Quaternions.
+    #   J. Guidance, Control, and Dynamics 30(4), 1193-1197. doi:10.2514/1.28949
+    # - Pennec (2006). Intrinsic Statistics on Riemannian Manifolds.
+    #   J. Math. Imaging Vis. 25(1), 127-154. doi:10.1007/s10851-006-6228-4
+
+    # The mean must come from the sign-aligned rows above: averaged over rows of
+    # mixed sign, it shrinks toward zero and the signal angle is wrong by several dB.
+    mean = [_float_mean(frame[name]) for name in smoothed_names]
+    mean_norm = math.sqrt(sum(m * m for m in mean))
+    centre = [pl.lit(m / mean_norm) for m in mean]
+    angles = frame.select(
+        _rotation_angle(components, smoothed).alias("residual"),
+        _rotation_angle(smoothed, centre).alias("signal"),
+    )
+    signal_ms = _float_mean(angles["signal"].pow(2))
+    residual_ms = _float_mean(angles["residual"].pow(2))
+
+    evidence = {
+        "signal_rms_rad": math.sqrt(signal_ms),
+        "residual_rms_rad": math.sqrt(residual_ms),
+        "max_norm_error": max_norm_error,
+        "channels": names,
+        "smoothing_window": _SNR_SMOOTHING_WINDOW,
+        "smoothing_span_s": span_s,
+        "rate_hz": rate_hz,
+        "n_samples": frame.height,
+        "n_invalid_samples": n_invalid,
+        "estimator": "quaternion_geodesic_mean_5_v1",
+        "noise_assessment": {
+            "status": "unassessed",
+            "reason": "no noise floor reference exists for rotations",
+        },
+        "interpretation": (
+            "rotation smooth/residual diagnostic; neither measured sensor SNR "
+            "nor proof of health"
+        ),
+    }
+    if signal_ms == 0 or residual_ms == 0:
+        result = not_applicable(
+            "smoothed signal variance is zero"
+            if signal_ms == 0
+            else "residual variance is zero; the ratio would be infinite"
+        )
+        return result.model_copy(update={"evidence": {**evidence, **result.evidence}})
+    return MetricResult(
+        value=10.0 * (math.log10(signal_ms) - math.log10(residual_ms)),
         unit="dB",
         status=MetricStatus.REPORT_ONLY,
         evidence=evidence,

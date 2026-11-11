@@ -203,6 +203,50 @@ def test_gripper_effort_is_not_retyped_by_its_name():
     assert b.origin == BindingOrigin.INFERRED
 
 
+def test_four_channels_named_qx_qy_qz_qw_bind_as_one_quaternion():
+    names = (
+        "observation.eef_quat.qx",
+        "observation.eef_quat.qy",
+        "observation.eef_quat.qz",
+        "observation.eef_quat.qw",
+    )
+    bound = bind(signal(names, "unmapped.observation.eef_quat"))
+
+    assert [c.binding.representation for c in bound.channels if c.binding] == [
+        Representation.QUATERNION
+    ] * 4
+
+
+@pytest.mark.parametrize(
+    "names",
+    [("x", "y", "z", "w"), ("qx", "qy", "qz"), ("qx", "qy", "qz", "qw", "qw_2.qw")],
+)
+def test_a_stream_without_exactly_one_of_each_q_name_binds_no_quaternion(names):
+    bound = bind(signal(names, "unmapped.observation.eef_quat"))
+
+    assert all(
+        c.binding is not None and c.binding.representation != Representation.QUATERNION
+        for c in bound.channels
+    )
+
+
+def test_a_quaternion_partly_bound_by_a_profile_is_not_completed_by_inference():
+    stream = signal(("qx", "qy", "qz", "qw"), "unmapped.observation.eef_quat")
+    declared = ChannelBinding(
+        feature="mixed",
+        index=0,
+        taxonomy_type="unmapped.observation.eef_quat",
+        representation=Representation.CONTINUOUS,
+    )
+    stream.channels[0] = stream.channels[0].model_copy(update={"binding": declared})
+    bound = bind(stream)
+
+    assert all(
+        c.binding is not None and c.binding.representation != Representation.QUATERNION
+        for c in bound.channels
+    )
+
+
 def test_partly_named_vector_preserves_unknowns_under_feature_override():
     spec = {"shape": [2], "names": ["robot0_joint_pos", "mystery_dimension"]}
     dictionary = load_default_dictionary()

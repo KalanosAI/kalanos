@@ -86,6 +86,7 @@ Universal. Computed for every numeric channel whether or not its type was identi
 | `spike_pct` | CHANNEL | % | Percentage of samples beyond 6σ of a local window. | *candidate: good < 0.1%, bad > 2%* (default and joint velocity); frame rewards exempt (a computed reward steps up and down as the task progresses, which reads as spikes) |
 | `drift` | CHANNEL | unit/min | Slow trend where the signal should be stationary. Evidence carries the fitted slope and r². | motor and joint temperature: Δ < 15 °C over an episode; other types graded only where the policy marks the signal stationary |
 | `snr_db` | CHANNEL | dB | Signal against the high-frequency noise floor: the variance of a 5-sample moving average against what it removes. **Not applicable below about 45 Hz**, where 5 samples span more than 0.1 s and smooth away real motion, which would then read as noise (on real 5-15 Hz LeRobot datasets the ratio tracked the sampling rate rather than the robot). At 50 Hz and above the window is unchanged. | *candidate:* joint velocity good > 20 / bad < 10 dB; joint acceleration good > 12 / bad < 6 dB; other types good > 30 / bad < 15 dB |
+| `rotation_snr_db` | STREAM | dB | Signal against noise for a unit-quaternion orientation, measured on the angle between rotations: the mean squared angle of the 5-sample smoothed rotation from its mean, against the mean squared angle between each sample and its smoothed rotation. The same 45 Hz limit as `snr_db`, and not applicable when the four components do not have unit length. | *candidate: good > 30 / bad < 15 dB* |
 | `dead_taxel_pct` | STREAM | % | Share of a tactile array's cells that never respond. | good < 2%, *candidate bad > 10%* |
 | `hysteresis` | STREAM | fraction | Difference between a tactile cell's loading and unloading response. | good < 5%, *candidate bad > 20%* |
 
@@ -96,6 +97,8 @@ The window `spike_pct` takes its 6σ over is *to define*: the threshold is settl
 The shipped metric carries the window it actually used in `evidence`, as `window_samples`, so the undecided parameter stays visible in every report rather than buried in code.
 
 **Switch channels.** A channel that takes exactly two values over an episode — a gripper open/close command, a done flag, a contact bit — is a switch, not a sampled signal. Holding one value for most of the episode is the switch doing its job, so `flatline_pct`, `spike_pct` and `snr_db` return `not_applicable` for it, with the reason in `evidence`. A channel stuck on a *single* value is still measured, since that can be a dead sensor, and a switch with a glitch on it (a third value) is measured again.
+
+**Quaternion orientation.** A stream with exactly one channel each whose name ends in `qx`, `qy`, `qz` and `qw` (split on `.`, `_` or a space) holds a unit quaternion. Its components are not graded for noise one by one: near the identity rotation qw = cos(θ/2) barely moves, so its smoothed spread is small next to its residual and it reads as noise while the rotation is clean. `snr_db` returns `not_applicable` on the four channels, and `rotation_snr_db` grades the rotation instead. It measures the angle between two rotations as `2·acos(|⟨q₁, q₂⟩|)`, which reads q and −q as the same rotation, and smooths by the sign-aligned, renormalised mean, which differs from the optimal average quaternion by a negligible amount at these spreads ([Markley et al. 2007](https://doi.org/10.2514/1.28949)). [Huynh (2009)](https://doi.org/10.1007/s10851-009-0161-2) compares this and other rotation distances. A quaternion whose channels are not named this way, such as an unnamed 4-wide orientation feature, stays per-component.
 
 **Noise-floor reference.** In addition to the switch-channel exemption above, `snr_db` excludes known reward, annotation and metadata signals and channels declared binary or discrete; its evidence retains the component signal and residual standard deviations, the smoothing window, and the valid and invalid sample counts. A channel's `ChannelBinding.noise_floor` can supply a residual standard-deviation reference in the channel's native scale, validated against the current binding's identity, quantity, unit and sample rate (see [noise reference evidence](PROFILES.md#noise-reference-evidence) for the binding shape and validation requirements). Within a validated reference, the result stays report-only with no SNR penalty: a quiet robot hold does not read as a noise fault when its measured residual sits inside the verified reference, while a trace with real corruption keeps its residual evidence visible — a within-reference result is not proof of sensor health, and other checks keep their own findings. Without a usable reference the ratio stays diagnostic; above the reference, a critical result stays at review until an accepted calibration manifest matches the detector, thresholds, binding and operating scope (see *Calibration* in [docs/DECISIONS.md](DECISIONS.md)) — a matching manifest alone cannot promote an unassessed ratio to a statistical block.
 
@@ -433,6 +436,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `snr_db` | joint_velocity | 20 dB | 10 dB | candidate |
 | `snr_db` | joint_acceleration | 12 dB | 6 dB | candidate |
 | `snr_db` | joint_torque | — | — | report-only: motor-current channels read 8–15 dB on real ALOHA arms in every episode |
+| `rotation_snr_db` | default | 30 dB | 15 dB | candidate |
 | `dead_taxel_pct` | default | 2% | 10% | candidate |
 | `hysteresis` | default | 0.05 | 0.20 | candidate |
 | `mean_jerk_norm` | default | 0.1 | 0.5 | candidate · low confidence · **report-only** (see *Jerk metrics are report-only*) |
@@ -545,6 +549,7 @@ The report records, per metric, how many subjects it graded and how many it flag
 | integrity | `spike_pct` | 4 | true |
 | integrity | `dead_taxel_pct` | 3 | true |
 | integrity | `snr_db` | 2 | false |
+| integrity | `rotation_snr_db` | 2 | false |
 | integrity | `hysteresis` | 2 | true |
 | integrity | `drift` | 1 | false |
 | motion | `log_dimensionless_jerk` | 5 | false |

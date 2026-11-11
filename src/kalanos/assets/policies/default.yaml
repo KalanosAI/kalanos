@@ -293,6 +293,16 @@ metrics:
         good: 12.0
         bad: 6.0
 
+  # The same candidate band as snr_db, measured on the angle between rotations
+  # of a unit quaternion.
+  integrity.rotation_snr_db:
+    weight: 2
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 30.0
+        bad: 15.0
+
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.dead_taxel_pct:
     weight: 3

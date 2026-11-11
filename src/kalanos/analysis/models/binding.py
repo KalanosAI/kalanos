@@ -92,6 +92,7 @@ class Representation(str, Enum):
     CONTINUOUS = "continuous"
     DISCRETE   = "discrete"
     ANGLE      = "angle"       # Continuous, and wraps
+    QUATERNION = "quaternion"  # One of four channels forming a unit quaternion
     UNKNOWN    = "unknown"
     # fmt: on
 
