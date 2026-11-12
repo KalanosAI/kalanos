@@ -404,7 +404,7 @@ Two families the taxonomy supports. `annotation` holds its first metric; `calibr
 
 | Metric | Family | Level | Unit | Definition | Threshold |
 |---|---|---|---|---|---|
-| `task_instruction_missing` | annotation | EPISODE | flag | The episode carries no task instruction, or only an empty or whitespace one. **Not applicable** when no episode in the dataset carries one: a dataset never annotated with language is not missing anything. | *to define* — the share of episodes that may lack one, and whether the default policy grades it at all (a missing instruction is fatal for a vision-language-action model and irrelevant for plain behaviour cloning); ships report-only |
+| `task_instruction_missing` | annotation | EPISODE | flag | The episode carries no task instruction, or only an empty or whitespace one. **Not applicable** when no episode in the dataset carries one: a dataset never annotated with language is not missing anything. | Report-only under the default policy: the report lists the episodes without one in a `task_instruction_missing` dataset warning. `language_conditioned` blocks them. |
 
 Instructions are read by the adapters — LeRobot v2/v3 from each episode's task list in `meta/`, HDF5 from an episode group's `task`, `language_instruction`, `instruction`, `lang` or `language` attribute — and every episode's instructions are in the report (`tasks`), so a reader sees what each was told. What counts as a placeholder instruction beyond an empty one is left for real recordings to show.
 
@@ -459,7 +459,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `dark_frame_pct` | default | — | — | reported, no band |
 | `bright_frame_pct` | default | — | — | reported, no band |
 
-Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, `video_format_consistency`, `cut_count`, `dropped_chunk_count`, `video_control_lag_ms`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`, `task_instruction_missing`) — none of them grade.
+Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, `video_format_consistency`, `cut_count`, `dropped_chunk_count`, `video_control_lag_ms`, `task_instruction_missing`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`) — none of them grade.
 
 An episode counts each metric once, at its worst channel, stream or camera. Its family scores are weighted means of those metrics, and its score is a weighted mean of its family scores, renormalised over the families that scored, minus a capped penalty per distinct failing metric. The dataset averages its episodes.
 
@@ -504,7 +504,7 @@ A mean lets a minority of bad episodes hide: eight glitched episodes in fifty st
 
 **Every gated report states what readiness rests on** (`gate.coverage` and `gate.summary`): the families graded, the median checks per episode, and every metric that could not observe most of the data, with its reason. A readiness of 100 graded on integrity alone over 13 checks per episode, with timing not observable, says so beside the number. Required capabilities and metrics must be evaluated before an episode can pass. Optional missing capabilities do not invent a score penalty, but remain visible in the separate coverage ledger. Required acquisition timing, for example, stays unknown without usable producer capture evidence.
 
-`language_conditioned`, selected with `KALANOS_POLICY_PATH=language_conditioned`, extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking.
+`language_conditioned`, selected with `KALANOS_POLICY_PATH=language_conditioned`, extends the default for datasets that train a vision-language-action model: there `task_instruction_missing` grades, so an episode without its instruction is blocking. Under the default policy, the report only lists those episodes in a dataset warning.
 
 **Context and reference evidence.** `snr_db` is a smooth/residual diagnostic, not a sensor-health measurement; see *Noise-floor reference* above, under `integrity`, for exclusions, the reference contract and decision behavior.
 

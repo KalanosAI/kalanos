@@ -756,6 +756,7 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
     -------
     list[Text]
         One row per capability with eligible subjects, in model order,
+        an `instructions` row for each `task_instruction_missing` dataset warning,
         a `mapping` row when any stream type went unmapped, then an `inventory` row.
     """
 
@@ -782,6 +783,12 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         if row.unavailable and row.reasons:
             parts.append(Counter(row.reasons).most_common(1)[0][0])
         pairs.append((row.key.replace("_", " "), _parts(*parts, sep=sep)))
+
+    pairs.extend(
+        ("instructions", Text(warning.message, style=theme.style("warn")))
+        for warning in report.dataset_warnings
+        if warning.code == "task_instruction_missing"
+    )
 
     # Counted by type, since `--map` types a source field once for every episode.
     unmapped = ctx.unmapped_types

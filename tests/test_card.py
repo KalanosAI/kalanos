@@ -26,7 +26,7 @@ from kalanos.analysis.models.eligibility import (
     SufficiencyStatus,
 )
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.report import DatasetWarning, Report
 from kalanos.analysis.models.scoring import MetricRollup
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.card.sections import _under_root
@@ -578,3 +578,22 @@ def test_unmapped_stream_types_get_a_mapping_row(csv_report, vision_report):
     assert _row(render_terminal(vision_report), "mapping").startswith(
         "2 stream types unmapped - type them with --map"
     )
+
+
+def test_a_missing_instruction_warning_gets_an_instructions_row(csv_report):
+    message = "2 of 4 episodes checked carry no task instruction: a, b"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="task_instruction_missing", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.split(maxsplit=1)[1] for row in rows if row.split()[0] == "instructions"
+    ] == [message]
+    assert not any(row.split()[0] == "instructions" for row in unwarned)

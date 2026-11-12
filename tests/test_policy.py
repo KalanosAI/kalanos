@@ -909,3 +909,17 @@ def test_torque_noise_is_reported_not_graded():
     assert thresholds["proprio.joint_torque"].good is None
     assert thresholds["proprio.joint_torque"].bad is None
     assert thresholds["default"].bad == pytest.approx(15.0)
+
+
+def test_the_default_policy_leaves_the_instruction_metric_report_only():
+    """Verify the default policy marks task_instruction_missing report-only."""
+
+    assert _entry(load_default_policy(), "task_instruction_missing").report_only is True
+
+
+def test_the_language_conditioned_policy_grades_the_instruction_metric():
+    """Verify language_conditioned does not inherit the default's report_only."""
+
+    policy = load_policy(Path("language_conditioned"))
+
+    assert _entry(policy, "task_instruction_missing").report_only is False
