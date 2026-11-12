@@ -580,6 +580,21 @@ def test_monotonic_violations_counts_repeated_and_backwards_timestamps():
     assert result.evidence["fraction"] == pytest.approx(3 / 9)
 
 
+def test_monotonic_violations_counts_a_run_of_k_equal_timestamps_as_k_minus_one():
+    """Verify the unit is the adjacent step: three equal stamps in a row count two.
+
+    Each row whose stamp equals its predecessor's is one violation,
+    so a run of k equal timestamps counts k - 1 and names every row after the first.
+    """
+
+    stamps = [0.0, 0.01, 0.01, 0.01, 0.02]
+    result = run_stream_metrics(_stream_context(stamps))["monotonic_violations"]
+
+    assert result.value == 2
+    assert result.evidence["n_repeated"] == 2
+    assert result.evidence["sample_indices"] == [2, 3]
+
+
 def test_monotonic_violations_is_zero_on_a_clean_clock():
     """Verify a clock that always moves forward has nothing to report."""
 

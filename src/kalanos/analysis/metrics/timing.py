@@ -165,7 +165,7 @@ def recorded_drop_estimate(ctx: StreamContext) -> MetricResult:
     level=Level.STREAM,
     family=Family.TIMING,
     requires=Requires(),
-    label="out-of-order timestamps",
+    label="repeated or backwards timestamps",
 )
 def monotonic_violations(ctx: StreamContext) -> MetricResult:
     """Repeated/backwards adjacent steps, addressed in original source rows.
