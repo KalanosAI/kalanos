@@ -71,6 +71,8 @@ From the clock alone. Broken timing invalidates everything computed downstream: 
 
 Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval. A reordered third-party stream needs a source-row index map before any of these checks can run; without one they abstain.
 
+When several streams of an episode share one timeline (the same clock `domain` and `source_field`) and measure the same violations, the report carries one finding for them, on the first such stream, with the others listed in its evidence under `shared_by`.
+
 Reports carry `clock_info` and `source_order` for every stream, including metadata-only runs, so the origin, its evidence, the source field, native unit/dtype and any conversions are visible even where nothing was graded. A shared numeric epoch between two streams does not by itself establish clock synchronization.
 
 ---

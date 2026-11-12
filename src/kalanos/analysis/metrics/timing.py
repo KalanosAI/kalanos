@@ -36,6 +36,11 @@ from kalanos.analysis.models.metrics import (
 _UNGRADED_REASON = "grading needs policy thresholds, which this stage does not read"
 _RECORDED_REASON = "recorded timeline diagnostic; does not certify acquisition timing"
 
+# Metrics whose findings on streams that read one timestamp column are one defect,
+# so the report keeps one finding for them per episode.
+# Bare names, since the policy picks the family.
+ONE_FINDING_PER_CLOCK = frozenset({"monotonic_violations"})
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█

@@ -9,10 +9,12 @@ import csv
 import json
 import math
 import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 # External
+import polars as pl
 import pytest
 from typer.testing import CliRunner
 from upath import UPath
@@ -628,3 +630,38 @@ def test_a_scope_missing_evidence_keeps_the_order_finding(tmp_path):
         for reason in episode.eligibility.reasons
     )
     assert len(_order_findings(report, episode.id)) == 1
+
+
+def test_streams_on_one_timestamp_column_raise_one_order_finding(tmp_path):
+    """Verify streams on one timestamp column raise one order finding per episode.
+
+    Episode 0's third row repeats the second row's timestamp.
+    Every stream of the episode reads that column, so each measures the same violation.
+    The report keeps one finding and lists the other streams under `shared_by`.
+    """
+
+    root = tmp_path / "lerobot"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    data = root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data)
+    first_episode = (frame["episode_index"] == 0).arg_true()
+    stamps = frame["timestamp"].to_list()
+    stamps[first_episode[2]] = stamps[first_episode[1]]
+    frame.with_columns(
+        pl.Series("timestamp", stamps, dtype=frame["timestamp"].dtype)
+    ).write_parquet(data)
+
+    report = _grade(root)
+
+    episode = next(e for e in report.episodes if e.id.endswith("episode_000000"))
+    repeated = [
+        stream
+        for stream in episode.streams
+        if (result := stream.metrics.get("monotonic_violations")) is not None
+        and result.value == 1
+    ]
+    assert len(repeated) >= 2
+    [finding] = _order_findings(report, episode.id)
+    assert {entry["stream"] for entry in finding.evidence["shared_by"]} == {
+        stream.taxonomy_type for stream in repeated
+    } - {finding.stream}

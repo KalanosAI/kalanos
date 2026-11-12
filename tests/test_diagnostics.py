@@ -1103,6 +1103,26 @@ def test_broad_findings_still_propagate(episode_wide):
     )
 
 
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_finding_shared_by_the_consumed_stream_marks_its_windows(shared):
+    """Verify a finding kept on another stream reaches the streams under `shared_by`."""
+    entry = {
+        "stream": "proprio.joint_position",
+        "source_field": "state",
+        "instance": None,
+    }
+    f = finding(
+        source_path="other.parquet",
+        source_field="different",
+        stream="unmapped.different",
+        source_index=None,
+        channel=None,
+        evidence={"shared_by": [entry]} if shared else {},
+    )
+    counts = windows(two_channels(), window_spec(), [f]).measurements["counts"]
+    assert counts["review" if shared else "pass"] == 7
+
+
 def test_selected_channel_intervals_only_mark_overlapping_windows():
     f = finding(
         source_index=0,

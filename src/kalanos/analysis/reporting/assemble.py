@@ -36,6 +36,7 @@ from kalanos.analysis.metrics.registry import (
     run_episode_metrics,
     run_stream_metrics,
 )
+from kalanos.analysis.metrics.timing import ONE_FINDING_PER_CLOCK
 from kalanos.analysis.metrics.vision import (
     camera_format,
     camera_frames,
@@ -430,6 +431,7 @@ def grade_episode(
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
+    findings = _merge_shared_timelines(findings, episode.streams)
 
     # Step 2: grade the episode's own metrics — the ones that compare streams within it,
     # rather than reading any one of them alone.
@@ -626,6 +628,72 @@ def _task_instruction_warning(
             f" instruction, and the policy does not grade it: {named}"
         ),
     )
+
+
+def _merge_shared_timelines(
+    findings: list[Finding], streams: Sequence[Stream]
+) -> list[Finding]:
+    """Keep one finding for streams that share one timeline, for the metrics listed.
+
+    Two findings merge when their metric is in `ONE_FINDING_PER_CLOCK`,
+    their streams carry the same clock `domain` and `source_field`,
+    and they report the same value with the same evidence.
+    The first one stays where it was and lists the others under `shared_by`.
+
+    Parameters
+    ----------
+    findings : list[Finding]
+        One episode's stream findings, in the order they were raised.
+    streams : Sequence[Stream]
+        The episode's streams, for their clocks.
+
+    Returns
+    -------
+    list[Finding]
+        `findings` in the same order, without the merged ones.
+    """
+
+    timelines: dict[tuple[str, str | None, str | None], tuple[str, str]] = {}
+    for stream in streams:
+        clock = stream.clock_info
+        if clock is None or clock.domain is None or clock.source_field is None:
+            continue
+        location = (stream.taxonomy_type, stream.source_field, stream.instance)
+        timelines[location] = (clock.domain, clock.source_field)
+
+    kept: list[Finding] = []
+    shared: dict[tuple[Any, ...], tuple[int, list[dict[str, str | None]]]] = {}
+    for finding in findings:
+        timeline = None
+        # The family prefix comes from the policy, so match on the metric's own name.
+        metric_name = finding.metric_id.partition(".")[2]
+        if metric_name in ONE_FINDING_PER_CLOCK and finding.stream is not None:
+            timeline = timelines.get(
+                (finding.stream, finding.source_field, finding.instance)
+            )
+        if timeline is None:
+            kept.append(finding)
+            continue
+        key = (timeline, finding.value, to_json(finding.evidence))
+        if key not in shared:
+            shared[key] = (len(kept), [])
+            kept.append(finding)
+            continue
+        shared[key][1].append(
+            {
+                "stream": finding.stream,
+                "source_field": finding.source_field,
+                "instance": finding.instance,
+            }
+        )
+
+    for position, shared_by in shared.values():
+        if shared_by:
+            first = kept[position]
+            kept[position] = first.model_copy(
+                update={"evidence": {**first.evidence, "shared_by": shared_by}}
+            )
+    return kept
 
 
 def _merged(ledgers: list[Coverage | None]) -> list[Coverage | None]:

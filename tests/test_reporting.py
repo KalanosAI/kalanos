@@ -28,6 +28,7 @@ from kalanos.analysis.models.discovery import SkippedSource, SkipReason
 from kalanos.analysis.models.domain import (
     Attribution,
     Channel,
+    ClockInfo,
     Episode,
     FramePayload,
     Kind,
@@ -60,6 +61,7 @@ from kalanos.analysis.models.scoring import (
     Severity,
 )
 from kalanos.analysis.reporting.assemble import (
+    _merge_shared_timelines,
     assemble_report,
     grade_episode,
     grade_stream,
@@ -68,6 +70,7 @@ from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
 from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import (
+    _stream_finding_counts,
     render_compact_json,
     render_html,
     render_json,
@@ -109,6 +112,9 @@ _POLICY = load_default_policy()
 
 # What `assemble_report` looks each stream's category up in, for calls that bypass it.
 _DICTIONARY = load_default_dictionary()
+
+# A clock shared by the streams the timeline-merge tests build.
+_CLOCK = ClockInfo(domain="recording#episode:0", source_field="timestamp")
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -309,6 +315,73 @@ def _series(timestamps: list[float]) -> Stream:
         source_path=UPath("recording.csv"),
         timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name="x")],
+    )
+
+
+def _timeline_stream(
+    taxonomy_type: str, clock: ClockInfo | None, source_field: str = "observation.state"
+) -> Stream:
+    """Build a series stream read from `source_field`, on the clock `clock`.
+
+    Parameters
+    ----------
+    taxonomy_type : str
+        The stream's taxonomy type.
+    clock : ClockInfo or None
+        The stream's clock, or `None` for a stream with no clock information.
+    source_field : str
+        The column the stream's payload was read from.
+
+    Returns
+    -------
+    Stream
+        A four-row series stream carrying `clock`.
+    """
+
+    return _series([0.0, 0.1, 0.1, 0.2]).model_copy(
+        update={
+            "taxonomy_type": taxonomy_type,
+            "source_field": source_field,
+            "clock_info": clock,
+        }
+    )
+
+
+def _order_finding(
+    stream: Stream,
+    *,
+    indices: list[int],
+    metric_id: str = "timing.monotonic_violations",
+) -> Finding:
+    """Build a critical finding raised on `stream`, naming the rows `indices`.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream the finding is located on.
+    indices : list[int]
+        The offending rows, as `sample_indices`.
+    metric_id : str
+        The metric that raised it.
+
+    Returns
+    -------
+    Finding
+        A finding whose value is the number of offending rows.
+    """
+
+    return Finding(
+        metric_id=metric_id,
+        family=metric_id.split(".")[0],
+        severity=Severity.CRITICAL,
+        value=float(len(indices)),
+        unit="count",
+        points=0.0,
+        episode_id="episode_0",
+        source_field=stream.source_field,
+        stream=stream.taxonomy_type,
+        instance=stream.instance,
+        evidence={"n_repeated": len(indices), "sample_indices": indices},
     )
 
 
@@ -1590,3 +1663,115 @@ def test_a_graded_episode_carries_its_split():
 
     reloaded = Report.model_validate_json(report.model_dump_json())
     assert [e.split for e in reloaded.episodes] == ["train", "train"]
+
+
+def test_findings_on_one_timeline_merge_into_the_first():
+    """Verify two streams on one timestamp column with the same rows raise one finding.
+
+    The finding stays on the first stream, and names the second under `shared_by`.
+    """
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    [merged] = _merge_shared_timelines(findings, [first, second])
+
+    assert merged.stream == "robot.joint.position"
+    assert merged.evidence["shared_by"] == [
+        {
+            "stream": "robot.gripper.width",
+            "source_field": "observation.state",
+            "instance": None,
+        }
+    ]
+    assert "shared_by" not in findings[0].evidence
+
+
+def test_findings_merge_under_whatever_family_the_policy_files_the_metric():
+    """Verify a metric the policy files under another family still merges."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2], metric_id="integrity.monotonic_violations"),
+        _order_finding(second, indices=[2], metric_id="integrity.monotonic_violations"),
+    ]
+
+    [merged] = _merge_shared_timelines(findings, [first, second])
+
+    assert [entry["stream"] for entry in merged.evidence["shared_by"]] == [
+        "robot.gripper.width"
+    ]
+
+
+def test_findings_on_one_clock_with_different_rows_stay_apart():
+    """Verify streams on one clock that name different rows keep their own findings."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[3]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_findings_on_different_clock_domains_stay_apart():
+    """Verify streams on separate clocks keep their own findings, even on equal rows."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    other_clock = _CLOCK.model_copy(update={"domain": "recording#episode:1"})
+    second = _timeline_stream("robot.gripper.width", other_clock)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_a_stream_without_clock_information_keeps_its_finding():
+    """Verify a stream with no clock information is never merged into another."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", None)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_other_metrics_on_one_timeline_are_not_merged():
+    """Verify only timestamp-order findings merge across streams on one timeline."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2], metric_id="timing.drop_rate"),
+        _order_finding(second, indices=[2], metric_id="timing.drop_rate"),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_a_merged_finding_counts_for_every_stream_that_shares_it():
+    """Verify the per-stream finding count includes the streams under `shared_by`."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    [merged] = _merge_shared_timelines(
+        [_order_finding(first, indices=[2]), _order_finding(second, indices=[2])],
+        [first, second],
+    )
+
+    assert _stream_finding_counts([merged]) == {
+        ("episode_0", "robot.joint.position", None): 1,
+        ("episode_0", "robot.gripper.width", None): 1,
+    }
