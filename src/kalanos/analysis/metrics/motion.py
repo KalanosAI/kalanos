@@ -13,12 +13,13 @@ something once a signal is known to be a joint position, velocity or torque.
 # Built-in
 import math
 import statistics
-from typing import cast
+from typing import Any, cast
 
 # External
 import polars as pl
 
 # Internal
+from kalanos.analysis.angles import angle_evidence, angle_period, unwrap
 from kalanos.analysis.localization import finite, source_values, support_for
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
@@ -116,14 +117,81 @@ def _median_gap(timestamps: list[float]) -> float | None:
     return statistics.median(gaps) if gaps else None
 
 
+def _channel_values(
+    ctx: StreamContext, frame: pl.DataFrame
+) -> tuple[dict[str, list[float]], dict[str, Any]]:
+    """Read each channel's non-null values, with every angle channel unwrapped.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The stream whose channels are read.
+    frame : pl.DataFrame
+        The stream's payload.
+
+    Returns
+    -------
+    tuple[dict[str, list[float]], dict[str, Any]]
+        The values by channel name, leaving out an angle channel whose wrap period
+        is unknown, and the evidence on angle channels: the steps each one had
+        corrected under `n_unwrapped_steps_by_channel`, and the reason each left-out
+        channel was skipped under `skipped_angle_channels`. Each key is present only
+        when it names a channel.
+    """
+
+    values: dict[str, list[float]] = {}
+    unwrapped: dict[str, int] = {}
+    skipped: dict[str, str] = {}
+    for channel in ctx.stream.channels:
+        period = angle_period(channel.binding)
+        if isinstance(period, str):
+            skipped[channel.name] = period
+            continue
+        series = frame[channel.name].drop_nulls()
+        if period is not None:
+            series, unwrapped[channel.name] = unwrap(series, period)
+        values[channel.name] = series.to_list()
+    evidence: dict[str, Any] = {}
+    if unwrapped:
+        evidence["n_unwrapped_steps_by_channel"] = unwrapped
+    if skipped:
+        evidence["skipped_angle_channels"] = skipped
+    return values, evidence
+
+
+def _skipped_note(angles: dict[str, Any]) -> str:
+    """Name the angle channels left out for an unknown wrap period, if any."""
+
+    skipped = angles.get("skipped_angle_channels")
+    if not skipped:
+        return ""
+    return "; angle channels without a known wrap period are left out: " + ", ".join(
+        skipped
+    )
+
+
+def _every_channel_skipped(
+    channel_values: dict[str, list[float]], angles: dict[str, Any]
+) -> str | None:
+    """Say so when every channel is an angle left out for an unknown wrap period."""
+
+    skipped = angles.get("skipped_angle_channels")
+    if channel_values or not skipped:
+        return None
+    return "every channel is an angle without a known wrap period: " + ", ".join(
+        skipped
+    )
+
+
 def _normalized_jerk(
     ctx: StreamContext,
-) -> tuple[list[float], int, float] | str:
+) -> tuple[list[float], int, float, dict[str, Any]] | str:
     """Compute every channel's per-sample normalised jerk, or say why none exists.
 
     Divides each channel by its own std before the third difference, so
     amplitude doesn't matter. A channel with too few values or zero
-    variance has no scale to normalise by and is skipped.
+    variance has no scale to normalise by and is skipped. Each `angle` channel is
+    unwrapped first, and one whose unit has no known wrap period is left out.
 
     Parameters
     ----------
@@ -132,10 +200,11 @@ def _normalized_jerk(
 
     Returns
     -------
-    tuple[list[float], int, float] or str
-        The flattened normalised jerk values, how many channels contributed, and
-        the median timestep in seconds; or a reason string when the payload is not a
-        `FramePayload`, the median gap is zero, or no channel has a usable scale.
+    tuple[list[float], int, float, dict[str, Any]] or str
+        The flattened normalised jerk values, how many channels contributed, the
+        median timestep in seconds and the evidence on angle channels; or a reason
+        string when the payload is not a `FramePayload`, the median gap is zero, or
+        no channel has a usable scale.
     """
 
     if not isinstance(ctx.payload, FramePayload):
@@ -147,11 +216,13 @@ def _normalized_jerk(
     if median_dt <= 0:
         return "median gap is zero"
 
-    frame = ctx.payload.frame
+    channel_values, angles = _channel_values(ctx, ctx.payload.frame)
+    reason = _every_channel_skipped(channel_values, angles)
+    if reason:
+        return reason
     jerks: list[float] = []
     n_channels = 0
-    for channel in ctx.stream.channels:
-        values = [value for value in frame[channel.name].to_list() if value is not None]
+    for values in channel_values.values():
         if len(values) < 4:
             continue
         std = statistics.pstdev(values)
@@ -169,9 +240,11 @@ def _normalized_jerk(
         n_channels += 1
 
     if n_channels == 0:
-        return "no channel has non-zero standard deviation to normalise by"
+        return "no channel has non-zero standard deviation to normalise by" + (
+            _skipped_note(angles)
+        )
 
-    return jerks, n_channels, median_dt
+    return jerks, n_channels, median_dt, angles
 
 
 @metric(
@@ -201,7 +274,7 @@ def mean_jerk_norm(ctx: StreamContext) -> MetricResult:
     computed = _normalized_jerk(ctx)
     if isinstance(computed, str):
         return not_applicable(computed)
-    jerks, n_channels, median_dt = computed
+    jerks, n_channels, median_dt, angles = computed
 
     rms = math.sqrt(sum(value**2 for value in jerks) / len(jerks))
     return MetricResult(
@@ -212,6 +285,7 @@ def mean_jerk_norm(ctx: StreamContext) -> MetricResult:
             "n_samples": ctx.n_samples,
             "n_channels": n_channels,
             "median_dt_s": median_dt,
+            **angles,
         },
     )
 
@@ -243,7 +317,7 @@ def max_abs_jerk(ctx: StreamContext) -> MetricResult:
     computed = _normalized_jerk(ctx)
     if isinstance(computed, str):
         return not_applicable(computed)
-    jerks, n_channels, median_dt = computed
+    jerks, n_channels, median_dt, angles = computed
 
     return MetricResult(
         value=max(abs(value) for value in jerks),
@@ -253,6 +327,7 @@ def max_abs_jerk(ctx: StreamContext) -> MetricResult:
             "n_samples": ctx.n_samples,
             "n_channels": n_channels,
             "median_dt_s": median_dt,
+            **angles,
         },
     )
 
@@ -279,23 +354,31 @@ def velocity_spike_pct(ctx: ChannelContext) -> MetricResult:
     MetricResult
         `not_applicable` when:
         - the dtype is not numeric
+        - an `angle` channel's unit has no known wrap period
         - source row order is unavailable
         - fewer than two finite position changes survive
         - the position changes never vary
-        `report_only` otherwise.
+        `report_only` otherwise. An `angle` channel is unwrapped first.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable(
             "channel is not numeric; there are no position changes to measure"
         )
+    period = angle_period(ctx.channel.binding)
+    if isinstance(period, str):
+        return not_applicable(period)
 
     ordered = source_values(ctx)
     if ordered is None:
         return not_applicable("source row order is unavailable")
     ordered_values, indices, _ = ordered
 
-    values = ordered_values.cast(pl.Float64).to_list()
+    series = ordered_values.cast(pl.Float64)
+    n_unwrapped = 0
+    if period is not None:
+        series, n_unwrapped = unwrap(series, period)
+    values = series.to_list()
     diffs: list[float] = []
     positions: list[int] = []
     for position in range(1, len(values)):
@@ -329,6 +412,7 @@ def velocity_spike_pct(ctx: ChannelContext) -> MetricResult:
             "n_differences": len(diffs),
             "sample_indices": [indices[p] for p in spikes],
             "threshold_sigma": _VELOCITY_SPIKE_SIGMA,
+            **angle_evidence(period, n_unwrapped),
         },
     )
 
@@ -355,26 +439,31 @@ def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
     MetricResult
         `not_applicable` when:
         - the dtype is not numeric
+        - an `angle` channel's unit has no known wrap period
         - source row order is unavailable
         - any value or timestamp is null or non-finite
         - the median gap is zero
         - the channel never moves
         - the third difference is zero throughout
         - the dimensionless jerk overflows
-        `report_only` otherwise.
+        `report_only` otherwise. An `angle` channel is unwrapped first.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable(
             "channel is not numeric; there is no series to differentiate"
         )
+    period = angle_period(ctx.channel.binding)
+    if isinstance(period, str):
+        return not_applicable(period)
 
     ordered = source_values(ctx)
     if ordered is None:
         return not_applicable("source row order is unavailable")
     ordered_values, _, timestamps = ordered
 
-    values = ordered_values.cast(pl.Float64).to_list()
+    series = ordered_values.cast(pl.Float64)
+    values = series.to_list()
     if not all(finite(value) for value in values) or not all(
         finite(timestamp) for timestamp in timestamps
     ):
@@ -382,6 +471,10 @@ def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
             "channel carries null or non-finite values; there is no contiguous "
             "series to differentiate"
         )
+    n_unwrapped = 0
+    if period is not None:
+        series, n_unwrapped = unwrap(series, period)
+        values = series.to_list()
 
     dt = _median_gap(timestamps)
     if dt is None or dt <= 0:
@@ -419,6 +512,7 @@ def log_dimensionless_jerk(ctx: ChannelContext) -> MetricResult:
             "amplitude": amplitude,
             "median_dt_s": dt,
             "n_samples": len(values),
+            **angle_evidence(period, n_unwrapped),
         },
     )
 
@@ -498,7 +592,8 @@ def still_drift(ctx: StreamContext) -> MetricResult:
         - the recording is too short for a tail distinct from the whole
         - no channel has enough non-null values for a tail
         - the tail is not settled relative to the whole
-        `report_only` otherwise.
+        `report_only` otherwise. Each `angle` channel is unwrapped first, and one
+        whose unit has no known wrap period is left out.
     """
 
     if not isinstance(ctx.payload, FramePayload):
@@ -513,18 +608,19 @@ def still_drift(ctx: StreamContext) -> MetricResult:
             "recording is too short for a tail distinct from the whole"
         )
 
-    frame = ctx.payload.frame
-    channel_values = {
-        name: [value for value in frame[name].to_list() if value is not None]
-        for name in (channel.name for channel in ctx.stream.channels)
-    }
+    channel_values, angles = _channel_values(ctx, ctx.payload.frame)
+    reason = _every_channel_skipped(channel_values, angles)
+    if reason:
+        return not_applicable(reason)
     channel_values = {
         name: values
         for name, values in channel_values.items()
         if len(values) > tail_samples
     }
     if not channel_values:
-        return not_applicable("no channel has enough non-null values for a tail")
+        return not_applicable(
+            "no channel has enough non-null values for a tail" + _skipped_note(angles)
+        )
 
     whole_step = statistics.median(
         _median_abs_step(values) for values in channel_values.values()
@@ -554,6 +650,7 @@ def still_drift(ctx: StreamContext) -> MetricResult:
             "tail_samples": tail_samples,
             "tail_step_ratio": tail_step_ratio,
             "drifting_channel": drifting_channel,
+            **angles,
         },
     )
 
