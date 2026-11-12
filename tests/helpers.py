@@ -250,6 +250,7 @@ def write_arm(
     glitched: set[int],
     tasks=None,
     jittered: Container[int] = frozenset(),
+    repeated: Container[int] = frozenset(),
 ) -> None:
     """Write an HDF5 arm recording of smooth 50 Hz joint commands.
 
@@ -257,6 +258,8 @@ def write_arm(
     `glitched` episodes get large command jumps.
     `jittered` episodes get a physical clock's 50 µs timestamp jitter, so they grade.
     The rest are exactly even, so their timing is not observable.
+    `repeated` episodes repeat the timestamp at rows 50, 51 and 120:
+    three violations, with rows 49-51 one run of three equal timestamps.
 
     Parameters
     ----------
@@ -270,6 +273,8 @@ def write_arm(
         One task instruction per episode, stored when not `None`.
     jittered : Container[int]
         The indices of the episodes whose timestamps get clock jitter.
+    repeated : Container[int]
+        The indices of the episodes whose timestamps repeat at rows 50, 51 and 120.
     """
 
     # Optional extras: importing the other helpers must not need them.
@@ -301,6 +306,11 @@ def write_arm(
             if index in jittered:
                 stamps = t + rng.normal(0, 5e-5, t.shape)
                 stamps[0] = 0.0
+            if index in repeated:
+                stamps = stamps.copy()
+                stamps[50] = stamps[49]
+                stamps[51] = stamps[50]
+                stamps[120] = stamps[119]
             group.create_dataset("timestamps", data=stamps)
             if tasks is not None and tasks[index] is not None:
                 group.attrs["task"] = tasks[index]

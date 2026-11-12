@@ -59,7 +59,7 @@ From the clock alone. Broken timing invalidates everything computed downstream: 
 | `effective_hz` | STREAM | regular sampling + producer capture evidence | Hz | Capture samples per second, from the median gap between timestamps. Median so one long gap cannot move it. | *candidate: within 10% of nominal good, 25% bad*; ungraded where the policy declares no nominal rate |
 | `dt_jitter_ms` | STREAM | regular sampling + producer capture evidence | ms | Standard deviation of adjacent capture-time gaps. | *candidate: good < 5 ms at 100 Hz*; one-sided (no bad bound), so it stays report-only |
 | `drop_rate` | STREAM | regular sampling + producer capture evidence | fraction | Missing-sample estimate against the observed cadence; expected count is duration ÷ median gap + 1. | good < 1%, bad > 5% |
-| `monotonic_violations` | STREAM | | count | Samples whose timestamp is at or before the previous one. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. | *to define*; ships report-only — measured in every report, graded once a band is settled against real recordings. Evidence carries the fraction of steps, the repeated and backwards counts and the first offending sample |
+| `monotonic_violations` | STREAM | | count | Adjacent steps whose timestamp is equal to (repeated) or below (backwards) the previous valid one, in source row order. A run of k equal timestamps counts k − 1. A clock that goes backwards means a reordered or merged log; one that repeats usually means a dropped simulation step. Evidence carries the fraction of steps, the repeated and backwards counts, the first offending sample and `sample_indices`, the offending row positions within the episode, at most 100 | good = 0.5, bad = 1: the count is a whole number, so any repeated or backwards step is critical · requests review |
 
 **Clock provenance.** `effective_hz`, `dt_jitter_ms` and `drop_rate` require `ClockInfo.origin=capture` and `origin_evidence=producer`. Unknown, inferred, generated, receive, publish, log, presentation and simulation clocks cannot certify acquisition timing. An evenly spaced producer-declared capture clock is measurable; uniformity alone is no longer used to veto it. LeRobot's match to `frame_index / fps` is explicitly inferred generation, including when indices are skipped or reordered; HDF5's adapter-created grid is known generation, and an existing damaged time column is preserved rather than repaired. MCAP uses a complete header time column with unknown origin where one exists, otherwise a distinguishable nonzero publish-time column, otherwise log time, never mixing these fields row by row; a header timestamp alone does not certify capture time. A camera stream backed by LeRobot metadata retains that metadata clock — decoded media PTS are not inspected.
 
@@ -70,6 +70,8 @@ From the clock alone. Broken timing invalidates everything computed downstream: 
 | `recorded_drop_estimate` | Estimated holes relative to recorded median cadence | Report-only by default; not verified sensor frame loss |
 
 Recorded cadence requires a regular, strictly increasing axis with known units and no invalid timestamps. Spread needs five valid samples. `monotonic_violations` remains independent of clock origin and regularity. It counts adjacent repeated/backwards steps in source order and includes source row addresses. Null/NaN/Inf values break adjacency; they are never removed and bridged. Native integer ticks are subtracted before conversion to seconds, preserving small intervals at large epochs. These results establish neither cross-stream alignment nor calibration approval. A reordered third-party stream needs a source-row index map before any of these checks can run; without one they abstain.
+
+When several streams of an episode share one timeline (the same clock `domain` and `source_field`) and measure the same violations, the report carries one finding for them, on the first such stream, with the others listed in its evidence under `shared_by`.
 
 Reports carry `clock_info` and `source_order` for every stream, including metadata-only runs, so the origin, its evidence, the source field, native unit/dtype and any conversions are visible even where nothing was graded. A shared numeric epoch between two streams does not by itself establish clock synchronization.
 
@@ -431,6 +433,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `drop_rate` | default | 1% | 5% | decided |
 | `effective_hz` | default (deviation from nominal) | 10% | 25% | candidate |
 | `dt_jitter_ms` | default | 5 ms | — | candidate · one-sided, so report-only |
+| `monotonic_violations` | default | 0.5 | 1 | decided · the count is a whole number, so any repeated or backwards step is critical |
 | `missing_pct` | default | 0.5% | 5% | candidate |
 | `flatline_pct` | default | 50% | 90% | candidate, revised against real 50 Hz teleoperation · reward signals and action commands exempt |
 | `spike_pct` | default & joint_velocity | 0.1% | 2% | candidate · frame rewards exempt |
@@ -459,7 +462,7 @@ The working defaults for the graded metrics, gathered in one place for orientati
 | `dark_frame_pct` | default | — | — | reported, no band |
 | `bright_frame_pct` | default | — | — | reported, no band |
 
-Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, `video_format_consistency`, `cut_count`, `dropped_chunk_count`, `video_control_lag_ms`, `task_instruction_missing`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`, `monotonic_violations`) — none of them grade.
+Metrics not listed are either `report_only` (`drift`, `p99_torque`, `max_torque`, `mean_torque`, `energy_proxy`, `velocity_spike_pct`, `log_dimensionless_jerk`, `pts_defect_pct`, `max_gap_s`, `camera_sync_skew_ms`, `video_format_consistency`, `cut_count`, `dropped_chunk_count`, `video_control_lag_ms`, `task_instruction_missing`, and `vel_saturation_pct` / `limit_proximity_pct` until a declared limit is wired in) or still *to define* (`action_chatter`, `still_drift`) — none of them grade.
 
 An episode counts each metric once, at its worst channel, stream or camera. Its family scores are weighted means of those metrics, and its score is a weighted mean of its family scores, renormalised over the families that scored, minus a capped penalty per distinct failing metric. The dataset averages its episodes.
 

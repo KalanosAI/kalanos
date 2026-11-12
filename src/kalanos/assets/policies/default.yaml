@@ -35,10 +35,14 @@ metrics:
       default:
         good: 5.0
 
-  # No bound decided; docs/METRICS.md marks it to define. Measured and shown in
-  # every report, but it grades nothing until a band is settled against real
-  # recordings.
-  timing.monotonic_violations: {weight: 4}
+  # Any repeated or backwards step is critical: the count is a whole number, so good 0.5 / bad 1 puts every violation at 0 points.
+  # Statistical route, so it requests review until a calibration manifest covers it.
+  timing.monotonic_violations:
+    weight: 4
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good just below the worst clean camera stream, bad at the median stream blurred by a 5x5 box.
   vision.sharpness_score:
