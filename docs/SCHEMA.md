@@ -10,8 +10,9 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 |---|---|---|
 | `ChannelBinding.representation` | `str` | Takes a new value, `quaternion`: the channel is one of four whose names end in `qx`, `qy`, `qz` and `qw`, read together as a unit quaternion. Under `streams[].channels[].channel.binding`. |
 | `streams[].metrics["rotation_snr_db"]` | `MetricResult` | The signal-to-noise ratio of a stream's unit-quaternion rotation, in dB, measured on the angle between rotations. Present on every series stream, `not_applicable` where the stream holds no quaternion. Its `snr_db` on each of the four channels is `not_applicable`. |
+| `DatasetWarning.code` | `"task_instruction_missing"` | Takes a new value: some episodes have no task instruction and the policy does not grade that. The message gives the count and up to 10 episode ids. Feeds no score. |
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, and its streams have no `rotation_snr_db`.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, and it holds no `task_instruction_missing` warning.
 
 ## Changed in 8.0.0
 

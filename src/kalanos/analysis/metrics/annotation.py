@@ -4,10 +4,11 @@
 is the task instruction a language-conditioned policy learns to follow: an episode
 recorded without one teaches "act without being told what to do".
 
-Report-only by design for now: docs/METRICS.md leaves its threshold *to define*,
-because whether a missing instruction should cost points depends on the policy
-being trained — fatal for a vision-language-action model, irrelevant for plain
-behaviour cloning — and that is settled against real recordings, not guessed.
+The default policy keeps it report-only,
+because whether a missing instruction matters depends on the model being trained:
+it breaks a vision-language-action model and does not affect behaviour cloning.
+The report lists the affected episodes in a dataset warning,
+and the `language_conditioned` policy blocks them.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀

@@ -741,17 +741,20 @@ class DatasetWarning(BaseModel):
 
     Attributes
     ----------
-    code : {"near_duplicates_saturated"}
+    code : {"near_duplicates_saturated", "task_instruction_missing"}
         What the warning is about.
         `near_duplicates_saturated`: the near tier is saturated
         (see `NearDuplicateSummary.saturated`),
         so no episode carries a near-duplicate finding;
         the counts are in `Report.near_duplicates`.
+        `task_instruction_missing`: some episodes have no task instruction
+        and the policy does not grade that;
+        the message gives the count and the episode ids.
     message : str
         The warning, stated for a reader.
     """
 
-    code: Literal["near_duplicates_saturated"]
+    code: Literal["near_duplicates_saturated", "task_instruction_missing"]
     message: str
 
 

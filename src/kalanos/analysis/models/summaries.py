@@ -124,6 +124,9 @@ class EpisodeSummary(BaseModel):
         One row per coverage metric that errored.
     unmapped_types : frozenset[str]
         The taxonomy types of its streams that no mapping typed.
+    ungraded_instruction_missing : bool or None
+        Whether it has no task instruction, when the policy does not grade that.
+        `None` when the metric did not run or the policy grades it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -138,3 +141,4 @@ class EpisodeSummary(BaseModel):
     metric_subjects: list[MetricSubject]
     operational_errors: list[dict[str, str]]
     unmapped_types: frozenset[str]
+    ungraded_instruction_missing: bool | None

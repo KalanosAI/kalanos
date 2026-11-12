@@ -63,6 +63,7 @@ from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
     Level,
+    MetricStatus,
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
@@ -76,6 +77,7 @@ from kalanos.analysis.models.provenance import (
 from kalanos.analysis.models.report import (
     AgreementRow,
     AnalysedEpisode,
+    DatasetWarning,
     GradedChannel,
     GradedEpisode,
     GradedStream,
@@ -132,6 +134,9 @@ logger = logging.getLogger(__name__)
 # Episode coverage ledgers held before they are merged into one.
 # A ledger outweighs the episode's compressed JSON, so a run keeps few of them.
 _LEDGERS_HELD = 64
+
+# Episode ids the task-instruction warning lists before it counts the rest.
+_INSTRUCTION_IDS_SHOWN = 10
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -558,6 +563,12 @@ def summarize(
         The episode's summary.
     """
 
+    instruction = episode.metrics.get("task_instruction_missing")
+    ungraded_instruction_missing = (
+        instruction.value == 1.0
+        if instruction is not None and instruction.status is MetricStatus.REPORT_ONLY
+        else None
+    )
     errors = [
         {"episode_id": episode.id, "metric": row.key, "reason": "; ".join(row.reasons)}
         for row in (episode.coverage.metrics if episode.coverage else [])
@@ -577,6 +588,42 @@ def summarize(
             stream.taxonomy_type
             for stream in episode.streams
             if stream.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
+        ),
+        ungraded_instruction_missing=ungraded_instruction_missing,
+    )
+
+
+def _task_instruction_warning(
+    summaries: Sequence[EpisodeSummary],
+) -> DatasetWarning | None:
+    """The warning listing episodes without a task instruction, when nothing grades it.
+
+    Parameters
+    ----------
+    summaries : Sequence[EpisodeSummary]
+        Every graded episode's summary.
+
+    Returns
+    -------
+    DatasetWarning or None
+        The warning, with the count
+        and up to `_INSTRUCTION_IDS_SHOWN` sorted episode ids.
+        `None` when every checked episode has an instruction.
+    """
+
+    checked = [s for s in summaries if s.ungraded_instruction_missing is not None]
+    missing = sorted(s.id for s in checked if s.ungraded_instruction_missing)
+    if not missing:
+        return None
+    named = ", ".join(missing[:_INSTRUCTION_IDS_SHOWN])
+    rest = len(missing) - _INSTRUCTION_IDS_SHOWN
+    if rest > 0:
+        named += f", and {rest} more"
+    return DatasetWarning(
+        code="task_instruction_missing",
+        message=(
+            f"{len(missing)} of {len(checked)} episodes checked carry no task"
+            f" instruction, and the policy does not grade it: {named}"
         ),
     )
 
@@ -883,7 +930,10 @@ class ReportBuilder:
         findings.extend(duplicate_findings)
         dataset_warnings = [
             w
-            for w in (near_duplicate_warning(near_duplicates, n_episodes),)
+            for w in (
+                near_duplicate_warning(near_duplicates, n_episodes),
+                _task_instruction_warning(summaries),
+            )
             if w is not None
         ]
         decisions = decide_all(

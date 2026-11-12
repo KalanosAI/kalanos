@@ -432,13 +432,12 @@ metrics:
         good: 0.5
         bad: 1
 
-  # No bound decided; docs/METRICS.md marks it to define. Whether a missing
-  # instruction should cost points depends on the policy being trained, so it
-  # is measured and shown in every report and grades nothing until a band is
-  # settled against real recordings.
+  # Report-only: a missing instruction breaks a language-conditioned model but does not matter for behaviour cloning, and this policy cannot tell which is being trained.
+  # The report lists the affected episodes in a dataset warning; language_conditioned blocks them.
   annotation.task_instruction_missing:
     weight: 5
     core: true
+    report_only: true
 
 # Weights are relative and renormalise over what graded: 1 is supporting evidence, 3 a standard core check, 5 or 6 a defect that directly corrupts training.
 family_weights:
