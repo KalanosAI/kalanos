@@ -44,7 +44,10 @@ from kalanos.assets.policy import load_default_policy
 from kalanos.testing import stream_context
 
 # Local
+from helpers import angle_ctx as _angle_ctx
 from helpers import channel_ctx as _channel_ctx
+from helpers import wrap_angle as _wrap
+from helpers import yaw_swing as _yaw
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -52,6 +55,13 @@ from helpers import channel_ctx as _channel_ctx
 # ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 _QUATERNION = ("qx", "qy", "qz", "qw")
+
+# Each angle unit, with its half period and how many of it make one radian.
+_ANGLE_UNITS = [
+    ("rad", math.pi, 1.0),
+    ("deg", 180.0, 180 / math.pi),
+    ("mrad", 1000 * math.pi, 1000.0),
+]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -571,3 +581,79 @@ def test_rotation_snr_is_inapplicable_on_a_short_stream_without_a_quaternion(
     result = run_stream_metrics(ctx)["rotation_snr_db"]
 
     assert result.availability == Availability.NOT_APPLICABLE
+
+
+@pytest.mark.parametrize(("unit", "half", "scale"), _ANGLE_UNITS)
+def test_wrapped_angle_reads_as_its_unwrapped_motion(unit, half, scale):
+    yaw = _yaw(scale)
+    wrapped = snr_db(_angle_ctx(_wrap(yaw, half), unit=unit))
+    unwrapped = snr_db(
+        _angle_ctx(yaw, unit=unit, representation=Representation.CONTINUOUS)
+    )
+
+    assert wrapped.value is not None and unwrapped.value is not None
+    assert wrapped.value == pytest.approx(unwrapped.value, abs=0.1)
+    assert wrapped.evidence["angle_period"] == 2 * half
+    assert wrapped.evidence["n_unwrapped_steps"] > 0
+
+
+def test_wrap_reads_low_without_the_angle_binding():
+    wrapped = _wrap(_yaw(1.0), math.pi)
+    as_angle = snr_db(_angle_ctx(wrapped, unit="rad"))
+    as_continuous = snr_db(
+        _angle_ctx(wrapped, unit="rad", representation=Representation.CONTINUOUS)
+    )
+
+    assert as_angle.value is not None and as_continuous.value is not None
+    assert as_continuous.value <= as_angle.value - 20.0
+
+
+@pytest.mark.parametrize("unit", [None, "degrees"])
+def test_angle_without_a_known_unit_is_unavailable(unit):
+    result = snr_db(_angle_ctx(_wrap(_yaw(1.0), math.pi), unit=unit))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert result.availability == Availability.UNAVAILABLE
+    assert "unit" in result.evidence["reason"]
+    if unit is not None:
+        assert repr(unit) in result.evidence["reason"]
+
+
+def test_angle_that_never_wraps_matches_continuous():
+    yaw = _yaw(1.0)
+    as_angle = snr_db(_angle_ctx(yaw, unit="rad"))
+    as_continuous = snr_db(
+        _angle_ctx(yaw, unit="rad", representation=Representation.CONTINUOUS)
+    )
+
+    assert as_angle.value == as_continuous.value
+    assert as_angle.evidence["n_unwrapped_steps"] == 0
+
+
+def test_continuous_evidence_gains_no_angle_keys():
+    evidence = snr_db(context()).evidence
+
+    assert "angle_period" not in evidence
+    assert "n_unwrapped_steps" not in evidence
+
+
+def test_unwrap_skips_invalid_samples():
+    clean = _yaw(1.0)
+    clean_wrapped = _wrap(clean, math.pi)
+    crossing = next(
+        i
+        for i in range(1, len(clean_wrapped))
+        if clean_wrapped[i] < clean_wrapped[i - 1]
+    )
+    yaw: list[float | None] = [*clean]
+    wrapped: list[float | None] = [*clean_wrapped]
+    wrapped[crossing] = None
+    yaw[crossing] = None
+    as_angle = snr_db(_angle_ctx(wrapped, unit="rad"))
+    as_continuous = snr_db(
+        _angle_ctx(yaw, unit="rad", representation=Representation.CONTINUOUS)
+    )
+
+    assert as_angle.value is not None and as_continuous.value is not None
+    assert as_angle.value == pytest.approx(as_continuous.value, abs=0.1)
+    assert as_angle.evidence["n_invalid_samples"] == 1

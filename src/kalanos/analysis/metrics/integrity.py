@@ -18,6 +18,7 @@ import math
 # External
 import polars as pl
 
+from kalanos.analysis.angles import angle_evidence, angle_period, unwrap
 from kalanos.analysis.clocks import samples as clock_samples
 from kalanos.analysis.localization import finite, source_values, support_for
 
@@ -176,19 +177,27 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
         `not_applicable` when:
         - the dtype is not numeric
         - the channel takes exactly two values (a switch or flag)
+        - an `angle` channel's unit has no known wrap period
         - no adjacent finite pair survives
-        `report_only` otherwise, with the longest unchanged run in `evidence`.
+        `report_only` otherwise, with the longest unchanged run in `evidence`. An
+        `angle` channel is unwrapped first.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is nothing to flatline")
     if _is_switch(ctx.values):
         return not_applicable(_SWITCH_REASON.format(what="flatline"), inapplicable=True)
+    period = angle_period(ctx.channel.binding)
+    if isinstance(period, str):
+        return not_applicable(period)
 
     ordered = source_values(ctx)
     if ordered is None:
         return not_applicable("source row order is unavailable")
     series, indices, timestamps = ordered
+    n_unwrapped = 0
+    if period is not None:
+        series, n_unwrapped = unwrap(series, period)
     values = series.to_list()
     n_pairs = n_unchanged = 0
     ranges = []
@@ -242,6 +251,7 @@ def flatline_pct(ctx: ChannelContext) -> MetricResult:
             "n_samples": ctx.n_samples,
             "longest_run_start": indices[lo],
             "longest_run_end_exclusive": indices[hi - 1] + 1,
+            **angle_evidence(period, n_unwrapped),
         },
     )
 
@@ -264,8 +274,9 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
     -------
     MetricResult
         `not_applicable` when the dtype is not numeric, the channel takes
-        exactly two values (a switch or flag), or every window's local spread
-        is zero or null; `report_only` otherwise.
+        exactly two values (a switch or flag), an `angle` channel's unit has no
+        known wrap period, or every window's local spread is zero or null;
+        `report_only` otherwise. An `angle` channel is unwrapped first.
     """
 
     if not ctx.values.dtype.is_numeric():
@@ -276,12 +287,18 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
         return not_applicable(
             _SWITCH_REASON.format(what="a spike check"), inapplicable=True
         )
+    period = angle_period(ctx.channel.binding)
+    if isinstance(period, str):
+        return not_applicable(period)
 
     ordered = source_values(ctx)
     if ordered is None:
         return not_applicable("source row order is unavailable")
     ordered_values, indices, _ = ordered
     values = ordered_values.cast(pl.Float64)
+    n_unwrapped = 0
+    if period is not None:
+        values, n_unwrapped = unwrap(values, period)
     window_sum = values.rolling_sum(window_size=_SPIKE_WINDOW, center=True)
     window_sq_sum = (values**2).rolling_sum(window_size=_SPIKE_WINDOW, center=True)
 
@@ -316,6 +333,7 @@ def spike_pct(ctx: ChannelContext) -> MetricResult:
             "sample_indices": [indices[i] for i in positions],
             "window_samples": _SPIKE_WINDOW,
             "window_is_undecided": True,
+            **angle_evidence(period, n_unwrapped),
         },
     )
 
@@ -339,13 +357,18 @@ def drift(ctx: ChannelContext) -> MetricResult:
     MetricResult
         `not_applicable` when:
         - the dtype is not numeric
+        - an `angle` channel's unit has no known wrap period
         - the time span is zero
         - the value variance is zero
-        `report_only` otherwise.
+        `report_only` otherwise. An `angle` channel is unwrapped in time order
+        first.
     """
 
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric; there is no trend to fit")
+    period = angle_period(ctx.channel.binding)
+    if isinstance(period, str):
+        return not_applicable(period)
 
     timestamps = ctx.stream.timestamps.to_list()
     values = ctx.values.to_list()
@@ -356,6 +379,16 @@ def drift(ctx: ChannelContext) -> MetricResult:
     ]
     if len(paired) < 2:
         return not_applicable("fewer than two paired samples to fit a trend over")
+
+    n_unwrapped = 0
+    if period is not None:
+        # Unwrapped in time order, which the stored row order need not follow.
+        by_time = sorted(range(len(paired)), key=lambda i: paired[i][0])
+        unwrapped, n_unwrapped = unwrap(
+            pl.Series([paired[i][1] for i in by_time]), period
+        )
+        for position, value in zip(by_time, unwrapped.to_list(), strict=True):
+            paired[position] = (paired[position][0], value)
 
     times = [t for t, _ in paired]
     vals = [v for _, v in paired]
@@ -388,6 +421,7 @@ def drift(ctx: ChannelContext) -> MetricResult:
             "r_squared": r_squared,
             "total_change": fitted[-1] - fitted[0],
             "n_samples": len(paired),
+            **angle_evidence(period, n_unwrapped),
         },
     )
 
@@ -446,6 +480,8 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
         The diagnostic ratio and component standard deviations. A validated
         matching reference can establish residual level relative to that
         reference, never sensor health or automatic blocking authority.
+        An `angle` channel is unwrapped by its unit's period first, and is not
+        applicable without a known unit.
     """
     if not ctx.values.dtype.is_numeric():
         return not_applicable("channel is not numeric", inapplicable=True)
@@ -463,6 +499,9 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
             "rotation by rotation_snr_db",
             inapplicable=True,
         )
+    period = angle_period(binding)
+    if isinstance(period, str):
+        return not_applicable(period)
     ordered = source_values(ctx)
     if ordered is None:
         return not_applicable("source row order is unavailable")
@@ -474,6 +513,9 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
     values = ordered_values.cast(pl.Float64)
     invalid = values.is_null() | ~values.is_finite()
     values = values.set(invalid, None)
+    n_unwrapped = 0
+    if period is not None:
+        values, n_unwrapped = unwrap(values, period)
     smoothed = values.rolling_mean(window_size=_SNR_SMOOTHING_WINDOW, center=True)
     residual = values - smoothed
     valid = smoothed.is_not_null() & residual.is_not_null()
@@ -508,6 +550,7 @@ def snr_db(ctx: ChannelContext) -> MetricResult:
             "nor proof of health"
         ),
     }
+    evidence.update(angle_evidence(period, n_unwrapped))
     if signal_variance == 0 or noise_variance == 0:
         result = not_applicable(
             "smoothed signal variance is zero"

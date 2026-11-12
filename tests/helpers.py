@@ -5,6 +5,8 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
+import random
 from collections.abc import Container, Sequence
 from html.parser import HTMLParser
 from pathlib import Path
@@ -16,6 +18,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.inference.dialect import sniff_dialect
 from kalanos.analysis.inference.infer import infer_schema
+from kalanos.analysis.models.binding import ChannelBinding, Representation
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -385,3 +388,77 @@ def channel_ctx(
     return ChannelContext(
         channel=stream.channels[0], values=payload.frame["value"], stream=stream_ctx
     )
+
+
+def angle_ctx(
+    values: Sequence[float | None],
+    *,
+    unit: str | None,
+    representation: Representation = Representation.ANGLE,
+) -> ChannelContext:
+    """Bind a yaw channel on a 100 Hz clock, as an angle by default.
+
+    Parameters
+    ----------
+    values : Sequence[float or None]
+        The channel's samples.
+    unit : str or None
+        The unit the binding declares.
+    representation : Representation
+        How the binding says the yaw is encoded.
+
+    Returns
+    -------
+    ChannelContext
+        The channel from `channel_ctx`, with the binding set.
+    """
+
+    ctx = channel_ctx(values, rate_hz=100.0)
+    ctx.channel.binding = ChannelBinding(
+        feature="observation.yaw",
+        index=0,
+        taxonomy_type="unmapped.observation.yaw",
+        representation=representation,
+        unit=unit,
+    )
+    return ctx
+
+
+def yaw_swing(scale: float) -> list[float]:
+    """Swing a yaw slowly through 2.5 ± 1 rad, well clear of its seeded noise.
+
+    Parameters
+    ----------
+    scale : float
+        How many of the unit make one radian.
+
+    Returns
+    -------
+    list[float]
+        800 samples at 100 Hz, crossing π several times.
+    """
+
+    rng = random.Random(11)
+    return [
+        scale * (2.5 + math.sin(math.pi * i / 100)) + rng.gauss(0, scale * 0.001)
+        for i in range(800)
+    ]
+
+
+def wrap_angle(values: Sequence[float], half: float) -> list[float]:
+    """Map each value into (-half, half], as a wrapping angle sensor reports it.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        The angle as continuous motion.
+    half : float
+        Half the period the angle wraps by.
+
+    Returns
+    -------
+    list[float]
+        The wrapped values.
+    """
+
+    return [((v + half) % (2 * half)) - half for v in values]
