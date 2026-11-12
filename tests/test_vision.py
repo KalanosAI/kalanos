@@ -820,6 +820,18 @@ def test_format_reads_the_header_without_numpy(monkeypatch):
     )
 
 
+def test_vision_reads_need_opencv(monkeypatch):
+    """Sampling frames needs OpenCV for the blur; comparing the header does not."""
+
+    monkeypatch.setattr(vision, "load_cv2", lambda: None)
+    stream = _camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0))
+
+    assert video_format_consistency(stream_context(stream)).value == 0.0
+    assert "OpenCV" in _assert_not_applicable(
+        camera_stream_present(stream_context(stream))
+    )
+
+
 def test_a_field_the_container_does_not_state_is_not_a_difference(monkeypatch):
     """A header with no average rate or pixel format contradicts no declaration."""
 
@@ -1800,6 +1812,130 @@ def test_blurring_lowers_sharpness_score():
     good = band.good
     assert good is not None and sharp >= good
     assert blurred < sharp
+
+
+def _reference_laplacian_var(frame) -> float:
+    """Variance of the 3x3 Laplacian over the frame's interior, in float64.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D luminance frame.
+
+    Returns
+    -------
+    float
+        The variance, or `nan` for a frame under 3 pixels in either dimension.
+    """
+
+    image = frame.astype("float64")
+    laplacian = (
+        image[:-2, 1:-1]
+        + image[2:, 1:-1]
+        + image[1:-1, :-2]
+        + image[1:-1, 2:]
+        - 4 * image[1:-1, 1:-1]
+    )
+    return float(laplacian.var())
+
+
+def _reference_reblur_loss(frame, laplacian: float) -> float:
+    """Share of `laplacian` a normalised 3x3 box blur removes, in float64.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D luminance frame.
+    laplacian : float
+        `_reference_laplacian_var` of the frame.
+
+    Returns
+    -------
+    float
+        The share, or 0.0 for a frame with no edges.
+    """
+
+    if laplacian == 0:
+        return 0.0
+    height, width = frame.shape
+    padded = numpy.pad(frame.astype("float64"), 1, mode="edge")
+    blurred = numpy.zeros((height, width))
+    for dy in range(3):
+        for dx in range(3):
+            blurred += padded[dy : dy + height, dx : dx + width]
+    blurred /= 9
+    return 1 - _reference_laplacian_var(blurred) / laplacian
+
+
+def _blur_frame(kind: str, height: int, width: int):
+    """Build a uint8 luminance frame for the blur reference test.
+
+    Parameters
+    ----------
+    kind : str
+        `noise`, `smooth` (Gaussian-smoothed noise), `ramp` (0 to 255 left to right),
+        `edge` (left half black, right half white), `black` or `white`.
+    height : int
+        Rows of the frame.
+    width : int
+        Columns of the frame.
+
+    Returns
+    -------
+    numpy.ndarray
+        The frame.
+    """
+
+    rng = numpy.random.default_rng(42)
+    if kind == "noise":
+        return rng.integers(0, 256, (height, width), dtype=numpy.uint8)
+    if kind == "smooth":
+        taps = numpy.exp(-0.5 * (numpy.arange(-6, 7) / 2.0) ** 2)
+        taps /= taps.sum()
+        image = rng.integers(0, 256, (height, width)).astype("float64")
+        for axis in (0, 1):
+            image = numpy.apply_along_axis(
+                lambda line: numpy.convolve(line, taps, mode="same"), axis, image
+            )
+        return numpy.clip(numpy.rint(image), 0, 255).astype(numpy.uint8)
+    if kind == "ramp":
+        row = numpy.rint(numpy.linspace(0, 255, width)).astype(numpy.uint8)
+        return numpy.tile(row, (height, 1))
+    if kind == "edge":
+        frame = numpy.zeros((height, width), numpy.uint8)
+        frame[:, width // 2 :] = 255
+        return frame
+    return numpy.full((height, width), 255 if kind == "white" else 0, numpy.uint8)
+
+
+@pytest.mark.parametrize("kind", ["noise", "smooth", "ramp", "edge", "black", "white"])
+@pytest.mark.parametrize("shape", [(5, 7), (448, 448), (480, 640), (720, 1280)])
+def test_opencv_blur_matches_the_float64_reference(kind, shape):
+    """The float32 OpenCV blur stays within 1e-12 of the float64 computation."""
+
+    pytest.importorskip("cv2")
+    frame = _blur_frame(kind, *shape)
+
+    laplacian = vision._laplacian_var(frame)
+    loss = vision._reblur_loss(frame, laplacian)
+
+    if kind in ("black", "white"):
+        assert laplacian == 0.0
+        assert loss == 0.0
+        return
+    reference = _reference_laplacian_var(frame)
+    assert laplacian == pytest.approx(reference, rel=1e-12, abs=0)
+    assert loss == pytest.approx(
+        _reference_reblur_loss(frame, reference), rel=0, abs=1e-12
+    )
+
+
+def test_a_frame_under_three_pixels_has_no_laplacian_variance():
+    """A frame with no interior pixel has no Laplacian to take the variance of."""
+
+    pytest.importorskip("cv2")
+
+    assert math.isnan(vision._laplacian_var(numpy.zeros((2, 8), numpy.uint8)))
 
 
 def test_a_flat_frame_reads_as_fully_blurred():

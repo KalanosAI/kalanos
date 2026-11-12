@@ -23,6 +23,15 @@ def load_numpy() -> ModuleType | None:
         return None
 
 
+def load_cv2() -> ModuleType | None:
+    """Import OpenCV, or return `None` when it is not installed."""
+
+    try:
+        return importlib.import_module("cv2")
+    except ImportError:
+        return None
+
+
 def load_huggingface_hub() -> ModuleType | None:
     """Import huggingface_hub, or return `None` when the `hf` extra is not installed."""
 

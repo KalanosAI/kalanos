@@ -93,7 +93,7 @@ from kalanos.analysis.models.report import (
     CameraFrames,
     VideoFormat,
 )
-from kalanos.analysis.optional import load_numpy
+from kalanos.analysis.optional import load_cv2, load_numpy
 from kalanos.assets.dictionary import load_dictionary
 
 
@@ -141,6 +141,8 @@ _SAMPLE_SIZE = 128
 # Blur is the share of edge energy a further 3x3 box blur removes:
 # a sharp frame loses most of it, an already soft one little, whatever its content.
 _REBLUR = 3
+# The 5-point Laplacian; `_laplacian_var` builds it as a float32 kernel.
+_LAPLACIAN_KERNEL = ((0, 1, 0), (1, -4, 1), (0, 1, 0))
 
 # Exposure is judged against the camera's own typical frame, not fixed gray levels:
 # a simulator's white background reads exactly like a camera blown out 4x.
@@ -637,8 +639,10 @@ def _readable(ctx: StreamContext) -> SampledFrames | MetricResult:
         return payload
     if not isinstance(payload, SampledFrames):
         return not_applicable("the stream's frames cannot be sampled")
-    if load_numpy() is None:
-        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
     return payload
 
 
@@ -1547,39 +1551,69 @@ def _video_file(ctx: StreamContext) -> VideoPayload | MetricResult:
 
 
 def _laplacian_var(frame: "np.ndarray") -> float:
-    """Variance of the 3x3 Laplacian over the whole frame."""
+    """Variance of the 3x3 Laplacian over the whole frame.
 
-    image = frame.astype("float64")
-    laplacian = (
-        image[:-2, 1:-1]
-        + image[2:, 1:-1]
-        + image[1:-1, :-2]
-        + image[1:-1, 2:]
-        - 4 * image[1:-1, 1:-1]
-    )
-    return float(laplacian.var())
+    The border row and column on each side are left out,
+    since their Laplacian would need pixels outside the frame.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D uint8 or float32 luminance frame.
+
+    Returns
+    -------
+    float
+        The variance, or `nan` for a frame under 3 pixels in either dimension.
+    """
+
+    height, width = frame.shape
+    if height < 3 or width < 3:
+        return math.nan
+    numpy = load_numpy()
+    cv2 = load_cv2()
+    assert numpy is not None and cv2 is not None
+
+    image = frame if frame.dtype == numpy.float32 else frame.astype(numpy.float32)
+    kernel = numpy.array(_LAPLACIAN_KERNEL, numpy.float32)
+    laplacian = cv2.filter2D(image, -1, kernel, borderType=cv2.BORDER_REPLICATE)
+    _, deviation = cv2.meanStdDev(laplacian[1:-1, 1:-1])
+    return float(deviation[0, 0]) ** 2
 
 
 def _reblur_loss(frame: "np.ndarray", laplacian: float) -> float:
     """Share of `laplacian` a `_REBLUR` box blur of the frame removes.
 
-    0.0 for a frame with no edges.
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D uint8 luminance frame.
+    laplacian : float
+        `_laplacian_var` of the frame.
+
+    Returns
+    -------
+    float
+        The share, or 0.0 for a frame with no edges.
     """
 
     if laplacian == 0:
         return 0.0
-    numpy = load_numpy()
-    assert numpy is not None
+    cv2 = load_cv2()
+    assert cv2 is not None
 
-    height, width = frame.shape
-    pad = _REBLUR // 2
-    padded = numpy.pad(frame.astype("float64"), pad, mode="edge")
-    blurred = numpy.zeros((height, width))
-    for dy in range(_REBLUR):
-        for dx in range(_REBLUR):
-            blurred += padded[dy : dy + height, dx : dx + width]
-    blurred /= _REBLUR * _REBLUR
-    return 1 - _laplacian_var(blurred) / laplacian
+    # The 3x3 sums of uint8 pixels and their Laplacian are exact integers in float32;
+    # dividing each pixel by 9 would round it,
+    # which on smooth frames shifts the loss by up to about 4e-6.
+    # Dividing the variance by `_REBLUR ** 4` afterwards is exact.
+    window_sum = cv2.boxFilter(
+        frame,
+        cv2.CV_32F,
+        (_REBLUR, _REBLUR),
+        normalize=False,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    return 1 - _laplacian_var(window_sum) / _REBLUR**4 / laplacian
 
 
 def _stopped_result(stopped: tuple[Availability, str]) -> MetricResult:
@@ -2309,8 +2343,10 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
     payload = _video_file(ctx)
     if isinstance(payload, MetricResult):
         return payload
-    if load_numpy() is None:
-        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
 
     reason: str | None = None
     try:
@@ -2423,8 +2459,10 @@ def frames_readable(ctx: StreamContext) -> MetricResult:
     payload = _video_file(ctx)
     if isinstance(payload, MetricResult):
         return payload
-    if load_numpy() is None:
-        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
 
     # A failure outside the file hides no defect another stage found,
     # so it only decides the result when neither stage found one.
