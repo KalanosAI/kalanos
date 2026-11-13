@@ -689,6 +689,8 @@ def test_the_csv_fixtures_pose_axes_resolve_through_the_packaged_dictionary():
         ("robot0_eef_quat", "proprio.ee_pose"),
         ("robot0_gripper_qpos", "proprio.gripper_width"),
         ("robot0_eye_in_hand_image", "extero.wrist_rgb"),
+        # the LeRobot spelling of robosuite's third-person camera
+        ("observation.images.agentview", "extero.exterior_rgb"),
         # the eef_* spellings Isaac Lab and robomimic write, namespaced or not
         ("eef_pos", "proprio.ee_pose"),
         ("observation.eef_quat", "proprio.ee_pose"),
