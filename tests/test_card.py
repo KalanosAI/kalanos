@@ -622,3 +622,22 @@ def test_an_episode_count_warning_gets_an_episode_count_row(csv_report):
         if row.strip().startswith("episode count")
     ] == [message]
     assert not any(row.strip().startswith("episode count") for row in unwarned)
+
+
+def test_a_container_hint_warning_gets_a_row_of_its_kind(csv_report):
+    """Verify a `rotation` warning renders as a `rotation` coverage row."""
+
+    message = "1 video file carries rotation metadata: cam cam/a.mp4 90 deg"
+    warned = csv_report.model_copy(
+        update={"dataset_warnings": [DatasetWarning(code="rotation", message=message)]}
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("rotation").strip()
+        for row in rows
+        if row.strip().startswith("rotation")
+    ] == [message]
+    assert not any(row.strip().startswith("rotation") for row in unwarned)

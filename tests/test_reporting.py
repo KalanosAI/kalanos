@@ -60,6 +60,7 @@ from kalanos.analysis.models.scoring import (
     ScoreResult,
     Severity,
 )
+from kalanos.analysis.reporting import assemble
 from kalanos.analysis.reporting.assemble import (
     _merge_shared_timelines,
     assemble_report,
@@ -1591,6 +1592,62 @@ def test_a_camera_stream_reports_what_its_feature_declares(tmp_path):
     declared = camera.video_format.declared
     assert (declared.codec, declared.channels) == ("av1", 3)
     assert declared.is_depth_map is False and declared.has_audio is False
+
+
+def _rotate_up_camera(root: UPath, degrees: int) -> None:
+    """Rewrite the v2 fixture's `up` camera video with a display rotation."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+    path = root / "videos/chunk-000/observation.images.up/episode_000000.mp4"
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=30)
+    stream.width = stream.height = 32
+    stream.pix_fmt = "yuv420p"
+    stream.set_display_rotation(degrees)
+    for _ in range(8):
+        pixels = numpy.full((32, 32, 3), 128, dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def test_a_rotated_camera_file_is_reported_as_a_dataset_warning(tmp_path):
+    """Verify the rotation reaches `found`, and one warning names the camera."""
+
+    root = _copy_v2_fixture(tmp_path)
+    _rotate_up_camera(root, 90)
+
+    report = grade(root)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    assert camera.video_format.found.rotation_deg == 90.0
+    (warning,) = [w for w in report.dataset_warnings if w.code == "rotation"]
+    assert "observation.images.up" in warning.message
+    assert "90 deg" in warning.message
+
+
+def test_a_container_hint_changes_no_score_or_decision(tmp_path, monkeypatch):
+    """Verify grading with the hints off differs only in `dataset_warnings`."""
+
+    root = _copy_v2_fixture(tmp_path)
+    _rotate_up_camera(root, 90)
+
+    hinted = grade(root)
+    monkeypatch.setattr(assemble, "container_hints", lambda samples: [])
+    unhinted = grade(root)
+
+    assert [w.code for w in hinted.dataset_warnings] != [
+        w.code for w in unhinted.dataset_warnings
+    ]
+    assert hinted.score == unhinted.score
+    assert [e.score for e in hinted.episodes] == [e.score for e in unhinted.episodes]
+    assert [e.eligibility for e in hinted.episodes] == [
+        e.eligibility for e in unhinted.episodes
+    ]
 
 
 def test_a_camera_stream_reports_its_tags_and_colour_but_no_location(tmp_path):

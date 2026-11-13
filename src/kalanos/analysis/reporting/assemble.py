@@ -98,6 +98,10 @@ from kalanos.analysis.scoring.cameras import (
     camera_samples,
     compare_cameras,
 )
+from kalanos.analysis.scoring.container_hints import (
+    container_hints,
+    container_samples,
+)
 from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
     StreamKey,
@@ -587,6 +591,7 @@ def summarize(
         score=episode.score,
         requirement_reasons=requirement_reasons(episode, requirements),
         camera_samples=camera_samples(episode),
+        container_samples=container_samples(episode),
         gate_counts=gate_counts(episode),
         metric_subjects=metric_subjects(episode),
         operational_errors=errors,
@@ -1009,6 +1014,11 @@ class ReportBuilder:
             for w in (
                 near_duplicate_warning(near_duplicates, n_episodes),
                 _task_instruction_warning(summaries),
+                *container_hints(
+                    sample
+                    for summary in summaries
+                    for sample in summary.container_samples
+                ),
                 *dataset_warnings,
             )
             if w is not None

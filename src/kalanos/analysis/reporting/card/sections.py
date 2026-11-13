@@ -61,6 +61,14 @@ _CONSEQUENCE_ROLE = {
     Consequence.REPORT_ONLY: "muted",
 }
 
+_CONTAINER_HINT_LABELS = {
+    "low_bitrate": "low bitrate",
+    "high_bitrate": "high bitrate",
+    "rotation": "rotation",
+    "hdr_transfer": "hdr",
+    "interlaced": "interlaced",
+}
+
 Cell = Text | str
 
 
@@ -758,6 +766,7 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         One row per capability with eligible subjects, in model order,
         an `instructions` row for each `task_instruction_missing` dataset warning,
         an `episode count` row for each `episode_count_mismatch` dataset warning,
+        a row for each container hint warning, labelled by its kind,
         a `mapping` row when any stream type went unmapped, then an `inventory` row.
     """
 
@@ -794,6 +803,14 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         ("episode count", Text(warning.message, style=theme.style("warn")))
         for warning in report.dataset_warnings
         if warning.code == "episode_count_mismatch"
+    )
+    pairs.extend(
+        (
+            _CONTAINER_HINT_LABELS[warning.code],
+            Text(warning.message, style=theme.style("warn")),
+        )
+        for warning in report.dataset_warnings
+        if warning.code in _CONTAINER_HINT_LABELS
     )
 
     # Counted by type, since `--map` types a source field once for every episode.
