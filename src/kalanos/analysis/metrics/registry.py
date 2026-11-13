@@ -320,12 +320,17 @@ def _run(
         try:
             result = entry.func(ctx)
         except Exception as exc:
+            # A bare assert or `raise ValueError()` has no message,
+            # and the episode's operational error reads its reason from here.
             result = MetricResult(
                 value=None,
                 unit=None,
                 status=MetricStatus.NOT_APPLICABLE,
                 availability=Availability.ERROR,
-                evidence={"reason": str(exc), "error_type": type(exc).__name__},
+                evidence={
+                    "reason": str(exc) or type(exc).__name__,
+                    "error_type": type(exc).__name__,
+                },
             )
         if result.availability is None or result.availability == Availability.COMPUTED:
             state = (

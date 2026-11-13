@@ -62,8 +62,16 @@ def row(
             Availability.ERROR,
         )
     )
+    error_reasons = Counter(
+        reason for state, reason in states if reason and state == Availability.ERROR
+    )
     return CoverageRow(
-        key=key, unit=unit, eligible=eligible, reasons=dict(reasons), **counts
+        key=key,
+        unit=unit,
+        eligible=eligible,
+        reasons=dict(reasons),
+        error_reasons=dict(error_reasons),
+        **counts,
     )
 
 
@@ -145,13 +153,16 @@ def merge_rows(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
     fields = [s.value for s in Availability] + ["eligible"]
     for (key, unit), items in sorted(grouped.items()):
         reasons = Counter()
+        error_reasons = Counter()
         for item in items:
             reasons.update(item.reasons)
+            error_reasons.update(item.error_reasons)
         merged.append(
             CoverageRow(
                 key=key,
                 unit=unit,
                 reasons=dict(reasons),
+                error_reasons=dict(error_reasons),
                 **{k: sum(getattr(i, k) for i in items) for k in fields},
             )
         )

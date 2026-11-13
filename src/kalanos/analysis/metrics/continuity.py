@@ -448,7 +448,8 @@ def _full_steps(ctx: StreamContext) -> "np.ndarray | MetricResult":
     -------
     numpy.ndarray or MetricResult
         The unscaled mean absolute difference of each pair of neighbouring
-        thumbnails, `n - 1` of them, or a result that is not graded.
+        thumbnails, `n - 1` of them, or a result that is not graded,
+        such as when the footage decodes to more frames than the stream has timestamps.
     """
 
     if not ctx.full_frame_scan:
@@ -462,6 +463,11 @@ def _full_steps(ctx: StreamContext) -> "np.ndarray | MetricResult":
         return not_applicable("too few frames decoded to compare neighbours")
     # A full scan reads one window, every frame.
     [(_start, steps)] = frames.luma_steps
+    if len(steps) + 1 > ctx.n_samples:
+        return not_applicable(
+            f"the footage decodes to {len(steps) + 1} frames"
+            f" but the stream has {ctx.n_samples} timestamps"
+        )
     return steps
 
 
@@ -878,6 +884,7 @@ def dropped_chunk_count(ctx: StreamContext) -> MetricResult:
         the drop as a one-frame support interval at the first frame after it,
         or `not_applicable` when the stream cannot be sampled,
         has no state stream beside it, is not read in full,
+        decodes to more frames than it has timestamps,
         has too few moving frames,
         or no step lies more than `_EDGE` steps from either end.
     """
@@ -961,6 +968,7 @@ def video_control_lag_ms(ctx: StreamContext) -> MetricResult:
         `report_only` with the lag in milliseconds,
         or `not_applicable` when the stream cannot be sampled,
         has no state or action stream beside it, is not read in full,
+        decodes to more frames than it has timestamps,
         has no frame rate, or no control channel correlates with it.
     """
 

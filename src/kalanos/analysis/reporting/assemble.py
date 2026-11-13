@@ -572,7 +572,11 @@ def summarize(
         else None
     )
     errors = [
-        {"episode_id": episode.id, "metric": row.key, "reason": "; ".join(row.reasons)}
+        {
+            "episode_id": episode.id,
+            "metric": row.key,
+            "reason": "; ".join(row.error_reasons),
+        }
         for row in (episode.coverage.metrics if episode.coverage else [])
         if row.error
     ]
