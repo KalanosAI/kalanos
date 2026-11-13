@@ -190,6 +190,9 @@ class StreamContext(BaseModel):
         Decode caps, previews and exposure levels.
         The sample count and the full scan are read from `vision_samples`
         and `full_frame_scan`, which callers fill from the same resolved spec.
+    simulated : bool
+        Whether the footage is rendered by a simulator,
+        so identical frames can be a still scene.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -201,6 +204,7 @@ class StreamContext(BaseModel):
     full_frame_scan: bool = False
     reads_payloads: bool = True
     vision: VisionSpec = Field(default_factory=VisionSpec)
+    simulated: bool = False
 
     @property
     def timestamps(self) -> pl.Series:

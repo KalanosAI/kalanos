@@ -16,8 +16,12 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `VideoFormat.interlaced` | `bool` or `null` | Whether the first frame is interlaced. `null` when no frame decodes. Under `streams[].video_format.found` only. |
 | `DatasetWarning.code` | `"low_bitrate"`, `"high_bitrate"`, `"rotation"`, `"hdr_transfer"`, `"interlaced"` | Take five new values: video files whose bitrate is far below or far above the median of the same camera's other files, that carry rotation metadata, that use an HDR transfer function, or that are interlaced. Each message names the camera, file and value of up to 10 files. Feed no score. |
 | `episodes[].metrics["episode_not_in_metadata"]` | `MetricResult` | 1 when the episode has rows in the data and no row in the episode metadata, else 0, with the files holding its rows as evidence. Such an episode is listed in `episodes` with no streams. `not_applicable` where the format names no data file per episode. |
+| `datasets[].simulator` | `str` or `null` | The simulator a LeRobot dataset card's tags name, lower-cased; `null` when it names none or the dataset has no card. |
+| `streams[].metrics["frozen_frame_pct"].evidence["footage"]` | `"simulated"` | Present only on simulated footage, where the result stays `report_only` with an `ungraded_reason` and raises no finding. |
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, and it holds no `task_instruction_missing`, `episode_count_mismatch`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
+`GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
+
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 

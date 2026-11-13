@@ -43,6 +43,9 @@ class DatasetInfo(BaseModel):
         The format's declared sampling rate, when it declares one.
     robot_type : str or None
         The robot or platform the format declares, when it declares one.
+    simulator : str or None
+        The simulator the dataset card names among its tags, lower-cased;
+        `None` when it names none or the dataset has no card.
     """
 
     adapter: str
@@ -50,6 +53,7 @@ class DatasetInfo(BaseModel):
     episode_count: int | None = None
     nominal_rate_hz: float | None = None
     robot_type: str | None = None
+    simulator: str | None = None
 
 
 class AdapterRefusal(Exception):

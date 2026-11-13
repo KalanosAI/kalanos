@@ -14,6 +14,7 @@ as a bad input file.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import shutil
 from collections.abc import Iterator
 
 # External
@@ -31,6 +32,7 @@ from kalanos.analysis.adapters.discover import (
     PluginSource,
 )
 from kalanos.analysis.models.adapters import DatasetInfo
+from kalanos.analysis.models.diagnostics import VisionSpec
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -321,3 +323,37 @@ def test_the_report_forwards_what_the_adapter_declared():
     assert info.adapter == "lerobot_v3"
     assert info.episode_count == len(report.episodes)
     assert info.robot_type is not None
+
+
+@pytest.mark.parametrize("simulator", [None, "robosuite"])
+@pytest.mark.parametrize(
+    ("vision", "expected_with_simulator", "expected_without"),
+    [
+        (None, True, False),
+        (VisionSpec(), True, False),
+        (VisionSpec(footage="auto"), True, False),
+        (VisionSpec(footage="real"), False, False),
+        (VisionSpec(footage="simulated"), True, True),
+    ],
+)
+def test_footage_is_simulated_by_setting_then_card(
+    vision, expected_with_simulator, expected_without, simulator
+):
+    """`auto` follows the card; `real` and `simulated` override it."""
+
+    info = DatasetInfo(adapter="test", path=UPath("."), simulator=simulator)
+
+    expected = expected_with_simulator if simulator else expected_without
+    assert pipeline._simulated(vision, info) is expected
+
+
+def test_a_card_tagged_dataset_reports_its_simulator(tmp_path):
+    """The card's simulator reaches `Report.datasets`."""
+
+    root = tmp_path / "tagged"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    (root / "README.md").write_text("---\ntags:\n- robosuite\n---\n")
+
+    [info] = kalanos.grade(root).datasets
+
+    assert info.simulator == "robosuite"

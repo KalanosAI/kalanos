@@ -376,6 +376,7 @@ def stream_context(
     vision_samples: int = DEFAULT_VISION_SAMPLES,
     episode_streams: Sequence[Stream] | None = None,
     full_frame_scan: bool = False,
+    simulated: bool = False,
 ) -> StreamContext:
     """Wrap a Stream in the context a stream-level metric function is handed.
 
@@ -388,6 +389,7 @@ def stream_context(
         vision_samples=vision_samples,
         episode_streams=list(episode_streams) if episode_streams is not None else None,
         full_frame_scan=full_frame_scan,
+        simulated=simulated,
     )
 
 

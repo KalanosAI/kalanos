@@ -163,6 +163,7 @@ def grade_stream(
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[StreamKey, PayloadFingerprint] | None = None,
     footage: FootageVariation | None = None,
+    simulated: bool = False,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -195,6 +196,8 @@ def grade_stream(
     footage : FootageVariation or None
         When given and the stream is camera footage,
         receives its pooled sampled frames, for the camera's visual variation.
+    simulated : bool
+        Whether the footage is rendered by a simulator.
 
     Returns
     -------
@@ -226,6 +229,7 @@ def grade_stream(
         full_frame_scan=full_frame_scan,
         reads_payloads=tier != ExecutionTier.METADATA,
         vision=vision or VisionSpec(),
+        simulated=simulated,
     )
     stream_results = run_stream_metrics(stream_ctx)
     stream_metrics, own_score, stream_findings = score_metrics(
@@ -374,6 +378,7 @@ def grade_episode(
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] | None = None,
     footage: FootageVariation | None = None,
+    simulated: bool = False,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -401,6 +406,8 @@ def grade_episode(
     footage : FootageVariation or None
         When given, receives the pooled sampled frames of each camera stream,
         for the cameras' visual variation.
+    simulated : bool
+        Whether the episode's camera footage is rendered by a simulator.
 
     Returns
     -------
@@ -432,6 +439,7 @@ def grade_episode(
             tier=tier,
             fingerprints=stream_prints,
             footage=footage,
+            simulated=simulated,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
@@ -835,7 +843,7 @@ class ReportBuilder:
         ----------
         item : AnalysedEpisode
             The canonical episode, the adapter that read it,
-            and the policy to grade it against.
+            the policy to grade it against, and whether its footage is simulated.
 
         Raises
         ------
@@ -861,6 +869,7 @@ class ReportBuilder:
             tier=self._tier,
             fingerprints=self._fingerprints,
             footage=self._footage,
+            simulated=item.simulated,
         )
         self._findings.extend(episode_findings)
         results: list[DiagnosticResult] = []

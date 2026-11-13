@@ -1664,3 +1664,31 @@ def test_dataset_metric_rollups_count_distinct_subjects():
     assert missing.n_graded == 2
     assert missing.n_flagged == 1
     assert missing.n_episodes_flagged == 2
+
+
+def test_a_simulated_footage_mark_keeps_frozen_frames_report_only():
+    """A freeze on simulated footage stays ungraded under the default policy."""
+
+    policy = load_default_policy()
+    evidence = {"n_runs": 1}
+
+    def resolved(extra):
+        return resolve_status(
+            MetricResult(
+                value=50.0,
+                unit="%",
+                status=MetricStatus.REPORT_ONLY,
+                evidence={**evidence, **extra},
+            ),
+            metric_name="frozen_frame_pct",
+            taxonomy_type="unmapped.camera",
+            policy=policy,
+        )
+
+    graded = resolved({})
+    marked = resolved({"footage": "simulated"})
+
+    assert graded.status != MetricStatus.REPORT_ONLY
+    assert marked.status == MetricStatus.REPORT_ONLY
+    assert marked.points is None
+    assert "simulated footage" in marked.evidence["ungraded_reason"]
