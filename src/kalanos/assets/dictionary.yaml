@@ -235,7 +235,7 @@ entries:
     shape: free
     aliases: [
       CAM_FRONT, agentview_image, exterior_image_1_left, exterior_image_2_left, image,
-      observation.images.top, rgb_static]
+      observation.images.agentview, observation.images.top, rgb_static]
     typical_rate_hz: [15.0, 60.0]
   extero.stereo_rgb:
     label: Stereo pair (left+right raw)
