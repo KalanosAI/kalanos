@@ -134,6 +134,8 @@ class VisionSpec(StrictModel):
     The vision diagnostic previews its blurriest sampled frame as one WebP image
     unless `preview_frames` is 0; any other value gives that one image.
     `preview_size` is the image's longest side, in pixels, at most.
+    `footage` says whether the cameras' footage is rendered by a simulator;
+    `auto` reads it from the dataset card.
     """
 
     sample_frames: int = Field(default=10, ge=1, le=10000)
@@ -145,6 +147,7 @@ class VisionSpec(StrictModel):
     preview_size: int = Field(default=96, ge=16, le=256)
     dark_level: int = Field(default=5, ge=0, le=255)
     bright_level: int = Field(default=250, ge=0, le=255)
+    footage: Literal["auto", "real", "simulated"] = "auto"
 
     @model_validator(mode="after")
     def ordered_levels(self) -> "VisionSpec":
