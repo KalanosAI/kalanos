@@ -183,6 +183,14 @@ def test_an_enclosing_segment_types_a_name_only_when_an_entry_opts_in():
     assert dictionary.resolve("skill.goals.joint").taxonomy_type is None
 
 
+def test_a_namespace_match_reports_the_segment_that_matched():
+    dictionary = _dictionary(proprio_goal=_NAMESPACED)
+
+    match = dictionary.resolve("skill.goal.joint")
+
+    assert match.normalised.stem == "goal"
+
+
 def test_a_matching_last_segment_beats_the_enclosing_one():
     dictionary = _dictionary(
         proprio_goal=_NAMESPACED,

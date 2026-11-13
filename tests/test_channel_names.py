@@ -121,6 +121,13 @@ def test_a_finger_joint_grades_as_a_gripper():
     )
 
 
+def test_a_named_finger_is_not_a_gripper():
+    for name in ("index_finger_joint_0", "thumb_finger.pos"):
+        assert channel_taxonomy("unmapped.observation.state", name) == (
+            "unmapped.observation.state"
+        )
+
+
 def test_a_hand_digit_grades_as_a_finger_joint():
     for name in ("kLeftHandThumb", "kRightHandPinky", "left_hand_index"):
         assert channel_taxonomy("unmapped.observation.state", name) == (

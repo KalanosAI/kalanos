@@ -158,10 +158,13 @@ def _inferred(
     name = channel.declared_name or channel.name
     tokens = _name_tokens(name)
     # A hand token plus a digit token keeps `panda_hand` and `left_hand_pos_x` out.
-    hand_digit = "hand" in tokens and bool(tokens & _HAND_DIGITS)
+    digit = bool(tokens & _HAND_DIGITS)
+    hand_digit = "hand" in tokens and digit
     if hand_digit and taxonomy in ("unmapped.observation.state", "unmapped.state"):
         taxonomy = _FINGER_JOINT
-    if not hand_digit and ("gripper" in name.lower() or "finger" in tokens):
+    # A named digit (`index_finger_joint_0`) is the angle of one finger.
+    finger_gripper = "finger" in tokens and not digit
+    if not hand_digit and ("gripper" in name.lower() or finger_gripper):
         actuator = ActuatorKind.GRIPPER
         if taxonomy in ("unmapped.observation.state", "unmapped.state"):
             taxonomy, quantity = "proprio.gripper_width", Quantity.POSITION

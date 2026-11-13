@@ -526,8 +526,10 @@ class Dictionary(BaseModel):
         claimants = self.alias_index.get(normalised.stem, ())
         if not claimants:
             for segment in reversed(name.split(".")[:-1]):
-                claimants = self.namespace_index.get(normalise_name(segment).stem, ())
+                stem = normalise_name(segment).stem
+                claimants = self.namespace_index.get(stem, ())
                 if claimants:
+                    normalised = normalised.model_copy(update={"stem": stem})
                     break
 
         if len(claimants) == 1:
