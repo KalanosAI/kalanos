@@ -4,6 +4,8 @@ One episode spans a data parquet and one mp4 per camera;
 one parquet chunk holds many episodes, split by `episode_index`.
 `meta/info.json` declares the frame rate and the robot type,
 and `meta/episodes/**/*.parquet` maps each episode to the files that hold it.
+An episode whose rows are in the data with no row in `meta/episodes` is yielded
+after the others, with no streams, so the report can block it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -56,6 +58,7 @@ from kalanos.analysis.models.domain import (
     Clock,
     Episode,
     Kind,
+    LayoutCheck,
     MappingSource,
     SchemaCheck,
     Stream,
@@ -137,6 +140,27 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     if "episode_index" not in index.columns:
         return index
     return index.sort("episode_index")
+
+
+def _data_files(path: UPath, info: dict[str, Any]) -> list[UPath]:
+    """List every data parquet under the dataset's data root, sorted.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+    info : dict
+        The parsed `info.json`;
+        the first part of its `data_path` template names the data root.
+
+    Returns
+    -------
+    list[UPath]
+        Every `*.parquet` under the data root, at any depth, sorted.
+    """
+
+    data_root = path / PurePosixPath(info["data_path"]).parts[0]
+    return sorted(data_root.rglob("*.parquet"))
 
 
 def _video_stream(
@@ -268,7 +292,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         return describe_from_info(self.name, path, read_info(path))
 
     def episodes(self, path: UPath, sample: int | None = None) -> Iterator[Episode]:
-        """Yield one Episode per row of the episode index, lazily.
+        """Yield one Episode per row of the episode index, then the data-only ones.
 
         Parameters
         ----------
@@ -276,12 +300,18 @@ class LeRobotV3Adapter(LeRobotAdapter):
             The dataset root.
         sample : int or None
             When given, stop after this many episodes.
+            A sampled read yields no data-only episode,
+            since it cannot see the whole inventory.
 
         Yields
         ------
         Episode
             One recording, its streams drawn from the data parquet chunk
             its row names and, for each declared camera, its own mp4.
+            When `sample` is `None`, then one Episode per `episode_index`
+            found in the data and absent from the episode index, in index order:
+            no streams, `tasks` `None`, and a `layout_check` whose `pointed_path`
+            is `None` and whose `holding_paths` are the data files holding its rows.
 
         Raises
         ------
@@ -350,6 +380,11 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # Where every episode's rows are, across all data files. Built on the first
         # episode missing from the file its metadata names, then reused.
         located: tuple[list[UPath], pl.DataFrame] | None = None
+        # The data files read so far and the episodes each holds, collected from the
+        # frames read anyway, so the inventory check after the loop only has to scan
+        # the files no metadata row names.
+        read_paths: set[UPath] = set()
+        held: dict[int, list[UPath]] = {}
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -390,6 +425,10 @@ class LeRobotV3Adapter(LeRobotAdapter):
                             )
                         )
                     cached_path = data_path
+                    if sample is None and data_path not in read_paths:
+                        read_paths.add(data_path)
+                        for idx in cached_frame["episode_index"].unique().to_list():
+                            held.setdefault(idx, []).append(data_path)
                 assert cached_frame is not None
                 frame = cached_frame
 
@@ -404,8 +443,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     )
                 else:
                     if located is None:
-                        data_root = path / PurePosixPath(info["data_path"]).parts[0]
-                        all_paths = sorted(data_root.rglob("*.parquet"))
+                        all_paths = _data_files(path, info)
                         located = (
                             all_paths,
                             read_episode_rows(all_paths, with_index=with_index),
@@ -480,4 +518,45 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 split=split_of(info, row["episode_index"]),
                 schema_check=cached_check,
                 layout_check=episode_layout,
+            )
+
+        if sample is not None:
+            return
+        try:
+            if located is not None:
+                # The miss scan already read every data file.
+                located_paths, located_rows = located
+                held = {}
+                for source, idx in located_rows.select(
+                    "source", "episode_index"
+                ).iter_rows():
+                    held.setdefault(idx, []).append(located_paths[source])
+            else:
+                orphans = [p for p in _data_files(path, info) if p not in read_paths]
+                if orphans:
+                    orphan_rows = read_episode_rows(orphans, with_index=False)
+                    for source, idx in orphan_rows.select(
+                        "source", "episode_index"
+                    ).iter_rows():
+                        held.setdefault(idx, []).append(orphans[source])
+            metadata = set(episode_index["episode_index"].to_list())
+        except AdapterRefusal:
+            raise
+        except Exception as exc:
+            raise AdapterRefusal(
+                path, f"could not reconcile the episode inventory: {exc}"
+            ) from exc
+
+        for idx in sorted(held.keys() - metadata):
+            yield Episode(
+                id=f"episode_{idx:06d}",
+                streams=[],
+                # Its instructions are unknown, and an empty list would read as
+                # an episode recorded without one.
+                tasks=None,
+                split=split_of(info, idx),
+                layout_check=LayoutCheck(
+                    pointed_path=None,
+                    holding_paths=sorted(set(held[idx]), key=str),
+                ),
             )

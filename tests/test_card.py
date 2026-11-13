@@ -597,3 +597,28 @@ def test_a_missing_instruction_warning_gets_an_instructions_row(csv_report):
         row.split(maxsplit=1)[1] for row in rows if row.split()[0] == "instructions"
     ] == [message]
     assert not any(row.split()[0] == "instructions" for row in unwarned)
+
+
+def test_an_episode_count_warning_gets_an_episode_count_row(csv_report):
+    """Verify a declared count that disagrees renders as its own coverage row."""
+
+    message = (
+        "ds: declares 0 episodes; its episode metadata lists 8 and its data holds 8"
+    )
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="episode_count_mismatch", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("episode count").strip()
+        for row in rows
+        if row.strip().startswith("episode count")
+    ] == [message]
+    assert not any(row.strip().startswith("episode count") for row in unwarned)

@@ -426,6 +426,16 @@ metrics:
         good: 0.5
         bad: 1
 
+  # Rows in the data with no row in the episode metadata are read by a trainer though
+  # no metadata describes them, so they block through the contract route. Weight 0.
+  schema.episode_not_in_metadata:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
   # An episode index range that disagrees with the data's `index` column contradicts
   # the data with direct evidence, so it blocks through the contract route. Weight 0.
   schema.index_range_mismatch_count:
