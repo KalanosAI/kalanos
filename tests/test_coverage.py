@@ -14,9 +14,15 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 # Internal
-from kalanos.analysis.coverage import coverage_lines, metric_rows, rows_that_ran
+from kalanos.analysis.coverage import (
+    coverage_lines,
+    merge_rows,
+    metric_rows,
+    rows_that_ran,
+)
+from kalanos.analysis.metrics.results import not_applicable
 from kalanos.analysis.models.binding import Bundle, RequirementsSection
-from kalanos.analysis.models.coverage import CoverageRow
+from kalanos.analysis.models.coverage import Availability, CoverageRow
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import Report
@@ -230,6 +236,96 @@ def test_metric_error_has_coverage_unknown_and_operational_exit_precedence(
     loaded = load_report(output)
     assert isinstance(loaded, Report)
     assert loaded.operational_errors
+
+
+def test_an_operational_error_gives_only_its_own_reason(monkeypatch):
+    """A metric failing on cameras reports only its failure as the error's reason."""
+
+    from dataclasses import replace
+
+    from kalanos.analysis.metrics import registry
+    from kalanos.analysis.models.domain import Kind
+
+    grade(LEROBOT_FIXTURE)
+    [original] = [e for e in registry._REGISTRY if e.name == "dropped_chunk_count"]
+
+    def broken_on_cameras(ctx):
+        if ctx.stream.kind in (Kind.IMAGE, Kind.VIDEO):
+            raise RuntimeError("synthetic computation failure")
+        return original.func(ctx)
+
+    entries = [
+        replace(e, func=broken_on_cameras) if e is original else e
+        for e in registry._REGISTRY
+    ]
+    monkeypatch.setattr(registry, "_REGISTRY", entries)
+    report = grade(LEROBOT_FIXTURE)
+
+    errors = [
+        e
+        for e in report.operational_errors
+        if e["metric"] == "vision.dropped_chunk_count"
+    ]
+    assert errors
+    assert all(e["reason"] == "synthetic computation failure" for e in errors)
+    assert "error_reasons" not in render_json(report)
+
+
+def test_an_error_without_a_message_is_named_by_its_type(monkeypatch):
+    """An exception with an empty message still gives its operational error a reason."""
+
+    from dataclasses import replace
+
+    from kalanos.analysis.metrics import registry
+
+    grade(LEROBOT_FIXTURE)
+
+    def broken(ctx):
+        raise ZeroDivisionError()
+
+    entries = [
+        replace(e, func=broken) if e.name == "missing_pct" else e
+        for e in registry._REGISTRY
+    ]
+    monkeypatch.setattr(registry, "_REGISTRY", entries)
+    report = grade(LEROBOT_FIXTURE)
+
+    errors = [
+        e for e in report.operational_errors if e["metric"] == "integrity.missing_pct"
+    ]
+    assert errors
+    assert all(e["reason"] == "ZeroDivisionError" for e in errors)
+
+
+def test_metric_rows_keep_error_reasons_apart():
+    """Only errored subjects' reasons reach `error_reasons`, and merging sums them."""
+
+    grade(LEROBOT_FIXTURE)  # discover the shipped metrics
+    errored = MetricResult(
+        value=None,
+        unit=None,
+        status=MetricStatus.NOT_APPLICABLE,
+        availability=Availability.ERROR,
+        evidence={"reason": "boom"},
+    )
+    subjects = [
+        ("unmapped.observation.images.up", {"dropped_chunk_count": errored}),
+        (
+            "unmapped.observation.state",
+            {"dropped_chunk_count": not_applicable("not a camera stream")},
+        ),
+    ]
+
+    [row] = [
+        r
+        for r in metric_rows(Level.STREAM, subjects)
+        if r.key == "vision.dropped_chunk_count"
+    ]
+
+    assert row.error_reasons == {"boom": 1}
+    assert row.reasons == {"boom": 1, "not a camera stream": 1}
+    [merged] = merge_rows([row, row])
+    assert merged.error_reasons == {"boom": 2}
 
 
 def test_payload_error_is_counted_and_not_misreported_as_an_empty_stream():
