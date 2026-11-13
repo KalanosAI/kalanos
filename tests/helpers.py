@@ -10,6 +10,7 @@ import random
 from collections.abc import Container, Sequence
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # External
 import polars as pl
@@ -33,6 +34,12 @@ from kalanos.analysis.models.report import GradedEpisode
 from kalanos.analysis.models.schema import SourceSchema
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.assets.policy import load_policy
+from kalanos.testing import clean_frames
+from kalanos.testing.injectors import SyntheticFrames
+
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -472,3 +479,66 @@ def wrap_angle(values: Sequence[float], half: float) -> list[float]:
     """
 
     return [((v + half) % (2 * half)) - half for v in values]
+
+
+def _numpy():
+    """Import numpy, skipping the test that needs it when the video extra is absent."""
+
+    import pytest
+
+    return pytest.importorskip("numpy")
+
+
+def scene_frames(frames: int, size: int = 64, seed: int = 0) -> Stream:
+    """A camera stream of structured frames: a gradient with a moving filled disc.
+
+    The frames are smooth apart from the disc's edge, so they hold detail
+    without pixel noise.
+    """
+
+    numpy = _numpy()
+    rng = numpy.random.default_rng(seed)
+    rows, cols = numpy.mgrid[0:size, 0:size]
+    gradient = 255 * cols / (size - 1)
+    stream = clean_frames(frames=frames, height=size, width=size)
+    made = []
+    for index in range(frames):
+        centre = (size / 4 + (size / 2) * index / max(frames - 1, 1), size / 2)
+        inside = (rows - centre[1]) ** 2 + (cols - centre[0]) ** 2 < (size / 5) ** 2
+        scene = numpy.where(inside, 255, gradient + rng.uniform(-0.4, 0.4))
+        made.append(
+            numpy.repeat(scene[:, :, None], 3, axis=2)
+            .round()
+            .clip(0, 255)
+            .astype("uint8")
+        )
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=made)})
+
+
+def noise_frame(size: int, seed: int) -> "np.ndarray":
+    """One frame of seeded uniform noise."""
+
+    numpy = _numpy()
+    return numpy.random.default_rng(seed).integers(
+        0, 256, (size, size, 3), dtype=numpy.uint8
+    )
+
+
+def replaced_frames(stream: Stream, frames: dict[int, "np.ndarray"]) -> Stream:
+    """Copy `stream` with the frames at the given positions replaced."""
+
+    assert isinstance(stream.payload, SyntheticFrames)
+    spliced = list(stream.payload.frames)
+    for index, frame in frames.items():
+        spliced[index] = frame
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=spliced)})
+
+
+def all_noise(stream: Stream) -> Stream:
+    """Copy `stream` with every frame replaced by seeded uniform noise."""
+
+    assert isinstance(stream.payload, SyntheticFrames)
+    size = stream.payload.frames[0].shape[0]
+    return replaced_frames(
+        stream, {i: noise_frame(size, i) for i in range(len(stream.payload.frames))}
+    )

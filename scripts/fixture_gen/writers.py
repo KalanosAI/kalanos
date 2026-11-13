@@ -245,7 +245,11 @@ def _write_timeseries(spec: TimeSeriesSpec, samples: list[Sample]) -> None:
 def _write_lerobot_video(
     path: Path, *, frame_count: int, fps: int, size: tuple[int, int]
 ) -> None:
-    """Encode `frame_count` solid-colour frames as an h264 mp4.
+    """Encode `frame_count` flickering, blurred spots as an h264 mp4.
+
+    Each frame is a wide Gaussian spot on a background that alternates between dark
+    and bright, so every frame's exposure differs from the camera's typical one.
+    The frames are not blank and hold no pixel noise, but have no sharp edge.
 
     Parameters
     ----------
@@ -265,10 +269,19 @@ def _write_lerobot_video(
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
+    # Without B-frames, packets leave in presentation order.
+    # A low crf keeps compression from adding edges to the soft frames.
+    stream.codec_context.options = {"x264-params": "bframes=0", "crf": "4"}
 
+    rows, columns = np.mgrid[0:height, 0:width]
+    last = max(frame_count - 1, 1)
     for i in range(frame_count):
-        level = round(255 * i / max(frame_count - 1, 1))
-        array = np.full((height, width, 3), level, dtype=np.uint8)
+        background = 140 * (i % 2)
+        centre = width / 5 + (width * 0.6) * i / last
+        distance = (columns - centre) ** 2 + (rows - height / 2) ** 2
+        plane = background + 120 * np.exp(-distance / (2 * (width / 8) ** 2))
+        array = np.repeat(plane[:, :, None], 3, axis=2).round().clip(0, 255)
+        array = array.astype(np.uint8)
         frame = av.VideoFrame.from_ndarray(array, format="rgb24")
         for packet in stream.encode(frame):
             container.mux(packet)

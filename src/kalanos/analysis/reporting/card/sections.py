@@ -791,6 +791,11 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         if warning.code == "task_instruction_missing"
     )
     pairs.extend(
+        ("corrupt footage", Text(warning.message, style=theme.style("warn")))
+        for warning in report.dataset_warnings
+        if warning.code == "corrupt_footage"
+    )
+    pairs.extend(
         ("episode count", Text(warning.message, style=theme.style("warn")))
         for warning in report.dataset_warnings
         if warning.code == "episode_count_mismatch"

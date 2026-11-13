@@ -80,6 +80,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "exposure_shift_pct": None,
     "exposure_level": None,
     "blank_frame_pct": None,
+    "corrupt_frame_pct": None,
     "contrast_score": None,
     "dark_frame_pct": None,
     "bright_frame_pct": None,

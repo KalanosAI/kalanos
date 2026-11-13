@@ -12,9 +12,11 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `streams[].metrics["rotation_snr_db"]` | `MetricResult` | The signal-to-noise ratio of a stream's unit-quaternion rotation, in dB, measured on the angle between rotations. Present on every series stream, `not_applicable` where the stream holds no quaternion. Its `snr_db` on each of the four channels is `not_applicable`. |
 | `DatasetWarning.code` | `"task_instruction_missing"` | Takes a new value: some episodes have no task instruction and the policy does not grade that. The message gives the count and up to 10 episode ids. Feeds no score. |
 | `DatasetWarning.code` | `"episode_count_mismatch"` | Takes a new value: a source declares an episode count that disagrees with its episode metadata or its data. The message gives the declared count and both counts found. Feeds no score. |
+| `streams[].metrics["corrupt_frame_pct"]` | `MetricResult` | The share of a camera stream's sampled frames that are blank or hold decoder noise, with `blank`, `noise`, `median_score` and `candidates` as evidence. `not_applicable` where the frames are under 32 px on their shorter side. |
+| `DatasetWarning.code` | `"corrupt_footage"` | Takes a new value: some episodes are blocked because a camera stream is mostly blank or decoder noise. The message gives the count and up to 20 runs of consecutive episode numbers. Feeds no score. |
 | `episodes[].metrics["episode_not_in_metadata"]` | `MetricResult` | 1 when the episode has rows in the data and no row in the episode metadata, else 0, with the files holding its rows as evidence. Such an episode is listed in `episodes` with no streams. `not_applicable` where the format names no data file per episode. |
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, and it holds no `task_instruction_missing` or `episode_count_mismatch` warning.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, its streams have no `corrupt_frame_pct`, and it holds no `task_instruction_missing`, `episode_count_mismatch` or `corrupt_footage` warning.
 
 ## Changed in 8.0.0
 

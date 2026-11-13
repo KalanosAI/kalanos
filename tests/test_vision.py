@@ -45,6 +45,7 @@ from kalanos.analysis.metrics.vision import (
     camera_frames,
     camera_stream_present,
     contrast_score,
+    corrupt_frame_pct,
     dark_frame_pct,
     exposure_level,
     exposure_shift_pct,
@@ -106,7 +107,15 @@ from kalanos.testing import (
 from kalanos.testing.injectors import SyntheticFrames, blur_frames
 
 # Local
-from helpers import LEROBOT_FIXTURE, LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE
+from helpers import (
+    LEROBOT_FIXTURE,
+    LEROBOT_V2_0_FIXTURE,
+    LEROBOT_V2_1_FIXTURE,
+    all_noise,
+    noise_frame,
+    replaced_frames,
+    scene_frames,
+)
 
 
 numpy = pytest.importorskip("numpy")
@@ -932,6 +941,7 @@ def test_the_default_scope_grades_only_the_structural_vision_checks():
         "vision.frame_count_vs_timebase",
         "vision.camera_stream_present",
         "vision.frames_readable",
+        "vision.corrupt_frame_pct",
     }
     for key in vision_keys:
         entry = scoped.metrics[key]
@@ -2432,6 +2442,141 @@ def test_blank_frame_pct_counts_only_blank_frames():
     assert all(20 <= index < 60 for index in result.evidence["bad_indices"])
     intervals = [(i.start, i.end_exclusive) for i in result.support.intervals]
     assert intervals == [(i, i + 1) for i in result.evidence["bad_indices"]]
+
+
+def test_corrupt_frames_read_zero_on_a_clean_scene():
+    """Structured frames hold detail, and the noise rule leaves them alone."""
+
+    result = corrupt_frame_pct(stream_context(scene_frames(30)))
+
+    assert result.value == 0
+    assert (result.evidence["noise"], result.evidence["blank"]) == (0, 0)
+    assert result.evidence["median_score"] < 1
+
+
+def test_corrupt_frame_pct_passes_the_contract():
+    """Noise reads unlike a clean scene, and the policy declares the metric."""
+
+    clean = scene_frames(30)
+    check_metric(
+        corrupt_frame_pct,
+        clean=stream_context(clean),
+        defective=stream_context(all_noise(clean)),
+        policy=load_default_policy(),
+    )
+
+
+def test_noise_in_every_frame_reads_100():
+    """Uniform noise in every frame is all noise, and none of it blank."""
+
+    result = corrupt_frame_pct(stream_context(all_noise(scene_frames(30))))
+
+    assert result.value == 100
+    assert result.evidence["noise"] == result.evidence["n_sampled"]
+    assert result.evidence["blank"] == 0
+
+
+def test_noise_alternating_with_real_frames_is_counted():
+    """Every other frame noise reads 50 under a full scan."""
+
+    stream = scene_frames(40)
+    noisy = replaced_frames(stream, {i: noise_frame(64, i) for i in range(0, 40, 2)})
+
+    result = corrupt_frame_pct(stream_context(noisy, full_frame_scan=True))
+
+    assert result.value == 50
+    assert result.evidence["bad_indices"] == list(range(0, 40, 2))
+
+
+def test_black_alternating_with_noise_is_counted():
+    """Black and noise alternating are all corrupt, half of each."""
+
+    stream = scene_frames(40)
+    black = numpy.zeros((64, 64, 3), numpy.uint8)
+    frames = {i: black if i % 2 else noise_frame(64, i) for i in range(40)}
+
+    result = corrupt_frame_pct(
+        stream_context(replaced_frames(stream, frames), full_frame_scan=True)
+    )
+
+    assert result.value == 100
+    assert (result.evidence["blank"], result.evidence["noise"]) == (20, 20)
+
+
+def test_a_black_stream_reads_100():
+    """A stream black in every frame is blank throughout."""
+
+    stream = replaced_frames(
+        scene_frames(30), {i: numpy.zeros((64, 64, 3), numpy.uint8) for i in range(30)}
+    )
+
+    result = corrupt_frame_pct(stream_context(stream))
+
+    assert result.value == 100
+    assert result.evidence["median_score"] is None
+
+
+def test_a_white_simulator_scene_reads_clean():
+    """A white background with a coloured disc has crisp edges and no noise."""
+
+    frames = []
+    for index in range(30):
+        frame = numpy.full((64, 64, 3), 250, numpy.uint8)
+        frame[20:40, 5 + index : 25 + index] = (200, 30, 30)
+        frames.append(frame)
+    stream = scene_frames(30).model_copy(
+        update={"payload": SyntheticFrames(frames=frames)}
+    )
+
+    assert corrupt_frame_pct(stream_context(stream)).value == 0
+
+
+def test_a_dark_noisy_scene_reads_clean():
+    """Gaussian noise on a dim scene scores high but spans under 32 gray levels."""
+
+    clean = scene_frames(30)
+    assert isinstance(clean.payload, SyntheticFrames)
+    rng = numpy.random.default_rng(42)
+    dark = [
+        numpy.clip(frame * 0.03 + rng.normal(0, 3, frame.shape), 0, 255).astype(
+            numpy.uint8
+        )
+        for frame in clean.payload.frames
+    ]
+    stream = clean.model_copy(update={"payload": SyntheticFrames(frames=dark)})
+
+    frames = vision._frames(stream_context(stream))
+    assert isinstance(frames, vision._Frames)
+    assert max(frames.noise) >= 5
+    assert max(frames.native_spread) < 32
+    assert corrupt_frame_pct(stream_context(stream)).value == 0
+
+
+def test_frames_under_32_px_are_not_applicable():
+    """Frames that small have too little structure to tell noise from detail."""
+
+    result = corrupt_frame_pct(stream_context(clean_frames()))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert result.evidence["reason"] == "frames too small to tell noise from detail"
+
+
+def test_a_corrupt_stream_blocks_its_episode():
+    """An all-noise camera blocks through the contract route, in every scope."""
+
+    stream = all_noise(scene_frames(30)).model_copy(
+        update={"source_field": CAMERA_FIELD}
+    )
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        finding = findings["vision.corrupt_frame_pct"]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
+        assert finding.source_field == CAMERA_FIELD
 
 
 def test_contrast_score_is_low_on_a_flat_stream():
