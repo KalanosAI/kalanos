@@ -69,10 +69,18 @@ def test_names_nested_under_a_label_are_read_as_aloha_declares_them():
     assert declared_names({"names": {"motors": ALOHA_MOTORS}}) == ALOHA_MOTORS
 
 
+def test_names_declared_as_a_list_of_lists_are_read():
+    """Unitree declares `"names": [["kLeftHandThumb", ...]]`."""
+
+    assert declared_names({"names": [["a", "b"], ["c"]]}) == ["a", "b", "c"]
+    assert declared_names({"names": [["a", 1]]}) == []
+
+
 def test_anything_else_declares_no_names():
     assert declared_names({}) == []
     assert declared_names({"names": None}) == []
     assert declared_names({"names": {"motors": "left_waist"}}) == []
+    assert declared_names({"names": [["a"], "b"]}) == []
 
 
 def test_nested_names_name_the_channels():
@@ -102,6 +110,32 @@ def test_a_channel_named_as_a_gripper_grades_as_one():
     assert channel_taxonomy("proprio.joint_torque", "left_gripper") == (
         "proprio.joint_torque"
     )
+
+
+def test_a_finger_joint_grades_as_a_gripper():
+    assert channel_taxonomy("unmapped.observation.state", "finger_joint.pos") == (
+        "proprio.gripper_width"
+    )
+    assert channel_taxonomy("action.action_vector", "finger_joint.pos") == (
+        "action.gripper_command"
+    )
+
+
+def test_a_hand_digit_grades_as_a_finger_joint():
+    for name in ("kLeftHandThumb", "kRightHandPinky", "left_hand_index"):
+        assert channel_taxonomy("unmapped.observation.state", name) == (
+            "proprio.finger_joint_state"
+        )
+    assert channel_taxonomy("action.action_vector", "kLeftHandThumb") == (
+        "action.action_vector"
+    )
+
+
+def test_a_hand_without_a_digit_is_not_a_finger_joint():
+    for name in ("panda_hand_joint", "left_hand_pos_x", "hand_force"):
+        assert channel_taxonomy("unmapped.observation.state", name) == (
+            "unmapped.observation.state"
+        )
 
 
 def _write_with_gripper(path: Path, n_episodes: int, glitched: set[int]) -> None:

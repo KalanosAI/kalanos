@@ -171,6 +171,76 @@ def test_a_namespace_is_dropped_so_a_nested_field_reaches_a_flat_alias():
     assert normalise_name("steps.observation.joint_position").stem == "joint_position"
 
 
+_NAMESPACED = {**_BARE, "aliases": ["goal"], "namespace_aliases": ["goal"]}
+
+
+def test_an_enclosing_segment_types_a_name_only_when_an_entry_opts_in():
+    """Verify `namespace_aliases` reach a key whose last segment matched nothing."""
+
+    dictionary = _dictionary(proprio_goal=_NAMESPACED)
+
+    assert dictionary.resolve("skill.goal.joint").taxonomy_type == "proprio.goal"
+    assert dictionary.resolve("skill.goals.joint").taxonomy_type is None
+
+
+def test_a_matching_last_segment_beats_the_enclosing_one():
+    dictionary = _dictionary(
+        proprio_goal=_NAMESPACED,
+        proprio_joint_velocity={**_BARE, "aliases": ["velocity"]},
+    )
+
+    match = dictionary.resolve("skill.goal.velocity")
+
+    assert match.taxonomy_type == "proprio.joint_velocity"
+
+
+def test_the_nearest_enclosing_segment_wins():
+    dictionary = _dictionary(
+        proprio_goal=_NAMESPACED,
+        proprio_target={**_BARE, "namespace_aliases": ["target"]},
+    )
+
+    assert dictionary.resolve("goal.target.joint").taxonomy_type == "proprio.target"
+
+
+def test_an_ambiguous_enclosing_segment_stays_ambiguous():
+    dictionary = _dictionary(
+        proprio_goal=_NAMESPACED,
+        proprio_target={**_BARE, "namespace_aliases": ["goal"]},
+    )
+
+    match = dictionary.resolve("goal.goal.joint")
+
+    assert match.taxonomy_type is None
+    assert set(match.candidates) == {"proprio.goal", "proprio.target"}
+
+
+def test_an_ambiguous_last_segment_does_not_fall_back_to_the_namespace():
+    dictionary = _dictionary(
+        proprio_goal=_NAMESPACED,
+        proprio_a={**_BARE, "aliases": ["joint"]},
+        proprio_b={**_BARE, "aliases": ["joint"]},
+    )
+
+    match = dictionary.resolve("skill.goal.joint")
+
+    assert match.taxonomy_type is None
+    assert set(match.candidates) == {"proprio.a", "proprio.b"}
+
+
+def test_an_enclosing_segment_is_normalised_and_an_empty_one_is_skipped():
+    dictionary = _dictionary(proprio_goal=_NAMESPACED)
+
+    assert dictionary.resolve("Skill.Goal.joint").taxonomy_type == "proprio.goal"
+    assert dictionary.resolve("a..goal.joint").taxonomy_type == "proprio.goal"
+
+
+def test_a_plain_alias_does_not_reach_an_enclosing_segment():
+    dictionary = _dictionary(proprio_goal={**_BARE, "aliases": ["goal"]})
+
+    assert dictionary.resolve("skill.goal.joint").taxonomy_type is None
+
+
 def test_an_axis_segment_is_not_mistaken_for_a_namespace():
     """Verify `pose.x` keeps `pose` as its stem.
 
@@ -370,6 +440,11 @@ def test_category_of_follows_the_family_and_names_nothing_for_an_unmapped_type()
     assert dictionary.category_of("unmapped.foo") is None
 
 
+def test_a_namespace_alias_that_normalises_away_to_nothing_is_rejected():
+    with pytest.raises(ValueError, match="must normalise to a name"):
+        DictionaryEntry.model_validate({**_BARE, "namespace_aliases": ["-"]})
+
+
 def test_an_alias_that_normalises_away_to_nothing_is_rejected():
     """Verify a punctuation-only alias fails to load.
 
@@ -566,10 +641,11 @@ _DOCUMENTED_TYPES = {
 def test_the_packaged_dictionary_holds_every_reference_type():
     """Verify the shipped dictionary carries every reference type.
 
-    That is all 202 types from the source tables, plus `derived.computed_feature`.
+    That is all 202 types from the source tables, plus `derived.computed_feature`
+    and `task.goal_position`.
     """
 
-    assert len(_PACKAGED.entries) == 203
+    assert len(_PACKAGED.entries) == 204
 
 
 def test_the_packaged_dictionary_declares_every_category_and_only_two_sensors():
@@ -657,6 +733,17 @@ def test_the_alias_index_has_no_residual_collision():
         stem: types for stem, types in _PACKAGED.alias_index.items() if len(types) > 1
     }
     assert not collisions, f"unresolved alias collisions: {collisions}"
+
+
+def test_the_namespace_index_has_no_collision():
+    """Verify no two packaged entries claim one namespace alias."""
+
+    collisions = {
+        stem: types
+        for stem, types in _PACKAGED.namespace_index.items()
+        if len(types) > 1
+    }
+    assert not collisions, f"unresolved namespace collisions: {collisions}"
 
 
 def test_the_csv_fixtures_pose_axes_resolve_through_the_packaged_dictionary():
