@@ -129,6 +129,8 @@ class AnalysedEpisode(BaseModel):
     policy : Policy
         The policy to grade it against: the run's own policy,
         or a copy with a per-deployment limit `pipeline.run` filled in.
+    simulated : bool
+        Whether the episode's camera footage is rendered by a simulator.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -137,6 +139,7 @@ class AnalysedEpisode(BaseModel):
     adapter: str
     adapter_confidence: float
     policy: Policy
+    simulated: bool = False
 
 
 class GradedChannel(BaseModel):
