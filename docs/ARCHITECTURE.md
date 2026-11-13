@@ -186,7 +186,7 @@ Two files, split between facts and policy.
 
 | File | Answers | Changes |
 |---|---|---|
-| `dictionary.yaml` | *What is this signal?* Taxonomy types, aliases, unit, expected shape, plausible range. | Rarely. Ships in the wheel. Required. |
+| `dictionary.yaml` | *What is this signal?* Taxonomy types, aliases (and, for an entry that opts in, `namespace_aliases` that match an enclosing dotted segment), unit, expected shape, plausible range. | Rarely. Ships in the wheel. Required. |
 | `policy.yaml` | *How do I grade this deployment?* Thresholds, weights, severities, declared limits. | Per deployment. A default ships; users override it. |
 
 `dictionary.yaml` also files each key family under its reference-taxonomy category, and puts each category in one group: sensor, command, derived, outcome or context. An entry takes its category from its key's family, and a dictionary with a family missing from that table fails to load.

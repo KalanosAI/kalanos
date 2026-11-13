@@ -232,6 +232,10 @@ metrics:
       # not a stuck sensor (ALOHA's grippers, holding a battery or a towel, read
       # 90-99% unchanged).
       proprio.gripper_width: {good: null, bad: null}
+      # A hand's digits hold a grasp for most of an episode, as a gripper does.
+      proprio.finger_joint_state: {good: null, bad: null}
+      # A held target, found on SO-101 skill datasets.
+      task.goal_position: {good: null, bad: null}
       action.base_velocity_command: {good: null, bad: null}
       # Computed features and subtask labels hold one value per step or phase by construction.
       # Found grading RoboCOIN datasets, where they sent every episode to review.
@@ -288,6 +292,8 @@ metrics:
       # reported, not graded. The spike check still grades a glitching gripper.
       proprio.gripper_width: {good: null, bad: null}
       action.gripper_command: {good: null, bad: null}
+      # A target steps between holds, which the ratio counts as noise.
+      task.goal_position: {good: null, bad: null}
       # A computed level steps by construction, which this ratio counts as noise.
       derived.computed_feature: {good: null, bad: null}
       proprio.joint_velocity:

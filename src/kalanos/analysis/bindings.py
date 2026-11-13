@@ -68,6 +68,8 @@ _PROPERTIES = (
 # The last name tokens of a unit quaternion's four components. Names alone decide:
 # inference sees no payload, so unit length is checked by the metric that reads it.
 _QUATERNION_PARTS = ("qx", "qy", "qz", "qw")
+_HAND_DIGITS = frozenset({"thumb", "index", "middle", "ring", "pinky", "little"})
+_FINGER_JOINT = "proprio.finger_joint_state"
 _TYPES = {
     "proprio.joint_position": (ActuatorKind.JOINT, Quantity.POSITION),
     "proprio.joint_velocity": (ActuatorKind.JOINT, Quantity.VELOCITY),
@@ -120,6 +122,25 @@ def _quaternion_names(stream: Stream) -> frozenset[str]:
     return frozenset(names[0] for names in found.values())
 
 
+def _name_tokens(name: str) -> frozenset[str]:
+    """Split a channel name into lowercase word tokens.
+
+    Parameters
+    ----------
+    name : str
+        The channel name, in snake_case, dotted or camelCase spelling.
+
+    Returns
+    -------
+    frozenset[str]
+        The tokens: `kLeftHandThumbAux` gives `k`, `left`, `hand`, `thumb` and `aux`;
+        `finger_joint.pos` gives `finger`, `joint` and `pos`.
+    """
+
+    parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)
+    return frozenset(part.lower() for part in parts)
+
+
 def _inferred(
     stream: Stream,
     channel: Channel,
@@ -134,7 +155,16 @@ def _inferred(
     if taxonomy.startswith("unmapped."):
         taxonomy = role.taxonomy_type or taxonomy
     actuator, quantity = _TYPES.get(taxonomy, (ActuatorKind.UNKNOWN, Quantity.UNKNOWN))
-    if "gripper" in (channel.declared_name or channel.name).lower():
+    name = channel.declared_name or channel.name
+    tokens = _name_tokens(name)
+    # A hand token plus a digit token keeps `panda_hand` and `left_hand_pos_x` out.
+    digit = bool(tokens & _HAND_DIGITS)
+    hand_digit = "hand" in tokens and digit
+    if hand_digit and taxonomy in ("unmapped.observation.state", "unmapped.state"):
+        taxonomy = _FINGER_JOINT
+    # A named digit (`index_finger_joint_0`) is the angle of one finger.
+    finger_gripper = "finger" in tokens and not digit
+    if not hand_digit and ("gripper" in name.lower() or finger_gripper):
         actuator = ActuatorKind.GRIPPER
         if taxonomy in ("unmapped.observation.state", "unmapped.state"):
             taxonomy, quantity = "proprio.gripper_width", Quantity.POSITION

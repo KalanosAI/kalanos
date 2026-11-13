@@ -521,6 +521,46 @@ def test_a_feature_resolves_through_its_declared_names_when_its_key_does_not():
     assert resolved == ("proprio.joint_velocity", MappingSource.DECLARED_NAMES)
 
 
+def test_a_goal_position_feature_takes_the_goal_type():
+    """A goal's parts nest under `goal_position`, past the last-segment match."""
+
+    dictionary = load_default_dictionary()
+    arm = {"dtype": "float32", "shape": [2], "names": ["shoulder_pan.pos", "elbow.pos"]}
+    gripper = {"dtype": "float32", "shape": [1], "names": ["gripper.pos"]}
+
+    expected = ("task.goal_position", MappingSource.DICTIONARY)
+    assert resolve_taxonomy("skill.goal_position.joint", arm, dictionary) == expected
+    assert (
+        resolve_taxonomy("skill.goal_position.gripper", gripper, dictionary) == expected
+    )
+
+
+def test_a_goal_segment_must_be_whole():
+    dictionary = load_default_dictionary()
+    spec = {"dtype": "float32", "shape": [2], "names": ["a", "b"]}
+
+    assert resolve_taxonomy("skill.goal_positions.joint", spec, dictionary) == (
+        "unmapped.skill.goal_positions.joint",
+        None,
+    )
+    assert resolve_taxonomy("subtask.target_position", spec, dictionary) == (
+        "unmapped.subtask.target_position",
+        None,
+    )
+
+
+def test_a_goal_key_beats_names_that_agree_on_another_type():
+    """The key names a held target, whatever its channels are called."""
+
+    spec = {"dtype": "float32", "shape": [2], "names": ["joint_vel_0", "joint_vel_1"]}
+
+    resolved = resolve_taxonomy(
+        "goal_position.unlisted", spec, load_default_dictionary()
+    )
+
+    assert resolved == ("task.goal_position", MappingSource.DICTIONARY)
+
+
 def test_a_v2_dataset_is_declined(tmp_path):
     """Verify a v2.x codebase_version bids zero rather than being misread."""
 

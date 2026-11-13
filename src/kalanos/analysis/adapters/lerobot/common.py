@@ -385,9 +385,10 @@ def resolve_taxonomy(
 def declared_names(spec: dict[str, Any]) -> list[str]:
     """A feature's declared channel names, as one flat list.
 
-    LeRobot spells them either as a list (`"names": ["x", "y"]`) or nested
-    under a label, as ALOHA's `"names": {"motors": ["left_waist", ...]}`; the
-    nested lists are joined in order. Anything else declares no names.
+    LeRobot spells them as a list (`"names": ["x", "y"]`), nested under a
+    label, as ALOHA's `"names": {"motors": ["left_waist", ...]}`, or as a list
+    holding lists, as Unitree's `"names": [["kLeftShoulderPitch", ...]]`.
+    The nested lists are joined in order. Anything else declares no names.
 
     Parameters
     ----------
@@ -402,6 +403,15 @@ def declared_names(spec: dict[str, Any]) -> list[str]:
 
     names = spec.get("names")
     if isinstance(names, list):
+        if any(isinstance(item, list) for item in names):
+            if not all(isinstance(item, list) for item in names):
+                return []
+            flat_inner: list[str] = []
+            for inner in names:
+                if not all(isinstance(name, str) for name in inner):
+                    return []
+                flat_inner.extend(inner)
+            return flat_inner
         return [str(name) for name in names if isinstance(name, str)]
     if isinstance(names, dict):
         flat: list[str] = []

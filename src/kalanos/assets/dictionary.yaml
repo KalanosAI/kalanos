@@ -916,6 +916,15 @@ entries:
     modality: image
     shape: free
     aliases: [desired_goal, goal, goal_image, goal_obs, target_image]
+  # A pose or joint configuration the robot is sent towards and holds until the
+  # next target, so the stuck-sensor and noise checks do not apply.
+  task.goal_position:
+    label: Goal position (held target)
+    modality: numeric
+    kind: series
+    shape: free
+    aliases: [goal_position]
+    namespace_aliases: [goal_position]
   task.scene_caption:
     label: Scene caption / dense description
     modality: text
