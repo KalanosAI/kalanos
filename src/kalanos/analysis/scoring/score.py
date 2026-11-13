@@ -453,6 +453,10 @@ def _resolve(
             "residual is within the validated reference; "
             "the ratio cannot establish a noise defect"
         )
+    if result.evidence.get("footage") == "simulated":
+        return _stay_report_only(
+            "simulated footage repeats its frames exactly when the scene is still"
+        )
 
     # Step 3: no policy entry, permanently report-only, or graded with
     # nothing to grade against — several different reasons to stay report_only,

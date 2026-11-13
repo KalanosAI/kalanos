@@ -233,7 +233,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
         Returns
         -------
         DatasetInfo
-            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared.
+            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared,
+            and the `simulator` the dataset card's tags name.
 
         Raises
         ------

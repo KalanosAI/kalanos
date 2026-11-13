@@ -194,6 +194,29 @@ def with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
     return filled
 
 
+def _simulated(vision: VisionSpec | None, info: DatasetInfo) -> bool:
+    """Resolve whether a dataset's camera footage is rendered by a simulator.
+
+    Parameters
+    ----------
+    vision : VisionSpec or None
+        The run's vision spec; `None` reads as the default, `auto`.
+    info : DatasetInfo
+        What the winning adapter's `describe()` declared about this candidate.
+
+    Returns
+    -------
+    bool
+        `True` when `vision.footage` says `simulated`,
+        or says `auto` and the dataset card names a simulator.
+    """
+
+    footage = (vision or VisionSpec()).footage
+    if footage == "auto":
+        return info.simulator is not None
+    return footage == "simulated"
+
+
 def _lies_under(path: UPath, claimed_root: UPath) -> bool:
     """Check whether `path` sits inside `claimed_root`, itself excluded."""
 
@@ -388,6 +411,7 @@ def run(
             info = DatasetInfo(adapter=selection.name, path=candidate.path)
 
         episode_policy = with_declared_limits(policy, info)
+        simulated = _simulated(vision, info)
 
         # Step 5: read the path's episodes one at a time, grading each before
         # the next is read, so only the current recording is held.
@@ -449,6 +473,7 @@ def run(
                     adapter=selection.name,
                     adapter_confidence=selection.confidence,
                     policy=episode_policy,
+                    simulated=simulated,
                 )
             )
             check = episode.layout_check

@@ -11,6 +11,7 @@ import math
 import string
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 # External
@@ -41,6 +42,7 @@ from kalanos.analysis.models.domain import (
     TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
+from kalanos.assets.yaml_strict import YAMLError, safe_load_strict
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -53,6 +55,14 @@ logger = logging.getLogger(__name__)
 CONFIDENCE = 0.95
 
 TIME_COLUMN = "timestamp"
+
+# A dataset card tag names a simulator when it starts with one of these,
+# lower-cased, so `Isaac-Sim` and `isaaclab` match `isaac`.
+SIMULATOR_TAGS = ("robosuite", "mujoco", "isaac")
+
+# A card's front matter is a short block of metadata; a file that has not
+# closed it by then is not read further.
+_CARD_FRONT_MATTER_LINES = 500
 
 # These index the dataset rather than measure anything captured in it.
 INDEX_COLUMNS = frozenset(
@@ -523,7 +533,8 @@ def describe_from_info(name: str, path: UPath, info: dict[str, Any]) -> DatasetI
     Returns
     -------
     DatasetInfo
-        `episode_count`, `nominal_rate_hz` and `robot_type`, as declared.
+        `episode_count`, `nominal_rate_hz` and `robot_type`, as declared,
+        and the `simulator` the dataset card's tags name.
     """
 
     return DatasetInfo(
@@ -532,7 +543,54 @@ def describe_from_info(name: str, path: UPath, info: dict[str, Any]) -> DatasetI
         episode_count=info.get("total_episodes"),
         nominal_rate_hz=_declared_rate(info.get("fps")),
         robot_type=info.get("robot_type"),
+        simulator=card_simulator(path),
     )
+
+
+def card_simulator(path: UPath) -> str | None:
+    """Read the simulator a dataset card's tags name, when it names one.
+
+    The card is `README.md` at the dataset root, whose YAML front matter
+    carries a `tags` list. A card is optional metadata, so any problem reading
+    it gives `None` rather than costing the dataset its other declared facts.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+
+    Returns
+    -------
+    str or None
+        The first tag that starts with a name in `SIMULATOR_TAGS`, lower-cased,
+        or `None` when the card is missing, unreadable or malformed,
+        or its tags name no simulator.
+    """
+
+    try:
+        with (path / "README.md").open("r", encoding="utf-8") as handle:
+            lines = [
+                line.rstrip("\r\n") for line in islice(handle, _CARD_FRONT_MATTER_LINES)
+            ]
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
+    except StopIteration:
+        return None
+    try:
+        front = safe_load_strict("\n".join(lines[1:end]))
+    except YAMLError:
+        return None
+    tags = front.get("tags") if isinstance(front, dict) else None
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        if isinstance(tag, str) and tag.lower().startswith(SIMULATOR_TAGS):
+            return tag.lower()
+    return None
 
 
 def _declared_rate(value: Any) -> float | None:
