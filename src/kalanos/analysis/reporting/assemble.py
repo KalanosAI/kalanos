@@ -905,6 +905,7 @@ class ReportBuilder:
         run: RunInfo | None = None,
         inventory: Inventory | None = None,
         binding_conflicts: Sequence[BindingConflict] = (),
+        dataset_warnings: Sequence[DatasetWarning] = (),
     ) -> Report | StreamedReport:
         """Run the dataset-level steps over every added episode and assemble the Report.
 
@@ -935,6 +936,9 @@ class ReportBuilder:
             is the whole inventory.
         binding_conflicts : Sequence[BindingConflict]
             Mapping disagreements the resolver recorded.
+        dataset_warnings : Sequence[DatasetWarning]
+            Warnings the caller found about the sources it read,
+            listed after the ones computed from the graded episodes.
 
         Returns
         -------
@@ -1001,6 +1005,7 @@ class ReportBuilder:
             for w in (
                 near_duplicate_warning(near_duplicates, n_episodes),
                 _task_instruction_warning(summaries),
+                *dataset_warnings,
             )
             if w is not None
         ]

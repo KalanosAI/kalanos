@@ -90,6 +90,7 @@ _MISSING_FEATURE = {
 
 _POINTER_METRIC = "episode_file_mismatch"
 _POINTER_FINDING = f"schema.{_POINTER_METRIC}"
+_ORPHAN_FINDING = "schema.episode_not_in_metadata"
 _RANGE_METRIC = "index_range_mismatch_count"
 _RANGE_FINDING = f"schema.{_RANGE_METRIC}"
 
@@ -1108,6 +1109,167 @@ def test_the_scan_runs_only_on_a_miss(tmp_path, monkeypatch, meta_rows, calls):
 
     assert len(episodes) == 8
     assert len(counted) == calls
+
+
+def _blocked(report):
+    """List the episode numbers a report blocks.
+
+    Parameters
+    ----------
+    report : Report
+        The graded report.
+
+    Returns
+    -------
+    set[int]
+        The blocked episodes' indices.
+    """
+
+    return {
+        _episode_number(e.id)
+        for e in report.episodes
+        if e.eligibility is not None
+        and e.eligibility.status == EligibilityStatus.BLOCKED
+    }
+
+
+def _count_warnings(report):
+    """List the messages of a report's `episode_count_mismatch` warnings.
+
+    Parameters
+    ----------
+    report : Report
+        The graded report.
+
+    Returns
+    -------
+    list[str]
+        The warnings' messages.
+    """
+
+    return [
+        w.message for w in report.dataset_warnings if w.code == "episode_count_mismatch"
+    ]
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_an_episode_missing_from_the_metadata_is_blocked(tmp_path, tier):
+    """Verify an episode with rows in a named file and no metadata row is blocked."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META[:7], _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    assert len(report.episodes) == 8
+    findings = _episode_findings(report, _ORPHAN_FINDING)
+    assert [_episode_number(e) for e in findings] == [7]
+    [finding] = next(iter(findings.values()))
+    assert finding.consequence == Consequence.BLOCK
+    [holding] = finding.evidence["holding_paths"]
+    assert holding.endswith("data/chunk-000/file-002.parquet")
+    assert 7 in _blocked(report)
+    pointer = _episode_findings(report, _POINTER_FINDING)
+    assert not [e for e in pointer if _episode_number(e) == 7]
+
+
+def test_a_data_only_episode_is_found_after_a_full_scan(tmp_path):
+    """Verify the full scan a pointer miss runs also finds a data-only episode."""
+
+    meta = [*_CLEAN_LIBERO_META[:5], (5, 2, 1406, 1646, 240), _CLEAN_LIBERO_META[6]]
+    root = _layout_dataset(tmp_path / "libero", meta, _LIBERO_DATA)
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    [orphan] = [
+        e
+        for e in episodes
+        if e.layout_check is not None and e.layout_check.pointed_path is None
+    ]
+    assert _episode_number(orphan.id) == 7
+    assert orphan.layout_check is not None
+    [holding] = orphan.layout_check.holding_paths
+    assert str(holding).endswith("data/chunk-000/file-002.parquet")
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_an_episode_in_an_unnamed_data_file_is_found(tmp_path, tier):
+    """Verify episodes in a data file no metadata row names are reported and blocked."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META[:6], _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    findings = _episode_findings(report, _ORPHAN_FINDING)
+    assert sorted(_episode_number(e) for e in findings) == [6, 7]
+    for episode_findings in findings.values():
+        [finding] = episode_findings
+        [holding] = finding.evidence["holding_paths"]
+        assert holding.endswith("data/chunk-000/file-002.parquet")
+    assert {6, 7} <= _blocked(report)
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_an_episode_with_rows_in_no_file_is_blocked(tmp_path, tier):
+    """Verify a metadata row for an episode with no rows anywhere is blocked."""
+
+    meta = [*_CLEAN_LIBERO_META, (8, 2, 2197, 2300, 103)]
+    root = _layout_dataset(tmp_path / "libero", meta, _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    findings = _episode_findings(report, _POINTER_FINDING)
+    assert [_episode_number(e) for e in findings] == [8]
+    [finding] = next(iter(findings.values()))
+    assert finding.consequence == Consequence.BLOCK
+    assert finding.evidence["pointed_path"].endswith("data/chunk-000/file-002.parquet")
+    assert finding.evidence["holding_paths"] == []
+    assert 8 in _blocked(report)
+    [message] = _count_warnings(report)
+    assert "metadata lists 9" in message
+    assert "data holds 8" in message
+
+
+@pytest.mark.parametrize("declared", [0, 9])
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_a_declared_count_that_disagrees_is_a_warning(tmp_path, tier, declared):
+    """Verify a declared episode count that disagrees gives the counts found."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META, _LIBERO_DATA)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["total_episodes"] = declared
+    info_path.write_text(json.dumps(info))
+
+    report = grade(root, tier=tier)
+
+    [message] = _count_warnings(report)
+    assert f"declares {declared} episodes" in message
+    assert "metadata lists 8" in message
+    assert "data holds 8" in message
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_a_matching_declared_count_raises_no_warning(tmp_path, tier):
+    """Verify a clean layout with a matching count raises no inventory finding."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META, _LIBERO_DATA)
+
+    report = grade(root, tier=tier)
+
+    assert not _count_warnings(report)
+    assert not _episode_findings(report, _ORPHAN_FINDING)
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_a_sampled_read_yields_no_data_only_episode(tmp_path, tier):
+    """Verify a sampled read stops at the sample, with no data-only episode."""
+
+    root = _layout_dataset(tmp_path / "libero", _CLEAN_LIBERO_META[:7], _LIBERO_DATA)
+
+    with use_tier(tier):
+        episodes = list(LeRobotV3Adapter().episodes(root, sample=3))
+
+    assert len(episodes) == 3
 
 
 @pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])

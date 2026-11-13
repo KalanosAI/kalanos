@@ -84,17 +84,18 @@ def episode_file_mismatch(ctx: EpisodeContext) -> MetricResult:
     -------
     MetricResult
         `not_applicable` when the source names no data file per episode,
-        or when the episode has rows in no data file.
-        `report_only` otherwise, `1.0` when the named file lacks the episode's rows and
-        `0.0` when it holds them, with the named file and the files holding the rows as
-        evidence, plus the adapter's `pointer_effect` on a mismatch when it states one.
+        or when the episode has no metadata row naming one.
+        `report_only` otherwise, `1.0` when the named file lacks the episode's rows,
+        whether another file holds them or none does, and `0.0` when it holds them,
+        with the named file and the files holding the rows as evidence,
+        plus the adapter's `pointer_effect` on a mismatch when it states one.
     """
 
     check = ctx.episode.layout_check
     if check is None:
         return not_applicable("the source names no data file per episode")
-    if not check.holding_paths:
-        return not_applicable("the episode has rows in no data file")
+    if check.pointed_path is None:
+        return not_applicable("the episode has no metadata row naming a data file")
 
     evidence: dict[str, Any] = {
         "pointed_path": str(check.pointed_path),
@@ -107,6 +108,44 @@ def episode_file_mismatch(ctx: EpisodeContext) -> MetricResult:
         unit="episodes",
         status=MetricStatus.REPORT_ONLY,
         evidence=evidence,
+    )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
+    label="episodes with rows in the data and no row in the episode metadata",
+)
+def episode_not_in_metadata(ctx: EpisodeContext) -> MetricResult:
+    """Report whether the episode has rows in the data and no episode metadata row.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `layout_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source names no data file per episode.
+        `report_only` otherwise,
+        `1.0` when the episode has no metadata row naming a data file,
+        with the files holding its rows as evidence, and `0.0` when it has one.
+    """
+
+    check = ctx.episode.layout_check
+    if check is None:
+        return not_applicable("the source names no data file per episode")
+
+    if check.pointed_path is None:
+        return MetricResult(
+            value=1.0,
+            unit="episodes",
+            status=MetricStatus.REPORT_ONLY,
+            evidence={"holding_paths": [str(p) for p in check.holding_paths]},
+        )
+    return MetricResult(
+        value=0.0, unit="episodes", status=MetricStatus.REPORT_ONLY, evidence={}
     )
 
 

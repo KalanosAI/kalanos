@@ -84,15 +84,34 @@ class _PartialAdapter:
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
+def _keep_episodes(root: Path, n: int) -> None:
+    """Remove every tiny-fixture episode past the first `n`, declared count kept.
+
+    The episodes go from the episode index and the data alike: rows left in the
+    data with no index row are an episode the adapter still finds.
+
+    Parameters
+    ----------
+    root : Path
+        A copy of the tiny LeRobot v3 fixture.
+    n : int
+        How many episodes to keep.
+    """
+
+    index = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(index)
+    assert frame.height == 2
+    frame.head(n).write_parquet(index)
+    data = root / "data" / "chunk-000" / "file-000.parquet"
+    pl.read_parquet(data).filter(pl.col("episode_index") < n).write_parquet(data)
+
+
 def _truncated_tiny(tmp_path: Path) -> Path:
-    """The tiny LeRobot fixture with one episode-index row removed, count kept."""
+    """The tiny LeRobot fixture with one episode removed, count kept."""
 
     copy = tmp_path / "lerobot_v3_tiny"
     shutil.copytree(TINY_V3, copy)
-    index = copy / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    frame = pl.read_parquet(index)
-    assert frame.height == 2
-    frame.head(1).write_parquet(index)
+    _keep_episodes(copy, 1)
     return copy
 
 
@@ -293,8 +312,7 @@ def test_a_container_that_yields_one_episode_is_still_qualified(tmp_path):
 
     copy = tmp_path / "one_episode"
     shutil.copytree(TINY_V3, copy)
-    index = copy / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    pl.read_parquet(index).head(1).write_parquet(index)
+    _keep_episodes(copy, 1)
     report = grade(copy)
     assert [e.id for e in report.episodes] == ["one_episode::episode_000000"]
 
@@ -306,8 +324,7 @@ def test_a_directory_with_an_empty_index_is_one_source_not_two(tmp_path):
     root = tmp_path / "root"
     copy = root / "lerobot_v3_tiny"
     shutil.copytree(TINY_V3, copy)
-    index = copy / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    pl.read_parquet(index).head(0).write_parquet(index)
+    _keep_episodes(copy, 0)
 
     offered: list[str] = []
     real = select_adapter

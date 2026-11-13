@@ -25,6 +25,7 @@ from kalanos.analysis.adapters.lerobot.layout import (
 )
 from kalanos.analysis.metrics.schema import (
     episode_file_mismatch,
+    episode_not_in_metadata,
     index_range_mismatch_count,
 )
 from kalanos.analysis.models.domain import Episode, LayoutCheck, RangeMismatch
@@ -357,7 +358,10 @@ def test_layout_check_reports_a_wrong_length():
     ]
 
 
-@pytest.mark.parametrize("metric", [episode_file_mismatch, index_range_mismatch_count])
+@pytest.mark.parametrize(
+    "metric",
+    [episode_file_mismatch, episode_not_in_metadata, index_range_mismatch_count],
+)
 def test_the_metrics_are_not_applicable_without_a_layout_check(metric):
     """Verify an episode no adapter located reads as not applicable."""
 
@@ -367,13 +371,59 @@ def test_the_metrics_are_not_applicable_without_a_layout_check(metric):
     assert result.evidence["reason"] == "the source names no data file per episode"
 
 
-def test_the_pointer_metric_is_not_applicable_when_no_file_holds_the_episode():
-    """Verify an episode found in no data file is left to another check."""
+def test_the_pointer_metric_reads_a_mismatch_when_no_file_holds_the_episode():
+    """Verify an episode found in no data file reads 1, naming the file it points at."""
 
-    result = episode_file_mismatch(_context(LayoutCheck(pointed_path=_FILE_0)))
+    check = LayoutCheck(pointed_path=_FILE_0, pointer_effect="loads nothing")
+
+    result = episode_file_mismatch(_context(check))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == 1.0
+    assert result.evidence == {
+        "pointed_path": str(_FILE_0),
+        "holding_paths": [],
+        "effect": "loads nothing",
+    }
+
+
+def test_the_pointer_metric_is_not_applicable_without_a_metadata_row():
+    """Verify an episode found in the data alone is left to the metadata check."""
+
+    check = LayoutCheck(pointed_path=None, holding_paths=[_FILE_0])
+
+    result = episode_file_mismatch(_context(check))
 
     assert result.status == MetricStatus.NOT_APPLICABLE
-    assert result.evidence["reason"] == "the episode has rows in no data file"
+    assert (
+        result.evidence["reason"]
+        == "the episode has no metadata row naming a data file"
+    )
+
+
+def test_the_metadata_metric_flags_an_episode_found_in_the_data_alone():
+    """Verify an episode without a metadata row reads 1 and names its data files."""
+
+    check = LayoutCheck(pointed_path=None, holding_paths=[_FILE_0, _FILE_1])
+
+    result = episode_not_in_metadata(_context(check))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == 1.0
+    assert result.evidence == {"holding_paths": [str(_FILE_0), str(_FILE_1)]}
+
+
+def test_the_metadata_metric_passes_an_episode_with_a_metadata_row():
+    """Verify an episode with a metadata row reads 0, found in its file or not."""
+
+    for check in (
+        LayoutCheck(pointed_path=_FILE_0, holding_paths=[_FILE_0]),
+        LayoutCheck(pointed_path=_FILE_0),
+    ):
+        result = episode_not_in_metadata(_context(check))
+
+        assert result.status == MetricStatus.REPORT_ONLY
+        assert result.value == 0.0
 
 
 def test_the_pointer_metric_on_a_match():
