@@ -69,6 +69,7 @@ from kalanos.analysis.reporting.assemble import (
     _corrupt_footage_warning,
     _episode_runs,
     _merge_shared_timelines,
+    _viewpoint_change_warnings,
     assemble_report,
     grade_episode,
     grade_stream,
@@ -84,7 +85,7 @@ from kalanos.analysis.reporting.render import (
     render_yaml,
 )
 from kalanos.analysis.reporting.write import write_report
-from kalanos.analysis.scoring.cameras import CameraSwap
+from kalanos.analysis.scoring.cameras import CameraSwap, ViewpointChange
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import (
     grade_for,
@@ -1900,6 +1901,34 @@ def test_camera_swap_warning_caps_the_runs_it_lists():
     )
 
     assert warning.message.endswith(", and 3 more runs")
+
+
+def test_viewpoint_change_warning_names_the_camera_and_both_sides():
+    """One warning per change names the camera, the episode and the runs."""
+
+    ids = [f"episode_{n:06d}" for n in range(14)]
+
+    [warning] = _viewpoint_change_warnings(
+        [ViewpointChange(camera="top", before=ids[:7], after=ids[7:], score=2.345)]
+    )
+
+    assert warning.code == "camera_viewpoint_change"
+    assert warning.message == (
+        "the view of top changes after episode 6 (score 2.35):"
+        " episodes 0-6 against 7-13"
+    )
+
+
+def test_viewpoint_change_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    ids = [f"episode_{n:06d}" for n in range(0, 2 * (_CORRUPT_RUNS_SHOWN + 3), 2)]
+
+    [warning] = _viewpoint_change_warnings(
+        [ViewpointChange(camera="top", before=ids, after=["episode_000099"], score=2.0)]
+    )
+
+    assert ", and 3 more runs against 99" in warning.message
 
 
 def test_corrupt_footage_warning_lists_blocked_episodes(tmp_path):

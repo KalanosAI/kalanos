@@ -13,6 +13,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `DatasetWarning.code` | `"task_instruction_missing"` | Takes a new value: some episodes have no task instruction and the policy does not grade that. The message gives the count and up to 10 episode ids. Feeds no score. |
 | `DatasetWarning.code` | `"episode_count_mismatch"` | Takes a new value: a source declares an episode count that disagrees with its episode metadata or its data. The message gives the declared count and both counts found. Feeds no score. |
 | `DatasetWarning.code` | `"camera_swap"` | Takes a new value: two cameras hold each other's footage over 3 or more consecutive episodes. The message names both cameras and gives the episodes as up to 20 runs of consecutive numbers. Feeds no score. |
+| `DatasetWarning.code` | `"camera_viewpoint_change"` | Takes a new value: a camera's view changes between two groups of consecutive episodes. The message names the camera, the episode the change follows and the episodes on each side as up to 20 runs of consecutive numbers. Feeds no score. |
 | `streams[].metrics["corrupt_frame_pct"]` | `MetricResult` | The share of a camera stream's sampled frames that are blank or hold decoder noise, with `blank`, `noise`, `median_score` and `candidates` as evidence. `not_applicable` where the frames are under 32 px on their shorter side. |
 | `DatasetWarning.code` | `"corrupt_footage"` | Takes a new value: some episodes are blocked because a camera stream is mostly blank or decoder noise. The message gives the count and up to 20 runs of consecutive episode numbers. Feeds no score. |
 | `VideoFormat.rotation_deg` | `float` or `null` | The display rotation the first frame carries, in degrees counterclockwise, read from its display matrix. `null` when no frame decodes. Under `streams[].video_format.found` only. |
@@ -27,7 +28,7 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 
 `GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it has no `shared_footage`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `camera_swap`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it has no `shared_footage`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `camera_swap`, `camera_viewpoint_change`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 

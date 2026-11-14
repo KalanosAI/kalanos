@@ -96,11 +96,13 @@ from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.scoring.cameras import (
     CameraSwap,
     FootageVariation,
+    ViewpointChange,
     camera_key,
     camera_samples,
     compare_cameras,
     find_camera_swaps,
     find_shared_footage,
+    find_viewpoint_changes,
     regrade_corrupt_footage,
 )
 from kalanos.analysis.scoring.container_hints import (
@@ -775,6 +777,45 @@ def _camera_swap_warnings(
     return warnings
 
 
+def _viewpoint_change_warnings(
+    changes: Sequence[ViewpointChange],
+) -> list[DatasetWarning]:
+    """The warnings naming each camera whose view changes between episodes.
+
+    Parameters
+    ----------
+    changes : Sequence[ViewpointChange]
+        The changes `find_viewpoint_changes` reported.
+
+    Returns
+    -------
+    list[DatasetWarning]
+        One warning per change, with the episodes on each side
+        as up to `_CORRUPT_RUNS_SHOWN` runs of episode numbers.
+    """
+
+    def named(ids: Sequence[str]) -> str:
+        runs = _episode_runs(ids)
+        text = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+        rest = len(runs) - _CORRUPT_RUNS_SHOWN
+        if rest > 0:
+            text += f", and {rest} more runs"
+        return text
+
+    return [
+        DatasetWarning(
+            code="camera_viewpoint_change",
+            message=(
+                f"the view of {change.camera} changes after episode"
+                f" {_episode_runs([change.before[-1]])[0]}"
+                f" (score {change.score:.2f}):"
+                f" episodes {named(change.before)} against {named(change.after)}"
+            ),
+        )
+        for change in changes
+    ]
+
+
 def _merge_shared_timelines(
     findings: list[Finding], streams: Sequence[Stream]
 ) -> list[Finding]:
@@ -1163,6 +1204,7 @@ class ReportBuilder:
             [s.id for s in summaries],
         )
         findings.extend(swap_findings)
+        viewpoint_changes = find_viewpoint_changes(footage, [s.id for s in summaries])
         duplicates, duplicate_findings, near_duplicates, motion_variation = (
             find_duplicate_episodes([s.id for s in summaries], fingerprints)
         )
@@ -1174,6 +1216,7 @@ class ReportBuilder:
                 _task_instruction_warning(summaries),
                 _corrupt_footage_warning(findings, n_episodes),
                 *_camera_swap_warnings(swaps, n_episodes),
+                *_viewpoint_change_warnings(viewpoint_changes),
                 *container_hints(
                     sample
                     for summary in summaries

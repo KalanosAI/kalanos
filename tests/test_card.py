@@ -645,6 +645,29 @@ def test_a_camera_swap_warning_gets_a_camera_swap_row(csv_report):
     assert not any(row.strip().startswith("camera swap") for row in unwarned)
 
 
+def test_a_viewpoint_change_warning_gets_a_viewpoint_change_row(csv_report):
+    """Verify a camera whose view changes renders as a coverage row."""
+
+    message = "the view of a changes after episode 6 (score 2.35): 0-6 against 7-13"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="camera_viewpoint_change", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("viewpoint change").strip()
+        for row in rows
+        if row.strip().startswith("viewpoint change")
+    ] == [message]
+    assert not any(row.strip().startswith("viewpoint change") for row in unwarned)
+
+
 def test_a_container_hint_warning_gets_a_row_of_its_kind(csv_report):
     """Verify a `rotation` warning renders as a `rotation` coverage row."""
 
