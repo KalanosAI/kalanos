@@ -3,9 +3,10 @@
 Every vision metric judges one camera stream inside one episode,
 so a camera exposed one way throughout is its own norm,
 and an episode blurrier or darker than the same camera elsewhere,
-or repeating another episode's footage, goes unnoticed.
+or repeating another episode's footage,
+or footage stored under another camera, goes unnoticed.
 This pass reads each camera's per-episode results after grading,
-describes the camera, and flags the episodes unlike it or repeating another's footage.
+describes the camera, and flags the episodes unlike it or repeating other footage.
 Its findings request review or are reported; they never move a score.
 `FootageVariation` gathers each camera's pooled frames during grading,
 to say how much its footage changes between episodes.
@@ -17,7 +18,7 @@ to say how much its footage changes between episodes.
 
 # Built-in
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -41,6 +42,7 @@ from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
     CameraSummary,
+    FootageStream,
     GradedEpisode,
     GradedStream,
     Variation,
@@ -308,6 +310,33 @@ def camera_samples(episode: GradedEpisode) -> list[CameraSample]:
     return list(samples.values())
 
 
+def group_identical_footage(
+    samples: Iterable[CameraSample],
+) -> list[list[CameraSample]]:
+    """Group the samples whose sampled frames hash identically.
+
+    Camera keys and episodes play no part in the grouping,
+    so a caller decides which groups matter to it.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        The samples to group; those without a `luma` sequence are skipped.
+
+    Returns
+    -------
+    list[list[CameraSample]]
+        The groups of two or more samples sharing one `luma` sequence,
+        in order of first appearance, each with its members in input order.
+    """
+
+    by_luma: dict[tuple[str, ...], list[CameraSample]] = {}
+    for sample in samples:
+        if sample.luma is not None:
+            by_luma.setdefault(sample.luma, []).append(sample)
+    return [group for group in by_luma.values() if len(group) >= 2]
+
+
 def _median(values: list[float]) -> float:
     """The median of `values`."""
 
@@ -342,7 +371,7 @@ def _finding(
     ),
 ) -> Finding:
     """An episode-scoped finding that `sample` is unlike its camera,
-    or repeating another episode's footage."""
+    or repeats other footage."""
 
     return Finding(
         id=content_digest(
@@ -505,7 +534,7 @@ def compare_cameras(
     -------
     tuple of (list of CameraSummary, list of Finding)
         One summary per camera,
-        and one finding per episode unlike its camera or repeating another's footage.
+        and one finding per episode unlike its camera or repeating other footage.
     """
 
     # Step 1: group every camera stream by the camera it belongs to,
@@ -594,14 +623,10 @@ def compare_cameras(
         # A match says the footage repeats, not that the whole episode was copied:
         # a video linked to the wrong episode matches,
         # and so does a camera replaying its output.
-        by_luma: dict[tuple[str, ...], list[CameraSample]] = {}
-        for sample in members:
-            if sample.luma is not None:
-                by_luma.setdefault(sample.luma, []).append(sample)
         repeated_footage: list[list[str]] = []
-        for luma, group in by_luma.items():
-            if len(group) < 2:
-                continue
+        for group in group_identical_footage(members):
+            luma = group[0].luma
+            assert luma is not None
             ids = [s.episode_id for s in group]
             repeated_footage.append(ids)
             for sample in group:
@@ -645,3 +670,63 @@ def compare_cameras(
             )
         )
     return summaries, findings
+
+
+def find_shared_footage(
+    samples: Iterable[CameraSample],
+    episode_ids: Sequence[str],
+    *,
+    grades_vision: bool,
+) -> tuple[list[list[FootageStream]], list[Finding]]:
+    """Find the footage that sits under two or more camera keys.
+
+    Footage repeated under one key alone is `compare_cameras`'s.
+    A group that also repeats under its own keys lists every stream,
+    and its members keep their `vision.repeated_footage_vs_camera` findings.
+    A finding's `value` counts the group's streams under other camera keys,
+    and `Report.shared_footage` lists them.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`, in episode order,
+        so each camera appears once per episode.
+    episode_ids : Sequence[str]
+        Every graded episode's id, in `Report.episodes` order,
+        whose positions the groups' episode indices are.
+    grades_vision : bool
+        Whether the scope grades the vision family:
+        the findings then request review, and are only reported otherwise.
+
+    Returns
+    -------
+    tuple of (list of list of FootageStream, list of Finding)
+        Each group of streams whose sampled frames hash identically
+        and that span two or more camera keys, in order of its earliest stream,
+        and one finding per stream in a group.
+    """
+
+    order = {episode_id: index for index, episode_id in enumerate(episode_ids)}
+    groups: list[list[FootageStream]] = []
+    findings: list[Finding] = []
+    for group in group_identical_footage(samples):
+        if len({s.camera for s in group}) < 2:
+            continue
+        groups.append(
+            [FootageStream(episode=order[s.episode_id], camera=s.camera) for s in group]
+        )
+        for sample in group:
+            assert sample.luma is not None
+            findings.append(
+                _finding(
+                    sample,
+                    sample.camera,
+                    metric_id="vision.repeated_footage_across_cameras",
+                    value=float(sum(o.camera != sample.camera for o in group)),
+                    unit="streams",
+                    evidence={"n_frames": len(sample.luma)},
+                    grades_vision=grades_vision,
+                    evidence_strength="deterministic",
+                )
+            )
+    return groups, findings
