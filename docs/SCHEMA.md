@@ -12,13 +12,16 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `streams[].metrics["rotation_snr_db"]` | `MetricResult` | The signal-to-noise ratio of a stream's unit-quaternion rotation, in dB, measured on the angle between rotations. Present on every series stream, `not_applicable` where the stream holds no quaternion. Its `snr_db` on each of the four channels is `not_applicable`. |
 | `DatasetWarning.code` | `"task_instruction_missing"` | Takes a new value: some episodes have no task instruction and the policy does not grade that. The message gives the count and up to 10 episode ids. Feeds no score. |
 | `DatasetWarning.code` | `"episode_count_mismatch"` | Takes a new value: a source declares an episode count that disagrees with its episode metadata or its data. The message gives the declared count and both counts found. Feeds no score. |
+| `VideoFormat.rotation_deg` | `float` or `null` | The display rotation the first frame carries, in degrees counterclockwise, read from its display matrix. `null` when no frame decodes. Under `streams[].video_format.found` only. |
+| `VideoFormat.interlaced` | `bool` or `null` | Whether the first frame is interlaced. `null` when no frame decodes. Under `streams[].video_format.found` only. |
+| `DatasetWarning.code` | `"low_bitrate"`, `"high_bitrate"`, `"rotation"`, `"hdr_transfer"`, `"interlaced"` | Take five new values: video files whose bitrate is far below or far above the median of the same camera's other files, that carry rotation metadata, that use an HDR transfer function, or that are interlaced. Each message names the camera, file and value of up to 10 files. Feed no score. |
 | `episodes[].metrics["episode_not_in_metadata"]` | `MetricResult` | 1 when the episode has rows in the data and no row in the episode metadata, else 0, with the files holding its rows as evidence. Such an episode is listed in `episodes` with no streams. `not_applicable` where the format names no data file per episode. |
 | `datasets[].simulator` | `str` or `null` | The simulator a LeRobot dataset card's tags name, lower-cased; `null` when it names none or the dataset has no card. |
 | `streams[].metrics["frozen_frame_pct"].evidence["footage"]` | `"simulated"` | Present only on simulated footage, where the result stays `report_only` with an `ungraded_reason` and raises no finding. |
 
 `GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing` or `episode_count_mismatch` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 

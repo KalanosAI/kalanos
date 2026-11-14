@@ -363,6 +363,15 @@ Measured on six LeRobot v3.0 datasets, retrieved 2026-10-27, 50 evenly spaced ep
 | lerobot/usc_cloth_sim | `6c4fb6acf8a6db8c4d0692b318023272c4967b5f` |
 | lerobot/aloha_static_towel | `13ad96f5ed0e219e48c72471626a2e3d0eb5aeff` |
 
+### Container hints
+
+After every episode is graded, each camera's video files are compared across the dataset, and the container settings that hint at a re-compressed copy or at footage that loads wrongly are reported as dataset warnings. No hint changes a score, gate or eligibility decision, and the report card shows each under Coverage. A file counts once however many episodes it holds.
+
+- **Bitrate.** Files of one camera with the same width, height and frame rate are compared when the group holds at least 5. A file is reported as `low_bitrate` when its bitrate is below 0.25x the median of the group's other files, and as `high_bitrate` when it is above 3x. Both thresholds are candidates. The low one is uncalibrated. The high one was measured on one simulated dataset, where the highest file outside a separately encoded batch sat at 1.69x its camera's median and the batch started at 3.2x. Cameras are not compared with each other: the same resolution carries bitrates from 194 to 5434 kbps across cameras of one dataset.
+- **Rotation.** A file whose first frame carries a non-zero display rotation is reported as `rotation`, with the angle in degrees counterclockwise.
+- **HDR.** A file whose transfer characteristic is `smpte2084` (PQ) or `arib-std-b67` (HLG) is reported as `hdr_transfer`. Wide primaries alone are not a hint.
+- **Interlacing.** A file whose first frame is interlaced is reported as `interlaced`. The field order is not read.
+
 ---
 
 ## cross_stream
