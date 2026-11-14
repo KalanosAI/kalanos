@@ -50,4 +50,8 @@ def safe_load_strict(text: str) -> Any:
     return yaml.load(text, Loader=_StrictLoader)  # noqa: S506 - SafeLoader subclass
 
 
-__all__ = ["DuplicateKeyError", "safe_load_strict"]
+# Re-exported so a caller outside the asset loaders can catch a parse failure
+# without importing yaml itself.
+YAMLError = yaml.YAMLError
+
+__all__ = ["DuplicateKeyError", "YAMLError", "safe_load_strict"]

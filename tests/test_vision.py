@@ -3178,3 +3178,51 @@ def test_an_incomplete_read_is_not_counted():
     assert counted["capped"].episodes == 0
     assert counted["capped"].reason == _TOO_FEW_FOOTAGE
     assert counted["whole"].episodes == 1
+
+
+def test_simulated_footage_marks_a_freeze_it_still_measures():
+    """A freeze on simulated footage keeps its value and gains the footage mark."""
+
+    frames = freeze_frames(clean_frames(frames=100), start=25, length=25)
+    actions = [_moving_actions(100)]
+
+    real = frozen_frame_pct(stream_context(frames, episode_streams=actions))
+    simulated = frozen_frame_pct(
+        stream_context(frames, episode_streams=actions, simulated=True)
+    )
+
+    assert real.value is not None and real.value > 0
+    assert "footage" not in real.evidence
+    assert simulated.value == real.value
+    assert simulated.evidence == {**real.evidence, "footage": "simulated"}
+
+
+@pytest.mark.parametrize("simulated", [False, True])
+def test_a_frozen_camera_is_a_finding_only_on_real_footage(simulated):
+    """A freeze under moving actions requests review unless the footage is simulated."""
+
+    episode = Episode(
+        id="episode_0",
+        streams=[
+            freeze_frames(clean_frames(frames=100), start=25, length=25),
+            _moving_actions(100),
+        ],
+    )
+
+    graded, findings = grade_episode(
+        episode,
+        adapter="test",
+        adapter_confidence=1.0,
+        policy=load_default_policy(),
+        dictionary=load_default_dictionary(),
+        simulated=simulated,
+    )
+
+    camera = next(s for s in graded.streams if "frozen_frame_pct" in s.metrics)
+    result = camera.metrics["frozen_frame_pct"]
+    flagged = any(f.metric_id == "vision.frozen_frame_pct" for f in findings)
+    assert flagged is not simulated
+    if simulated:
+        assert result.status == MetricStatus.REPORT_ONLY
+        assert result.points is None
+        assert "simulated" in result.evidence["ungraded_reason"]

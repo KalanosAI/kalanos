@@ -129,6 +129,8 @@ class AnalysedEpisode(BaseModel):
     policy : Policy
         The policy to grade it against: the run's own policy,
         or a copy with a per-deployment limit `pipeline.run` filled in.
+    simulated : bool
+        Whether the episode's camera footage is rendered by a simulator.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -137,6 +139,7 @@ class AnalysedEpisode(BaseModel):
     adapter: str
     adapter_confidence: float
     policy: Policy
+    simulated: bool = False
 
 
 class GradedChannel(BaseModel):
@@ -299,6 +302,11 @@ class VideoFormat(BaseModel):
         The transfer characteristic, as FFmpeg names it (`bt709`). Container only.
     color_space : str or None
         The colour space, as FFmpeg names it (`bt709`). Container only.
+    rotation_deg : float or None
+        The display rotation the first frame carries, in degrees counterclockwise,
+        0.0 when it carries none. Container only.
+    interlaced : bool or None
+        Whether the first frame is interlaced. Container only.
     channels : int or None
         How many channels each frame holds. Declared only.
     is_depth_map : bool or None
@@ -326,6 +334,8 @@ class VideoFormat(BaseModel):
     color_primaries: str | None = None
     color_transfer: str | None = None
     color_space: str | None = None
+    rotation_deg: float | None = None
+    interlaced: bool | None = None
     channels: int | None = None
     is_depth_map: bool | None = None
     has_audio: bool | None = None
@@ -756,6 +766,15 @@ class DatasetWarning(BaseModel):
         `episode_count_mismatch`: a source declares an episode count
         that disagrees with its episode metadata or its data;
         the message gives the counts.
+        `low_bitrate`, `high_bitrate`: video files whose bitrate is far below
+        or far above the median of the same camera's other files;
+        the message names each camera, file and bitrate, up to 10 files.
+        `rotation`: video files that carry rotation metadata;
+        the message names each camera, file and angle, up to 10 files.
+        `hdr_transfer`: video files that use an HDR transfer function;
+        the message names each camera, file and transfer, up to 10 files.
+        `interlaced`: video files whose first frame is interlaced;
+        the message names each camera and file, up to 10 files.
     message : str
         The warning, stated for a reader.
     """
@@ -765,6 +784,11 @@ class DatasetWarning(BaseModel):
         "task_instruction_missing",
         "corrupt_footage",
         "episode_count_mismatch",
+        "low_bitrate",
+        "high_bitrate",
+        "rotation",
+        "hdr_transfer",
+        "interlaced",
     ]
     message: str
 

@@ -250,6 +250,12 @@ class DictionaryEntry(BaseModel):
         Field names seen in the wild for this signal, matched after normalisation.
         Kept deliberately short: an alias that matches nothing costs a little memory,
         while one as generic as `value` costs correctness in every file.
+    namespace_aliases : list[str]
+        Names that identify this signal when they are a parent segment of a dotted
+        key, such as `a` in `a.b.c`. A key is read from its last segment first,
+        and parent segments are tried, nearest first, only when no entry matches
+        that last segment. Only entries listing a name here take part, because
+        a parent word is often an alias of an unrelated signal.
     typical_rate_hz : tuple[float, float] or None
         The sampling rate band this signal is usually recorded at, low to high.
         Context for a reader and a prior for inference, never a grading bound.
@@ -268,6 +274,7 @@ class DictionaryEntry(BaseModel):
     shape: Shape
     unit: str | None = None
     aliases: list[str] = Field(default_factory=list)
+    namespace_aliases: list[str] = Field(default_factory=list)
     typical_rate_hz: tuple[float, float] | None = None
     plausible_range: tuple[float, float] | None = None
     group_hint: GroupHintKind | None = None
@@ -318,7 +325,11 @@ class DictionaryEntry(BaseModel):
             If any alias reduces to an empty stem.
         """
 
-        empty = [alias for alias in self.aliases if not normalise_name(alias).stem]
+        empty = [
+            alias
+            for alias in (*self.aliases, *self.namespace_aliases)
+            if not normalise_name(alias).stem
+        ]
         if empty:
             raise ValueError(f"aliases must normalise to a name, got {empty}")
         return self
@@ -472,6 +483,28 @@ class Dictionary(BaseModel):
                     claimants.append(taxonomy_type)
         return {stem: tuple(claimants) for stem, claimants in index.items()}
 
+    @cached_property
+    def namespace_index(self) -> dict[str, tuple[str, ...]]:
+        """Map every normalised namespace alias onto the taxonomy types claiming it.
+
+        Only entries that list `namespace_aliases` appear here.
+        A key with more than one type is ambiguous, as in `alias_index`.
+
+        Returns
+        -------
+        dict[str, tuple[str, ...]]
+            Normalised stems, each mapped to the taxonomy types claiming it,
+            in the order the entries appear.
+        """
+
+        index: dict[str, list[str]] = {}
+        for taxonomy_type, entry in self.entries.items():
+            for name in entry.namespace_aliases:
+                claimants = index.setdefault(normalise_name(name).stem, [])
+                if taxonomy_type not in claimants:
+                    claimants.append(taxonomy_type)
+        return {stem: tuple(claimants) for stem, claimants in index.items()}
+
     def resolve(self, name: str) -> NameMatch:
         """Look one field name up in the taxonomy.
 
@@ -483,12 +516,21 @@ class Dictionary(BaseModel):
         Returns
         -------
         NameMatch
-            The taxonomy type it resolved to; or an unmapped match, carrying the
-            candidates when several entries claimed the name and nothing when none did.
+            The taxonomy type it resolved to, by its last segment or else by an
+            enclosing segment an entry lists as a namespace alias; or an unmapped
+            match, carrying the candidates when several entries claimed the name
+            and nothing when none did.
         """
 
         normalised = normalise_name(name)
         claimants = self.alias_index.get(normalised.stem, ())
+        if not claimants:
+            for segment in reversed(name.split(".")[:-1]):
+                stem = normalise_name(segment).stem
+                claimants = self.namespace_index.get(stem, ())
+                if claimants:
+                    normalised = normalised.model_copy(update={"stem": stem})
+                    break
 
         if len(claimants) == 1:
             return NameMatch(

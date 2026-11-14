@@ -11,12 +11,14 @@ optional decoder.
 
 # Built-in
 import logging
+import struct
 import threading
 from collections import OrderedDict
 from collections.abc import Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from math import atan2, degrees, hypot
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -345,6 +347,12 @@ class ContainerHeader:
         The transfer characteristic, as FFmpeg names it (`bt709`).
     color_space : str or None
         The colour space, as FFmpeg names it (`bt709`).
+    rotation_deg : float or None
+        The display rotation the first frame carries, in degrees counterclockwise
+        as PyAV's `VideoFrame.rotation` reads it, 0.0 when the frame carries none.
+        `None` when no frame decodes.
+    interlaced : bool or None
+        Whether the first frame is interlaced, `None` when no frame decodes.
     camera_make : str or None
         The camera maker a container tag names.
     camera_model : str or None
@@ -366,6 +374,8 @@ class ContainerHeader:
     color_primaries: str | None = None
     color_transfer: str | None = None
     color_space: str | None = None
+    rotation_deg: float | None = None
+    interlaced: bool | None = None
     camera_make: str | None = None
     camera_model: str | None = None
     encoder: str | None = None
@@ -698,14 +708,14 @@ class VideoPayload:
     def header(self) -> ContainerHeader:
         """Read the format the container states for its first video stream.
 
-        Decodes nothing.
+        Decodes the file's first frame, for its rotation and interlacing.
 
         Returns
         -------
         ContainerHeader
             The stream's frame size, rate, pixel format, codec, bitrate,
-            length and colour, and the camera and encoder its tags name,
-            all for the whole file.
+            length and colour, the first frame's rotation and interlacing,
+            and the camera and encoder its tags name, all for the whole file.
 
         Raises
         ------
@@ -961,7 +971,8 @@ def _read_header(container: Any) -> ContainerHeader:
     -------
     ContainerHeader
         The stream's frame size, rate, pixel format, codec, bitrate,
-        length and colour, and the camera and encoder its tags name.
+        length and colour, the first frame's rotation and interlacing,
+        and the camera and encoder its tags name.
     """
 
     stream = container.streams.video[0]
@@ -973,6 +984,8 @@ def _read_header(container: Any) -> ContainerHeader:
     bit_rate = codec.bit_rate or stream.bit_rate
     duration = stream.duration
     time_base = stream.time_base
+    # Every later read seeks before it decodes, so decoding a frame here shifts none.
+    frame = _first_frame(container)
     return ContainerHeader(
         width=int(codec.width),
         height=int(codec.height),
@@ -990,10 +1003,67 @@ def _read_header(container: Any) -> ContainerHeader:
         color_primaries=_color_name(codec, "color_primaries", _COLOR_PRIMARIES),
         color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),
         color_space=_color_name(codec, "colorspace", _COLOR_SPACES),
+        rotation_deg=_display_rotation(frame) if frame is not None else None,
+        interlaced=bool(frame.interlaced_frame) if frame is not None else None,
         camera_make=_tag(container, stream, _MAKE_TAGS),
         camera_model=_tag(container, stream, _MODEL_TAGS),
         encoder=_tag(container, stream, _ENCODER_TAGS),
     )
+
+
+def _first_frame(container: Any) -> Any | None:
+    """Decode the first frame of a container's first video stream.
+
+    Parameters
+    ----------
+    container : Any
+        A PyAV container with at least one video stream.
+
+    Returns
+    -------
+    Any or None
+        The frame, `None` when the stream holds none or FFmpeg cannot decode it.
+    """
+
+    assert av is not None
+
+    # Only FFmpeg's own errors read as "no frame": a remote failure surfaces as
+    # OSError and must still raise, as it does for the rest of the header.
+    try:
+        return next(container.decode(container.streams.video[0]), None)
+    except av.error.FFmpegError:
+        return None
+
+
+def _display_rotation(frame: Any) -> float:
+    """Read the display rotation a decoded frame carries.
+
+    Parameters
+    ----------
+    frame : Any
+        A decoded PyAV video frame.
+
+    Returns
+    -------
+    float
+        The rotation in degrees counterclockwise, 0.0 when the frame carries none.
+    """
+
+    # The matrix is parsed from its bytes because `VideoFrame.rotation` is missing
+    # before PyAV 14.2, and `side_data` is gone from the stream after PyAV 13.
+    for entry in frame.side_data:
+        if "DISPLAYMATRIX" in str(entry.type):
+            matrix = struct.unpack("<9i", bytes(entry)[:36])
+            break
+    else:
+        return 0.0
+    x_scale = hypot(matrix[0], matrix[3])
+    y_scale = hypot(matrix[1], matrix[4])
+    if not x_scale or not y_scale:
+        return 0.0
+    angle = -degrees(atan2(matrix[1] / y_scale, matrix[0] / x_scale))
+    # Adding 0.0 turns a rounded -0.0 into 0.0.
+    return round(angle, 2) + 0.0
 
 
 def _check_out(path: UPath) -> _VideoFile | None:

@@ -848,6 +848,8 @@ def test_no_asset_loader_walks_file_relative_to_itself():
         "derived.computed_feature",
         "annotation.phase_boundary",
         "proprio.gripper_width",
+        "task.goal_position",
+        "proprio.finger_joint_state",
     ],
 )
 def test_commands_and_rewards_are_exempt_from_flatline(taxonomy_type):
@@ -889,6 +891,21 @@ def test_computed_features_are_exempt_from_snr():
 
     assert band.good is None
     assert band.bad is None
+
+
+def test_goal_positions_are_exempt_from_snr():
+    """A target steps between holds, which the ratio would count as noise."""
+
+    band = _entry(load_default_policy(), "snr_db").thresholds["task.goal_position"]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_finger_joints_still_grade_snr():
+    thresholds = _entry(load_default_policy(), "snr_db").thresholds
+
+    assert "proprio.finger_joint_state" not in thresholds
 
 
 def test_sensors_still_grade_flatline():

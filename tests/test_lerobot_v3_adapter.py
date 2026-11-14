@@ -521,6 +521,46 @@ def test_a_feature_resolves_through_its_declared_names_when_its_key_does_not():
     assert resolved == ("proprio.joint_velocity", MappingSource.DECLARED_NAMES)
 
 
+def test_a_goal_position_feature_takes_the_goal_type():
+    """A goal's parts nest under `goal_position`, past the last-segment match."""
+
+    dictionary = load_default_dictionary()
+    arm = {"dtype": "float32", "shape": [2], "names": ["shoulder_pan.pos", "elbow.pos"]}
+    gripper = {"dtype": "float32", "shape": [1], "names": ["gripper.pos"]}
+
+    expected = ("task.goal_position", MappingSource.DICTIONARY)
+    assert resolve_taxonomy("skill.goal_position.joint", arm, dictionary) == expected
+    assert (
+        resolve_taxonomy("skill.goal_position.gripper", gripper, dictionary) == expected
+    )
+
+
+def test_a_goal_segment_must_be_whole():
+    dictionary = load_default_dictionary()
+    spec = {"dtype": "float32", "shape": [2], "names": ["a", "b"]}
+
+    assert resolve_taxonomy("skill.goal_positions.joint", spec, dictionary) == (
+        "unmapped.skill.goal_positions.joint",
+        None,
+    )
+    assert resolve_taxonomy("subtask.target_position", spec, dictionary) == (
+        "unmapped.subtask.target_position",
+        None,
+    )
+
+
+def test_a_goal_key_beats_names_that_agree_on_another_type():
+    """The key names a held target, whatever its channels are called."""
+
+    spec = {"dtype": "float32", "shape": [2], "names": ["joint_vel_0", "joint_vel_1"]}
+
+    resolved = resolve_taxonomy(
+        "goal_position.unlisted", spec, load_default_dictionary()
+    )
+
+    assert resolved == ("task.goal_position", MappingSource.DICTIONARY)
+
+
 def test_a_v2_dataset_is_declined(tmp_path):
     """Verify a v2.x codebase_version bids zero rather than being misread."""
 
@@ -1284,3 +1324,75 @@ def test_every_fixture_episode_is_where_its_metadata_says(tier):
         assert episode.layout_check is not None
         assert episode.layout_check.pointer_matches
         assert episode.layout_check.range_mismatches == []
+
+
+def _card_copy(tmp_path, card):
+    """Copy the fixture, giving it `card` as `README.md` when it is not `None`."""
+
+    copy_root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy_root)
+    if card is not None:
+        (copy_root / "README.md").write_text(card)
+    return UPath(copy_root)
+
+
+@pytest.mark.parametrize(
+    ("card", "expected"),
+    [
+        ("---\ntags:\n- LeRobot\n- robosuite\n---\n# Card\n", "robosuite"),
+        ("---\ntags: [LeRobot, Isaac-Sim]\n---\n", "isaac-sim"),
+        ("---\ntags: [LeRobot, Mujoco_Menagerie]\n---\n", "mujoco_menagerie"),
+    ],
+)
+def test_a_dataset_card_tag_names_the_simulator(tmp_path, card, expected):
+    """A tag starting with a simulator name, in any case, is read from the card."""
+
+    info = LeRobotV3Adapter().describe(_card_copy(tmp_path, card))
+
+    assert info.simulator == expected
+    assert info.episode_count == 2
+
+
+@pytest.mark.parametrize(
+    "card",
+    [
+        None,
+        "# A card without front matter\n",
+        "---\ntags: [unclosed\n---\n",
+        "---\ntags: robosuite\n---\n",
+        "---\n- robosuite\n---\n",
+        "---\ntags: [LeRobot, 3, null]\n---\n",
+        "---\ntags: [LeRobot, robosuite]\n",
+        "---\ntags: [LeRobot]\ntags: [robosuite]\n---\n",
+    ],
+    ids=[
+        "no_card",
+        "no_front_matter",
+        "invalid_yaml",
+        "tags_not_a_list",
+        "front_matter_not_a_mapping",
+        "no_simulator_tag",
+        "front_matter_never_closed",
+        "duplicate_tags_key",
+    ],
+)
+def test_a_card_that_names_no_simulator_leaves_the_declared_facts(tmp_path, card):
+    """A missing or malformed card gives no simulator and costs nothing else."""
+
+    info = LeRobotV3Adapter().describe(_card_copy(tmp_path, card))
+
+    assert info.simulator is None
+    assert info.episode_count == 2
+    assert info.robot_type == "so100_follower"
+
+
+def test_an_undecodable_card_leaves_the_declared_facts(tmp_path):
+    """A card that is not UTF-8 text gives no simulator."""
+
+    root = _card_copy(tmp_path, None)
+    (root / "README.md").write_bytes(b"---\n\xff\xfe\n---\n")
+
+    info = LeRobotV3Adapter().describe(root)
+
+    assert info.simulator is None
+    assert info.episode_count == 2

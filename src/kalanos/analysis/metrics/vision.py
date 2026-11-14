@@ -56,7 +56,7 @@ import math
 from collections import OrderedDict
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # External
 import polars as pl
@@ -2847,6 +2847,8 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
     and a pair with a blank frame is never frozen.
     It counts only while an action stream of the same episode moves over it:
     an idle robot in a still scene looks frozen too.
+    On simulated footage a still scene repeats its frames exactly,
+    so the result is marked and scoring keeps it ungraded.
     It reads the windows `_layout` picks,
     in the decode it shares with blur and exposure.
 
@@ -2926,22 +2928,25 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
     read = frames.n_read
     repeated = sum(run for _index, run in counted)
     longest = max((run for _index, run in counted), default=0)
+    evidence: dict[str, Any] = {
+        "n_frames": n,
+        "n_read": read,
+        "n_windows": len(frames.windows),
+        "full_scan": bool(frames.windows == [(0, n)]),
+        "n_runs": len(counted),
+        "n_idle_runs": idle,
+        "longest_run_s": float(longest / fps),
+        "first_run_index": counted[0][0] if counted else None,
+        "eps": float(eps),
+        "n_blank_pairs": n_blank,
+    }
+    if ctx.simulated:
+        evidence["footage"] = "simulated"
     return MetricResult(
         value=float(100 * repeated / read),
         unit="%",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "n_frames": n,
-            "n_read": read,
-            "n_windows": len(frames.windows),
-            "full_scan": bool(frames.windows == [(0, n)]),
-            "n_runs": len(counted),
-            "n_idle_runs": idle,
-            "longest_run_s": float(longest / fps),
-            "first_run_index": counted[0][0] if counted else None,
-            "eps": float(eps),
-            "n_blank_pairs": n_blank,
-        },
+        evidence=evidence,
         support=support_for(
             list(range(n)), [(index, index + run) for index, run in counted]
         ),

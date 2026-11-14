@@ -962,6 +962,66 @@ def test_a_read_inside_another_read_opens_its_own_container(monkeypatch):
     assert [c.closed for c in opened] == [True, False]
 
 
+def _write_flagged_video(path: UPath, **flags) -> None:
+    """Encode 4 frames of 64x64, with the rotation or interlacing `flags` ask for."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream(
+        "libx264",
+        rate=30,
+        options=(
+            {"flags": "+ildct+ilme", "x264-params": "interlaced=1:tff=1"}
+            if flags.get("interlaced")
+            else {}
+        ),
+    )
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    if "rotation" in flags:
+        stream.set_display_rotation(flags["rotation"])
+    for _ in range(4):
+        pixels = numpy.zeros((64, 64, 3), dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def _payload(path: UPath) -> VideoPayload:
+    """A payload over the 4-frame file at `path`."""
+
+    return VideoPayload(path=path, frame_count=4, start_s=0.0, end_s=4 / 30)
+
+
+def test_the_header_reads_the_first_frames_rotation(tmp_path):
+    """Verify a display rotation of 90 reads as 90.0, and a file without one as 0.0."""
+
+    rotated = UPath(tmp_path) / "rotated.mp4"
+    _write_flagged_video(rotated, rotation=90)
+
+    assert _payload(rotated).header().rotation_deg == 90.0
+    assert VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30
+    ).header().rotation_deg == pytest.approx(0.0)
+
+
+def test_the_header_reads_whether_the_first_frame_is_interlaced(tmp_path):
+    """Verify an interlaced encode reads True, and the progressive fixture False."""
+
+    interlaced = UPath(tmp_path) / "interlaced.mp4"
+    _write_flagged_video(interlaced, interlaced=True)
+
+    assert _payload(interlaced).header().interlaced is True
+    progressive = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30
+    ).header()
+    assert (progressive.rotation_deg, progressive.interlaced) == (0.0, False)
+
+
 def test_the_header_names_the_codec_rather_than_its_decoder(tmp_path):
     """Verify an AV1 file's codec reads as `av1`, whichever decoder opens it."""
 

@@ -268,6 +268,19 @@ def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
     assert changed.execution_id.digest != default.execution_id.digest
 
 
+def test_a_declared_footage_changes_the_execution_identity(tmp_path):
+    """Declaring the footage simulated is a different run to compare."""
+
+    def configuration(bundle):
+        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
+
+    default = configuration(Bundle())
+    declared = configuration(Bundle(vision=VisionSpec(footage="simulated")))
+    assert default.execution_id is not None and declared.execution_id is not None
+
+    assert declared.execution_id.digest != default.execution_id.digest
+
+
 @pytest.mark.parametrize("override", [{"full_frame_scan": True}, {"vision_samples": 3}])
 def test_a_command_line_vision_override_changes_the_execution_identity(
     tmp_path, override

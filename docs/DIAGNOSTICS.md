@@ -115,6 +115,7 @@ vision:
   summary_ratio: 0.1       # under a full scan, share of frames sharpness, contrast and exposure level measure
   max_decode_frames: 20000
   max_pixels: 2097152
+  footage: auto            # auto (dataset card tags), real or simulated
 diagnostics:
   vision: true
 ```
