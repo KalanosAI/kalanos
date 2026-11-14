@@ -58,6 +58,18 @@ class CameraSample(BaseModel):
     luma : tuple[str, ...] or None
         The luminance hashes of a complete read, in order,
         `None` when they cannot identify the footage.
+    corrupt_share : float or None
+        The computed `corrupt_frame_pct` value, `None` when it did not compute.
+    corrupt_bad : tuple[int, ...]
+        The frames that metric counted as corrupt.
+    corrupt_median : float or None
+        The median noise statistic over the stream's non-blank frames,
+        `None` when every frame was blank or the metric did not compute.
+    corrupt_candidates : tuple[tuple[int, float], ...]
+        The frames that read between the metric's floor and its noise bound,
+        each with its noise statistic, for the camera-relative rule.
+    n_sampled, n_frames : int or None
+        The metric's sampled and declared frame counts.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -73,6 +85,12 @@ class CameraSample(BaseModel):
     dark_share: float | None
     bright_share: float | None
     luma: tuple[str, ...] | None
+    corrupt_share: float | None = None
+    corrupt_bad: tuple[int, ...] = ()
+    corrupt_median: float | None = None
+    corrupt_candidates: tuple[tuple[int, float], ...] = ()
+    n_sampled: int | None = None
+    n_frames: int | None = None
 
 
 class ContainerSample(BaseModel):

@@ -12,6 +12,7 @@ and hands each level exactly what the stage below expects.
 
 # Built-in
 import logging
+import re
 import zlib
 from collections import deque
 from collections.abc import Iterable, Sequence
@@ -56,7 +57,7 @@ from kalanos.analysis.models.diagnostics import DiagnosticResult, VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import UNMAPPED_TAXONOMY_PREFIX, Episode, Stream
-from kalanos.analysis.models.eligibility import EligibilityStatus
+from kalanos.analysis.models.eligibility import Consequence, EligibilityStatus
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
     DEFAULT_VISION_SAMPLES,
@@ -97,6 +98,7 @@ from kalanos.analysis.scoring.cameras import (
     camera_key,
     camera_samples,
     compare_cameras,
+    regrade_corrupt_footage,
 )
 from kalanos.analysis.scoring.container_hints import (
     container_hints,
@@ -142,6 +144,9 @@ _LEDGERS_HELD = 64
 
 # Episode ids the task-instruction warning lists before it counts the rest.
 _INSTRUCTION_IDS_SHOWN = 10
+
+# Runs of episode numbers the corrupt-footage warning lists before it counts the rest.
+_CORRUPT_RUNS_SHOWN = 20
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -647,6 +652,85 @@ def _task_instruction_warning(
     )
 
 
+def _episode_runs(ids: Sequence[str]) -> list[str]:
+    """Group episode ids into runs of consecutive episode numbers.
+
+    Parameters
+    ----------
+    ids : Sequence[str]
+        Episode ids, such as `episode_000282`.
+
+    Returns
+    -------
+    list of str
+        The ids that end in a number, sorted and grouped into runs
+        written `"282-299"`, or `"473"` for a run of one,
+        then the ids without one, each on its own and sorted.
+    """
+
+    numbered: list[int] = []
+    others: list[str] = []
+    for episode_id in ids:
+        match = re.search(r"(\d+)$", episode_id)
+        if match is None:
+            others.append(episode_id)
+        else:
+            numbered.append(int(match.group(1)))
+
+    runs: list[str] = []
+    numbers = sorted(set(numbered))
+    start = 0
+    for k, number in enumerate(numbers):
+        if k + 1 < len(numbers) and numbers[k + 1] == number + 1:
+            continue
+        first = numbers[start]
+        runs.append(str(first) if first == number else f"{first}-{number}")
+        start = k + 1
+    return runs + sorted(set(others))
+
+
+def _corrupt_footage_warning(
+    findings: Sequence[Finding], n_episodes: int
+) -> DatasetWarning | None:
+    """The warning listing episodes blocked for corrupt camera footage.
+
+    Parameters
+    ----------
+    findings : Sequence[Finding]
+        Every finding of the run.
+    n_episodes : int
+        How many episodes were graded.
+
+    Returns
+    -------
+    DatasetWarning or None
+        The warning, with the count and up to `_CORRUPT_RUNS_SHOWN` runs of
+        episode numbers. `None` when no episode is blocked for it.
+    """
+
+    blocked = {
+        f.episode_id
+        for f in findings
+        if f.metric_id == "vision.corrupt_frame_pct"
+        and f.consequence == Consequence.BLOCK
+    }
+    if not blocked:
+        return None
+    runs = _episode_runs(sorted(blocked))
+    named = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+    rest = len(runs) - _CORRUPT_RUNS_SHOWN
+    if rest > 0:
+        named += f", and {rest} more runs"
+    noun = "run" if len(runs) == 1 else "runs"
+    return DatasetWarning(
+        code="corrupt_footage",
+        message=(
+            f"{len(blocked)} of {n_episodes} episodes are blocked for corrupt"
+            f" camera footage, in {len(runs)} {noun}: {named}"
+        ),
+    )
+
+
 def _merge_shared_timelines(
     findings: list[Finding], streams: Sequence[Stream]
 ) -> list[Finding]:
@@ -991,6 +1075,13 @@ class ReportBuilder:
         producer = producer.model_copy(
             update={"metrics": detector_versions(), "adapters": adapters}
         )
+        findings = regrade_corrupt_footage(
+            findings,
+            (sample for summary in summaries for sample in summary.camera_samples),
+            policy_for=lambda episode_id: scope_policy(
+                policies[episode_id], requirements
+            ),
+        )
         findings = apply_calibration(findings, policies, run, scope, producer)
         diagnostic_results = self._diagnostic_results
         diagnostics = None
@@ -1023,6 +1114,7 @@ class ReportBuilder:
             for w in (
                 near_duplicate_warning(near_duplicates, n_episodes),
                 _task_instruction_warning(summaries),
+                _corrupt_footage_warning(findings, n_episodes),
                 *container_hints(
                     sample
                     for summary in summaries

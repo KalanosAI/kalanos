@@ -35,6 +35,7 @@ from kalanos.analysis.models.domain import (
     Stream,
     TimestampDtype,
 )
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -62,6 +63,10 @@ from kalanos.analysis.models.scoring import (
 )
 from kalanos.analysis.reporting import assemble
 from kalanos.analysis.reporting.assemble import (
+    _CORRUPT_RUNS_SHOWN,
+    ReportBuilder,
+    _corrupt_footage_warning,
+    _episode_runs,
     _merge_shared_timelines,
     assemble_report,
     grade_episode,
@@ -94,7 +99,9 @@ from helpers import (
     FIXTURES_DIR,
     DisclosureStateCollector,
     ScoreAttributeCollector,
+    all_noise,
     decided,
+    scene_frames,
     score_attr,
     write_arm,
 )
@@ -1520,7 +1527,7 @@ def test_a_camera_stream_reports_its_declared_and_container_format():
         assert declared.width is None and declared.height is None
         assert (found.width, found.height, found.fps) == (32, 32, 30.0)
         assert (found.codec, found.profile) == ("h264", "High")
-        assert (found.bit_rate, found.frame_count) == (26910, 8)
+        assert (found.bit_rate, found.frame_count) == (36750, 8)
         assert found.duration_s == pytest.approx(4096 / 15360)
         # The fixture's colour codes are all unspecified.
         assert found.color_range is None and found.color_primaries is None
@@ -1832,3 +1839,61 @@ def test_a_merged_finding_counts_for_every_stream_that_shares_it():
         ("episode_0", "robot.joint.position", None): 1,
         ("episode_0", "robot.gripper.width", None): 1,
     }
+
+
+def test_corrupt_footage_runs():
+    """Episode numbers group into runs, and ids without one follow, sorted."""
+
+    ids = [f"episode_{n:06d}" for n in (1, 2, 3, 7)]
+
+    assert _episode_runs(ids) == ["1-3", "7"]
+    assert _episode_runs([*ids, "take_b", "take_a"]) == ["1-3", "7", "take_a", "take_b"]
+
+
+def test_corrupt_footage_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    findings = [
+        Finding.model_construct(
+            metric_id="vision.corrupt_frame_pct",
+            consequence=Consequence.BLOCK,
+            episode_id=f"episode_{2 * n:06d}",
+        )
+        for n in range(_CORRUPT_RUNS_SHOWN + 3)
+    ]
+
+    warning = _corrupt_footage_warning(findings, 100)
+
+    assert warning is not None
+    assert warning.code == "corrupt_footage"
+    assert warning.message.startswith(
+        f"{_CORRUPT_RUNS_SHOWN + 3} of 100 episodes are blocked"
+    )
+    assert warning.message.endswith(", and 3 more runs")
+
+
+def test_corrupt_footage_warning_lists_blocked_episodes(tmp_path):
+    """Episodes with a corrupt camera are blocked and named in one warning."""
+
+    builder = ReportBuilder(policy=load_default_policy())
+    for number in range(1, 7):
+        camera = scene_frames(30, seed=number)
+        if number in (2, 3):
+            camera = all_noise(camera)
+        builder.add(
+            AnalysedEpisode(
+                episode=Episode(id=f"episode_{number:06d}", streams=[camera]),
+                adapter="test",
+                adapter_confidence=1.0,
+                policy=load_default_policy(),
+            )
+        )
+
+    report = builder.finish(root=UPath(tmp_path))
+
+    [warning] = [w for w in report.dataset_warnings if w.code == "corrupt_footage"]
+    assert warning.message == (
+        "2 of 6 episodes are blocked for corrupt camera footage, in 1 run: 2-3"
+    )
+    blocked = {e.id for e in report.episodes if e.eligibility.status == "blocked"}
+    assert blocked == {"episode_000002", "episode_000003"}

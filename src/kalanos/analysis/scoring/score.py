@@ -636,6 +636,60 @@ def _apply_fail_penalty(score: float, failing: int, *, policy: Policy) -> float:
     return max(0.0, score - penalty)
 
 
+def finding_for_result(
+    result: MetricResult,
+    *,
+    metric_name: str,
+    taxonomy_type: str,
+    policy: Policy,
+    location: FindingLocation,
+) -> Finding | None:
+    """Grade one metric result against the policy and build its finding, if any.
+
+    It does what `score_metrics` does for each metric of a node,
+    for a result computed outside the node's own grading.
+
+    Parameters
+    ----------
+    result : MetricResult
+        The metric's result, as the metric produced it.
+    metric_name : str
+        The metric's own bare name.
+    taxonomy_type : str
+        The stream's taxonomy type, for a type-keyed threshold lookup.
+    policy : Policy
+        The loaded grading policy.
+    location : FindingLocation
+        Where the stream sits in the graded tree.
+
+    Returns
+    -------
+    Finding or None
+        The finding, or `None` when the result does not grade
+        or grades without a defect.
+    """
+
+    regraded, points = _resolve(
+        result, metric_name=metric_name, taxonomy_type=taxonomy_type, policy=policy
+    )
+    if points is None:
+        return None
+    entry = policy.entry_for(metric_name)
+    if entry is None:
+        return None
+    family, metric_policy = entry
+    return _finding_for(
+        regraded,
+        metric_name=metric_name,
+        family=family,
+        points=points,
+        location=location,
+        metric_policy=metric_policy,
+        policy=policy,
+        key=f"{family}.{metric_name}",
+    )
+
+
 def score_metrics(
     results: dict[str, MetricResult],
     *,

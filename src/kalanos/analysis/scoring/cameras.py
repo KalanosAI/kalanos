@@ -17,16 +17,27 @@ to say how much its footage changes between episodes.
 
 # Built-in
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 # Internal
 from kalanos.analysis.coverage import state_of
-from kalanos.analysis.metrics.vision import _SHIFT_FLOOR, is_camera_footage
+from kalanos.analysis.localization import support_for
+from kalanos.analysis.metrics.vision import (
+    _RELATIVE_FLOOR,
+    _SHIFT_FLOOR,
+    is_camera_footage,
+)
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import Consequence
-from kalanos.analysis.models.metrics import Family, Level, MetricResult
+from kalanos.analysis.models.metrics import (
+    Family,
+    Level,
+    MetricResult,
+    MetricStatus,
+)
+from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
     CameraSummary,
@@ -35,9 +46,10 @@ from kalanos.analysis.models.report import (
     Variation,
     round_nrmse,
 )
-from kalanos.analysis.models.scoring import Finding, Severity
+from kalanos.analysis.models.scoring import Finding, FindingLocation, Severity
 from kalanos.analysis.models.summaries import CameraSample
 from kalanos.analysis.optional import load_numpy
+from kalanos.analysis.scoring.score import finding_for_result
 
 
 if TYPE_CHECKING:
@@ -62,6 +74,11 @@ _BLUR_GAP = 0.5
 _TRAIT_SHARE = 0.5
 # Raw Laplacian variance of a flat frame is 0, which has no logarithm.
 _LOG_FLOOR = 1e-6
+# Candidate: a frame is also corrupt when its noise statistic is this many times
+# its camera's median across the dataset, and at least `_RELATIVE_FLOOR`.
+# Garbage on a simulated camera read at least 32.8 times that median,
+# and the clean frames of the calibration datasets at most 4.8 times it.
+_RELATIVE_FACTOR = 10.0
 
 # TODO: an absolute blur floor is not set;
 # placing one needs data from more than one dataset.
@@ -239,6 +256,9 @@ def _sample(episode_id: str, stream: GradedStream) -> CameraSample:
     sharpness = _computed(stream.metrics.get("sharpness_score"))
     level = _computed(stream.metrics.get("exposure_level"))
     variance = sharpness.evidence.get("laplacian_var") if sharpness else None
+    corrupt = _computed(stream.metrics.get("corrupt_frame_pct"))
+    evidence = corrupt.evidence if corrupt else {}
+    median = evidence.get("median_score")
     return CameraSample(
         episode_id=episode_id,
         camera=camera_key(stream),
@@ -251,6 +271,15 @@ def _sample(episode_id: str, stream: GradedStream) -> CameraSample:
         dark_share=level.evidence.get("dark_share") if level else None,
         bright_share=level.evidence.get("bright_share") if level else None,
         luma=_luma(stream),
+        corrupt_share=corrupt.value if corrupt else None,
+        corrupt_bad=tuple(int(i) for i in evidence.get("bad_indices", ())),
+        corrupt_median=float(median) if median is not None else None,
+        corrupt_candidates=tuple(
+            (int(index), float(score))
+            for index, score in evidence.get("candidates", ())
+        ),
+        n_sampled=evidence.get("n_sampled"),
+        n_frames=evidence.get("n_frames"),
     )
 
 
@@ -339,6 +368,111 @@ def _finding(
         route=None,
         calibration=dict(_UNCALIBRATED),
     )
+
+
+def regrade_corrupt_footage(
+    findings: list[Finding],
+    samples: Iterable[CameraSample],
+    *,
+    policy_for: Callable[[str], Policy],
+) -> list[Finding]:
+    """Judge each camera's noisy-looking frames against the camera's own footage.
+
+    `corrupt_frame_pct` calls a frame noise by an absolute bound,
+    which a camera whose clean frames have crisp edges can sit close to.
+    The camera's own footage sets the bar here instead:
+    a frame is also corrupt when its noise statistic is at least
+    `_RELATIVE_FACTOR` times the camera's median over the dataset,
+    and at least `_RELATIVE_FLOOR`.
+    A stream the rule adds frames to is graded again on the combined share,
+    and its finding replaces the one the episode raised, if any,
+    so the stream keeps one finding.
+
+    A camera that is corrupt in most of its episodes sets its own median,
+    so only the absolute rule catches its garbage.
+    The rule reads the first stream of each camera in an episode,
+    as `camera_samples` keeps it; the other streams keep their episode's finding.
+
+    Parameters
+    ----------
+    findings : list[Finding]
+        Every finding of the run, left unchanged.
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`.
+    policy_for : Callable[[str], Policy]
+        The policy an episode is graded against, by episode id.
+
+    Returns
+    -------
+    list[Finding]
+        A copy of `findings` with each regraded stream's finding replaced.
+    """
+
+    cameras: dict[str, dict[str, CameraSample]] = {}
+    for sample in samples:
+        if sample.corrupt_median is not None:
+            cameras.setdefault(sample.camera, {}).setdefault(sample.episode_id, sample)
+
+    result = list(findings)
+    for members in cameras.values():
+        if len(members) < _MIN_EPISODES:
+            continue
+        medians = [s.corrupt_median for s in members.values()]
+        median = _median([m for m in medians if m is not None])
+        threshold = max(_RELATIVE_FLOOR, _RELATIVE_FACTOR * median)
+        for sample in members.values():
+            bad = set(sample.corrupt_bad)
+            added = {i for i, score in sample.corrupt_candidates if score >= threshold}
+            added -= bad
+            if not added or not sample.n_sampled or sample.n_frames is None:
+                continue
+            combined = sorted(bad | added)
+            graded = MetricResult(
+                value=100 * len(combined) / sample.n_sampled,
+                unit="%",
+                status=MetricStatus.REPORT_ONLY,
+                evidence={
+                    "n_sampled": sample.n_sampled,
+                    "n_frames": sample.n_frames,
+                    "bad_indices": combined,
+                    "relative_indices": sorted(added),
+                    "episode_share": sample.corrupt_share,
+                    "camera_median": median,
+                    "relative_threshold": threshold,
+                    "n_episodes": len(members),
+                },
+                support=support_for(
+                    list(range(sample.n_frames)), [(i, i + 1) for i in combined]
+                ),
+            )
+            location = FindingLocation(
+                episode_id=sample.episode_id,
+                source_field=sample.source_field,
+                source_path=sample.source_path,
+                stream=sample.taxonomy_type,
+                instance=sample.instance,
+            )
+            finding = finding_for_result(
+                graded,
+                metric_name="corrupt_frame_pct",
+                taxonomy_type=sample.taxonomy_type,
+                policy=policy_for(sample.episode_id),
+                location=location,
+            )
+            if finding is None:
+                continue
+            result = [
+                f
+                for f in result
+                if not (
+                    f.episode_id == sample.episode_id
+                    and f.metric_id == "vision.corrupt_frame_pct"
+                    and (f.stream, f.source_field, f.instance)
+                    == (location.stream, location.source_field, location.instance)
+                )
+            ]
+            result.append(finding)
+    return result
 
 
 def compare_cameras(

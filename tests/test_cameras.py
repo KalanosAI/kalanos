@@ -9,11 +9,16 @@ import math
 
 # External
 import pytest
+from upath import UPath
 
 # Internal
+from kalanos.analysis.metrics.vision import _noise_score
 from kalanos.analysis.models.coverage import Availability
+from kalanos.analysis.models.domain import Episode, Stream
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.report import (
+    AnalysedEpisode,
     CameraFrame,
     CameraFrames,
     CameraSummary,
@@ -22,12 +27,17 @@ from kalanos.analysis.models.report import (
     round_nrmse,
 )
 from kalanos.analysis.models.scoring import Finding, ScoreResult
+from kalanos.analysis.reporting.assemble import ReportBuilder
 from kalanos.analysis.scoring.cameras import (
     _TOO_FEW_FOOTAGE,
     FootageVariation,
     camera_samples,
     compare_cameras,
 )
+from kalanos.assets.policy import load_default_policy
+
+# Local
+from helpers import noise_frame, replaced_frames, scene_frames
 
 
 numpy = pytest.importorskip("numpy")
@@ -454,3 +464,148 @@ def test_without_footage_there_is_no_visual_variation():
     )
 
     assert summaries[0].visual_variation is None
+
+
+def _streak_frame(seed: int, size: int = 64) -> "numpy.ndarray":
+    """A frame of horizontal bands, grey and white, with two noise rows at each edge.
+
+    Its noise statistic reads between the metric's floor and its absolute bound,
+    the way decoder streaks that look like texture do.
+    """
+
+    rng = numpy.random.default_rng(seed)
+    plane = numpy.zeros((size, size), numpy.uint8)
+    row = 0
+    for band in range(size):
+        width = (4, 5)[band % 2]
+        plane[row : row + width] = 240 if band % 2 else int(rng.integers(110, 141))
+        row += width
+        if row >= size:
+            break
+    plane[:2] = rng.integers(0, 256, (2, size))
+    plane[-2:] = rng.integers(0, 256, (2, size))
+    return numpy.repeat(plane[:, :, None], 3, axis=2)
+
+
+def _textured_frame(seed: int, size: int = 64) -> "numpy.ndarray":
+    """A frame of random 4x4 blocks, which reads 2-4 on the noise statistic."""
+
+    rng = numpy.random.default_rng(seed)
+    blocks = rng.integers(60, 200, (size // 4, size // 4)).astype(numpy.uint8)
+    plane = numpy.kron(blocks, numpy.ones((4, 4), numpy.uint8))
+    return numpy.repeat(plane[:, :, None], 3, axis=2)
+
+
+def _stream_with(stream: Stream, frames: "dict[int, numpy.ndarray]") -> Stream:
+    """`stream` with the given frames replaced, naming its camera."""
+
+    return replaced_frames(stream, frames).model_copy(
+        update={"source_field": "observation.images.up"}
+    )
+
+
+def _corrupt_findings(streams: list[Stream]):
+    """Grade one episode per stream under a full scan, and return the report."""
+
+    builder = ReportBuilder(policy=load_default_policy(), full_frame_scan=True)
+    for number, stream in enumerate(streams, start=1):
+        builder.add(
+            AnalysedEpisode(
+                episode=Episode(id=f"episode_{number:06d}", streams=[stream]),
+                adapter="test",
+                adapter_confidence=1.0,
+                policy=load_default_policy(),
+            )
+        )
+    report = builder.finish(root=UPath("."))
+    return report, [
+        f for f in report.findings if f.metric_id == "vision.corrupt_frame_pct"
+    ]
+
+
+def _cameras(count: int = 6, *, frames: int = 20) -> list[Stream]:
+    """`count` episodes' clean scenes of one camera."""
+
+    return [
+        _stream_with(scene_frames(frames, seed=number), {}) for number in range(count)
+    ]
+
+
+def test_streak_frames_read_between_the_floor_and_the_bound():
+    """The test's streak frame is one only the camera-relative rule can catch."""
+
+    ratio, spread = _noise_score(_streak_frame(0)[:, :, 0])
+
+    assert 2 <= ratio < 5
+    assert spread >= 32
+
+
+def test_streak_garbage_is_caught_against_its_camera():
+    """Streaks below the absolute bound block an episode whose camera is smooth."""
+
+    streams = _cameras()
+    streams[2] = _stream_with(
+        streams[2], {i: _streak_frame(i) for i in range(0, 20, 2)}
+    )
+
+    report, findings = _corrupt_findings(streams)
+
+    [finding] = findings
+    assert finding.episode_id == "episode_000003"
+    assert finding.consequence == Consequence.BLOCK
+    assert finding.source_field == "observation.images.up"
+    assert finding.evidence["relative_indices"]
+    assert finding.value == 50
+    assert {e.id for e in report.episodes if e.eligibility.status == "blocked"} == {
+        "episode_000003"
+    }
+
+
+def test_a_textured_camera_is_its_own_norm():
+    """A camera whose every frame scores 2-4 is not flagged against itself."""
+
+    streams = [
+        _stream_with(
+            scene_frames(20, seed=n),
+            {i: _textured_frame(100 * n + i) for i in range(20)},
+        )
+        for n in range(6)
+    ]
+
+    report, findings = _corrupt_findings(streams)
+
+    assert findings == []
+    assert all(e.eligibility.status != "blocked" for e in report.episodes)
+    [stream] = report.episodes[0].streams
+    assert stream.metrics["corrupt_frame_pct"].evidence["candidates"]
+
+
+def test_one_stream_one_finding():
+    """The camera-relative frames replace the episode's own finding, as one."""
+
+    streams = _cameras(frames=40)
+    frames = {i: noise_frame(64, i) for i in (3, 11)}
+    frames.update({i: _streak_frame(i) for i in range(20, 38)})
+    streams[3] = _stream_with(streams[3], frames)
+
+    _report, findings = _corrupt_findings(streams)
+
+    [finding] = findings
+    assert finding.episode_id == "episode_000004"
+    assert finding.severity.value == "critical"
+    assert finding.value == 50
+    assert finding.evidence["episode_share"] == 5.0
+    assert len(finding.evidence["relative_indices"]) == 18
+
+
+def test_too_few_episodes_skip_the_relative_rule():
+    """Under five episodes of a camera, the camera has no norm to judge against."""
+
+    streams = _cameras(4)
+    streams[1] = _stream_with(
+        streams[1], {i: _streak_frame(i) for i in range(0, 20, 2)}
+    )
+
+    _report, findings = _corrupt_findings(streams)
+
+    assert findings == []

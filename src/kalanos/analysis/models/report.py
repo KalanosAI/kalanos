@@ -760,6 +760,9 @@ class DatasetWarning(BaseModel):
         `task_instruction_missing`: some episodes have no task instruction
         and the policy does not grade that;
         the message gives the count and the episode ids.
+        `corrupt_footage`: some episodes are blocked because a camera stream
+        is blank or decoder noise in enough of its frames;
+        the message gives the count and the episodes as runs of consecutive numbers.
         `episode_count_mismatch`: a source declares an episode count
         that disagrees with its episode metadata or its data;
         the message gives the counts.
@@ -779,6 +782,7 @@ class DatasetWarning(BaseModel):
     code: Literal[
         "near_duplicates_saturated",
         "task_instruction_missing",
+        "corrupt_footage",
         "episode_count_mismatch",
         "low_bitrate",
         "high_bitrate",

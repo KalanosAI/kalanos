@@ -1,6 +1,6 @@
 """The vision family.
 
-Fifteen metrics measure camera footage:
+Sixteen metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
@@ -8,6 +8,8 @@ Fifteen metrics measure camera footage:
 - blank_frame_pct, contrast_score, dark_frame_pct and bright_frame_pct
   read the statistics blur and exposure keep of those same frames,
   decoding nothing more, and the default policy reports them without a band;
+- corrupt_frame_pct counts the sampled frames that are blank or decoder noise,
+  from each one's native luminance, and blocks through the contract route;
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
@@ -157,6 +159,21 @@ _CLIP_RISE = 0.20
 # Contrast is otherwise no exposure signal: it follows what is in view,
 # and on lerobot/pusht a third of clean frames hold half the typical spread.
 _BLANK_SPREAD = 5
+# A non-blank frame is decoder noise when its Laplacian variance is at least this
+# multiple of its luminance variance, measured at native resolution.
+# Candidate: pixel noise reads about 20 in theory and 6-18 on a corrupt simulated
+# dataset, while clean footage on the calibration datasets reads 0.003-3.6.
+_NOISE_RATIO = 5.0
+# Candidate: a native P95 - P5 below this is a dark, noisy real scene and no garbage.
+# Dark frames with added noise read 5-12 at a spread of 11-22,
+# and every corrupt frame measured had a spread of 41 or more.
+_NOISE_MIN_SPREAD = 32
+# Candidate: on frames this small, edges alone dominate the noise statistic.
+# The smallest real camera in the calibration set is 96 px on its shorter side.
+_MIN_NOISE_SIDE = 32
+# Candidate: a frame between this and `_NOISE_RATIO` is kept as a candidate,
+# for the camera-relative rule in `kalanos.analysis.scoring.cameras`.
+_RELATIVE_FLOOR = 2.0
 # A frame is dark or bright when at least this share of its pixels is crushed
 # or clipped, the share `kalanos.analysis.scoring.cameras` uses for a camera's traits.
 _EXPOSED_SHARE = 0.5
@@ -266,6 +283,14 @@ class _Frames:
         Each sampled frame's share of pixels at or above `VisionSpec.bright_level`.
     dark_share : list of float
         Each sampled frame's share of pixels at or below `VisionSpec.dark_level`.
+    noise : list of float
+        Each sampled frame's native Laplacian variance over its luminance variance,
+        `nan` for a frame of one gray level.
+    native_spread : list of float
+        Each sampled frame's native P95 - P5 spread.
+    min_side : int or None
+        The shortest side of any sampled frame at native resolution,
+        `None` when none was measured.
     diffs : list of tuple of (int, numpy.ndarray)
         Per range that decoded at least two frames, its start
         and the contrast-scaled mean absolute difference between each pair
@@ -305,6 +330,9 @@ class _Frames:
     p95: list[float]
     white_share: list[float]
     dark_share: list[float]
+    noise: list[float]
+    native_spread: list[float]
+    min_side: int | None
     diffs: "list[tuple[int, np.ndarray]]"
     luma_steps: "list[tuple[int, np.ndarray]]"
     pts: list[float | None]
@@ -407,8 +435,11 @@ class _VisionAccumulator:
                 "p95",
                 "white_share",
                 "dark_share",
+                "noise",
+                "native_spread",
             )
         }
+        self.min_side: int | None = None
         self.measured: list[int] = []
         self.summary_measured: list[int] = []
         self.pts: list[float | None] = []
@@ -442,7 +473,7 @@ class _VisionAccumulator:
         frame : numpy.ndarray
             The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
         full : numpy.ndarray or None
-            Its native luminance, present when `index` is a summary position.
+            Its native luminance, present when `index` is a sampled position.
         frame_pts : float or None
             Its presentation time.
 
@@ -460,6 +491,7 @@ class _VisionAccumulator:
         cumulative = numpy.cumsum(histogram)
         p5, p95 = _percentile(cumulative, 5), _percentile(cumulative, 95)
         spread = p95 - p5
+        laplacian: float | None = None
         if index in self.wanted:
             self.measured.append(index)
             self.kept["mean"].append(int(histogram @ self.levels) / frame.size)
@@ -473,10 +505,20 @@ class _VisionAccumulator:
             self.kept["dark_share"].append(
                 int(histogram[: self.dark_level + 1].sum()) / frame.size
             )
+            # Every sampled frame arrives at native resolution.
+            assert full is not None
+            if index in self.native:
+                laplacian = _laplacian_var(full)
+            noise, native_spread = _noise_score(full, laplacian)
+            self.kept["noise"].append(noise)
+            self.kept["native_spread"].append(native_spread)
+            shortest = min(full.shape)
+            self.min_side = (
+                shortest if self.min_side is None else min(self.min_side, shortest)
+            )
         # Every summary position is also sampled, so its slot in `measured` exists.
         if index in self.native:
-            assert full is not None
-            laplacian = _laplacian_var(full)
+            assert full is not None and laplacian is not None
             self.summary_measured.append(index)
             self.pts.append(frame_pts)
             self.shapes.append((int(full.shape[0]), int(full.shape[1])))
@@ -552,6 +594,7 @@ class _VisionAccumulator:
             sampled=self.measured,
             summary=self.summary_measured,
             summary_slots=[slot[index] for index in self.summary_measured],
+            min_side=self.min_side,
             diffs=[
                 (start, numpy.asarray(window_diffs, dtype=numpy.float32))
                 for (start, _end), window_diffs in zip(
@@ -1139,7 +1182,7 @@ def _pass(
             payload.gray_windows(
                 ranges,
                 _SAMPLE_SIZE,
-                native=frozenset(summary),
+                native=frozenset(sampled),
                 max_decode_frames=max_decode_frames,
                 max_pixels=max_pixels,
             )
@@ -1342,7 +1385,7 @@ def _read(
             payload.gray_windows(
                 windows,
                 _SAMPLE_SIZE,
-                native=frozenset(summary),
+                native=frozenset(sampled),
                 max_decode_frames=max_decode_frames,
                 max_pixels=max_pixels,
             )
@@ -1548,6 +1591,39 @@ def _video_file(ctx: StreamContext) -> VideoPayload | MetricResult:
     if payload.frame_count == 0:
         return not_applicable("the stream carries no timestamps")
     return payload
+
+
+def _noise_score(
+    full: "np.ndarray", laplacian: float | None = None
+) -> tuple[float, float]:
+    """Measure how much of a frame's variance is pixel-to-pixel noise.
+
+    Parameters
+    ----------
+    full : numpy.ndarray
+        The frame's native luminance.
+    laplacian : float, optional
+        The frame's `_laplacian_var`, when the caller already has it.
+
+    Returns
+    -------
+    tuple of (float, float)
+        The Laplacian variance over the luminance variance, `nan` for a frame
+        of one gray level or under 3 pixels on a side,
+        and the native P95 - P5 spread.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    cumulative = numpy.cumsum(numpy.bincount(full.ravel(), minlength=256))
+    spread = _percentile(cumulative, 95) - _percentile(cumulative, 5)
+    variance = float(full.var())
+    if variance == 0:
+        return math.nan, spread
+    if laplacian is None:
+        laplacian = _laplacian_var(full)
+    return laplacian / variance, spread
 
 
 def _laplacian_var(frame: "np.ndarray") -> float:
@@ -1895,6 +1971,84 @@ def blank_frame_pct(ctx: StreamContext) -> MetricResult:
         if spread < _BLANK_SPREAD
     ]
     return _frame_pct(ctx, frames, bad, min_spread=float(min(spreads)))
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="corrupt camera frames")
+def corrupt_frame_pct(ctx: StreamContext) -> MetricResult:
+    """Share of sampled frames that are blank or hold decoder noise.
+
+    A frame is blank when its P95 - P5 spread on the `_SAMPLE_SIZE` decode is below
+    `_BLANK_SPREAD`, at any gray level.
+    Any other frame is noise when its native P95 - P5 spread is at least
+    `_NOISE_MIN_SPREAD` and its Laplacian variance is at least `_NOISE_RATIO`
+    times its luminance variance, the signature of pixel noise and grey streaks.
+    The spread guard keeps dark, noisy real scenes out.
+
+    The frames that read between `_RELATIVE_FLOOR` and `_NOISE_RATIO`
+    are published as candidates,
+    for a rule that judges them against the same camera across the dataset.
+    The share is report-only here; the default policy grades it.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, the share in percent with each corrupt frame as a support
+        interval, or `not_applicable` when the stream cannot be sampled
+        or its frames are under `_MIN_NOISE_SIDE` pixels on their shorter side.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+    if frames.min_side is None or frames.min_side < _MIN_NOISE_SIDE:
+        return not_applicable("frames too small to tell noise from detail")
+
+    bad: list[int] = []
+    blank = noise = 0
+    scores: list[float] = []
+    candidates: list[list[float]] = []
+    for index, p5, p95, ratio, spread in zip(
+        frames.sampled,
+        frames.p5,
+        frames.p95,
+        frames.noise,
+        frames.native_spread,
+        strict=True,
+    ):
+        if p95 - p5 < _BLANK_SPREAD:
+            blank += 1
+            bad.append(int(index))
+            continue
+        if not math.isnan(ratio):
+            scores.append(ratio)
+        if spread < _NOISE_MIN_SPREAD or math.isnan(ratio):
+            continue
+        if ratio >= _NOISE_RATIO:
+            noise += 1
+            bad.append(int(index))
+        elif ratio >= _RELATIVE_FLOOR:
+            candidates.append([int(index), round(ratio, 4)])
+
+    numpy = load_numpy()
+    assert numpy is not None
+    return _frame_pct(
+        ctx,
+        frames,
+        bad,
+        blank=blank,
+        noise=noise,
+        median_score=float(numpy.median(scores)) if scores else None,
+        candidates=candidates,
+    )
 
 
 @metric(level=Level.STREAM, family=Family.VISION, label="low contrast")

@@ -104,6 +104,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "vision.max_gap_s":                    3,
     "vision.camera_sync_skew_ms":          2,
     "vision.blank_frame_pct":              5,
+    "vision.corrupt_frame_pct":            0,
     "vision.contrast_score":               2,
     "vision.dark_frame_pct":               3,
     "vision.bright_frame_pct":             3,

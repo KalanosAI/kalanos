@@ -144,6 +144,19 @@ metrics:
         good: 1.0
         bad: 0.5
 
+  # Candidate: good 1%, bad 10% of examined frames, unconfirmed beyond one corrupt dataset.
+  # A corrupt frame (decoder garbage or blank) carries no image to train on,
+  # so it blocks through the contract route in every scope.
+  # Weight 0: it never moves the score.
+  vision.corrupt_frame_pct:
+    weight: 0
+    route: contract
+    graded_in_every_scope: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 10.0
+
   # Reported, never graded: no band is decided.
   vision.video_format_consistency:
     weight: 1
