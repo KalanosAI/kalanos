@@ -111,6 +111,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "vision.camera_stream_present":        0,
     "vision.frames_readable":              0,
     "vision.video_format_consistency":     1,
+    "vision.delivery_spec_met":            0,
     "vision.cut_count":                    4,
     "vision.dropped_chunk_count":          4,
     "vision.video_control_lag_ms":         None,

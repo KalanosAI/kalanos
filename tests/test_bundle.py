@@ -17,7 +17,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.models.binding import Bundle
-from kalanos.analysis.models.diagnostics import VisionSpec
+from kalanos.analysis.models.diagnostics import DeliverySpec, VisionSpec
 from kalanos.analysis.models.eligibility import SufficiencyStatus
 from kalanos.analysis.models.errors import ConfigurationError, MappingOverrideError
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
@@ -266,6 +266,36 @@ def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
         }
     )
     assert changed.execution_id.digest != default.execution_id.digest
+
+
+def test_a_delivery_spec_changes_the_execution_identity(tmp_path):
+    """Declaring a delivery spec is a different run to compare."""
+
+    def configuration(bundle):
+        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
+
+    default = configuration(Bundle())
+    declared = configuration(
+        Bundle(vision=VisionSpec(delivery=DeliverySpec(min_width=640)))
+    )
+    assert default.execution_id is not None and declared.execution_id is not None
+
+    assert declared.execution_id.digest != default.execution_id.digest
+
+
+def test_delivery_spec_validation():
+    """The spec rejects unknown keys and blank codecs, and lowercases the rest."""
+
+    with pytest.raises(ValidationError):
+        DeliverySpec(min_dpi=3)  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        DeliverySpec(codecs=[])
+    with pytest.raises(ValidationError):
+        DeliverySpec(codecs=[" "])
+    assert DeliverySpec(codecs=[" H264 ", "AV1"]).codecs == ["h264", "av1"]
+    assert not DeliverySpec().declared()
+    bundle = Bundle.model_validate({"vision": {"delivery": {"min_fps": 30}}})
+    assert bundle.vision.delivery.min_fps == 30
 
 
 def test_a_declared_footage_changes_the_execution_identity(tmp_path):

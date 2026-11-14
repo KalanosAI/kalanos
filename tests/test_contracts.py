@@ -91,6 +91,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "camera_stream_present": None,
     "frames_readable": None,
     "video_format_consistency": None,
+    "delivery_spec_met": None,
     "frozen_frame_pct": Defect.FROZEN_FRAMES,
     "cut_count": None,
     "dropped_chunk_count": None,

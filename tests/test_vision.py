@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import dataclasses
 import json
 import math
 import random
@@ -47,6 +48,7 @@ from kalanos.analysis.metrics.vision import (
     contrast_score,
     corrupt_frame_pct,
     dark_frame_pct,
+    delivery_spec_met,
     exposure_level,
     exposure_shift_pct,
     footage_vector,
@@ -61,7 +63,7 @@ from kalanos.analysis.metrics.vision import (
 )
 from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.diagnostics import VisionSpec
+from kalanos.analysis.models.diagnostics import DeliverySpec, VisionSpec
 from kalanos.analysis.models.domain import (
     Clock,
     Episode,
@@ -818,6 +820,103 @@ def test_video_format_consistency_lists_undeclared_fields():
     )
 
 
+def _with_spec(**fields) -> StreamContext:
+    """A camera context whose bundle declares a delivery spec of `fields`."""
+
+    ctx = stream_context(_camera(LEROBOT_VIDEO))
+    return ctx.model_copy(
+        update={"vision": VisionSpec(delivery=DeliverySpec(**fields))}
+    )
+
+
+def _fixture_header() -> ContainerHeader:
+    """The header of the fixture video."""
+
+    payload = _camera(LEROBOT_VIDEO).payload
+    assert isinstance(payload, VideoPayload)
+    header = vision._header(payload)
+    assert isinstance(header, ContainerHeader)
+    assert header.fps is not None and header.codec is not None
+    return header
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["min_width", "min_height", "min_fps", "min_duration_s", "codecs"],
+)
+def test_delivery_spec_names_each_missed_field(field):
+    """One field below its minimum is the one miss, with both values."""
+
+    header = _fixture_header()
+    payload = _camera(LEROBOT_VIDEO).payload
+    assert isinstance(payload, VideoPayload)
+    span = payload.end_s - payload.start_s
+    required, found = {
+        "min_width": (header.width + 1, header.width),
+        "min_height": (header.height + 1, header.height),
+        "min_fps": (float(header.fps or 0) * 2, header.fps),
+        "min_duration_s": (span + 1, span),
+        "codecs": (["not-a-codec"], header.codec),
+    }[field]
+
+    result = delivery_spec_met(_with_spec(**{field: required}))
+
+    assert result.value == 0.0
+    (miss,) = result.evidence["misses"]
+    assert miss["field"] == field
+    assert miss["required"] == required
+    assert miss["found"] == pytest.approx(found)
+
+
+def test_delivery_spec_met_at_the_minimums():
+    """A spec equal to the header's values passes, and the rate keeps its tolerance."""
+
+    header = _fixture_header()
+    result = delivery_spec_met(
+        _with_spec(
+            min_width=header.width,
+            min_height=header.height,
+            min_fps=float(header.fps or 0) * (1 + vision._FPS_REL_TOL / 2),
+            min_duration_s=6 / 30,
+            codecs=[str(header.codec).upper()],
+        )
+    )
+
+    assert result.value == 1.0
+    assert result.evidence["misses"] == []
+
+
+def test_delivery_spec_lists_unstated_fields(monkeypatch):
+    """A header that does not state the codec contradicts no allowed list."""
+
+    header = dataclasses.replace(_fixture_header(), codec=None)
+    monkeypatch.setattr(vision, "_header", lambda payload: header)
+
+    result = delivery_spec_met(_with_spec(codecs=["h264"]))
+
+    assert result.value == 1.0
+    assert result.evidence["unstated"] == ["codec"]
+    assert result.evidence["misses"] == []
+
+
+def test_delivery_spec_not_applicable_without_a_spec():
+    """The default bundle declares no spec, so nothing is checked."""
+
+    _assert_not_applicable(delivery_spec_met(stream_context(_camera(LEROBOT_VIDEO))))
+    _assert_not_applicable(delivery_spec_met(_with_spec()))
+
+
+def test_camera_frames_parameters_leave_out_the_delivery_spec():
+    """The frame evidence does not change when a spec is declared."""
+
+    plain = camera_frames(stream_context(_camera(LEROBOT_VIDEO)))
+    with_spec = camera_frames(_with_spec(min_width=1))
+
+    assert plain is not None and with_spec is not None
+    assert "delivery" not in with_spec.parameters
+    assert with_spec.parameters == plain.parameters
+
+
 def test_format_reads_the_header_without_numpy(monkeypatch):
     """Comparing the header needs only the decoder; presence still names numpy."""
 
@@ -878,7 +977,7 @@ def test_presence_and_format_skip_in_memory_frames():
     """Frames held in memory have no file to be missing or to declare a format."""
 
     stream = clean_frames()
-    for check in (camera_stream_present, video_format_consistency):
+    for check in (camera_stream_present, video_format_consistency, delivery_spec_met):
         _assert_not_applicable(check(stream_context(stream)))
 
 
@@ -943,6 +1042,7 @@ def test_the_default_scope_grades_only_the_structural_vision_checks():
         "vision.camera_stream_present",
         "vision.frames_readable",
         "vision.corrupt_frame_pct",
+        "vision.delivery_spec_met",
     }
     for key in vision_keys:
         entry = scoped.metrics[key]

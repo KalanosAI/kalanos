@@ -102,6 +102,21 @@ execution:
 
 This preset requires video quality: every declared frame of every camera examined. At the full tier the vision metrics read every frame, so a run can satisfy it; at the standard tier they read a sample, and it remains unknown. Camera metadata and numeric analysis do not satisfy that requirement. Choosing a weaker profile changes the question asked and must not be described as completing the original audit.
 
+## A delivery spec for camera footage
+
+```yaml
+schema_version: 1
+vision:
+  delivery:
+    min_width: 640
+    min_height: 480
+    min_fps: 30
+    min_duration_s: 5
+    codecs: [h264, av1]
+```
+
+Every field is optional. An episode is blocked when a camera stream misses a declared field, and the finding names the field with the required and found values. Codecs use FFmpeg names, such as `h264`, `hevc` and `av1`.
+
 ## A selected decision policy
 
 ```yaml

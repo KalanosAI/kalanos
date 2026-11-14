@@ -1,6 +1,6 @@
 """The vision family.
 
-Sixteen metrics measure camera footage:
+Seventeen metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
@@ -17,8 +17,8 @@ Sixteen metrics measure camera footage:
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
   decoding nothing, under a full scan too;
 - camera_sync_skew_ms compares the cameras of one episode through the same probe;
-- camera_stream_present and video_format_consistency share one read of the
-  container header, and presence also takes the segment's first frame;
+- camera_stream_present, video_format_consistency and delivery_spec_met share
+  one read of the container header, and presence also takes the segment's first frame;
   frames_readable judges the segment's packet probe and the shared decode.
 
 Blur and exposure each judge one episode by itself,
@@ -2919,6 +2919,99 @@ def video_format_consistency(ctx: StreamContext) -> MetricResult:
     )
 
 
+@metric(
+    level=Level.STREAM,
+    family=Family.VISION,
+    label="footage misses the delivery spec",
+)
+def delivery_spec_met(ctx: StreamContext) -> MetricResult:
+    """Whether the stream's footage meets the declared delivery spec.
+
+    Compares the container header with `VisionSpec.delivery`, decoding nothing:
+    width, height and frame rate against their minimums,
+    the segment's span against the minimum duration,
+    and the codec against the allowed names.
+    A frame rate meets its minimum within `_FPS_REL_TOL`.
+    A value the container does not state is listed under `unstated` and skipped.
+    A file that cannot be opened is `camera_stream_present`'s to report.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        A flag, 1 when every declared field is met and 0 otherwise,
+        with each miss's field, required and found values in the evidence,
+        or `not_applicable` when no spec is declared
+        or the stream is not backed by a readable video file.
+    """
+
+    delivery = ctx.vision.delivery
+    if not delivery.declared():
+        return not_applicable("no delivery spec is declared")
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(header, DecodeFailed):
+        return not_applicable(str(header))
+
+    # The segment's span: one LeRobot v3 file holds many episodes.
+    found: dict[str, Any] = {
+        "width": header.width,
+        "height": header.height,
+        "fps": header.fps,
+        "duration_s": payload.end_s - payload.start_s,
+        "codec": None if header.codec is None else header.codec.lower(),
+    }
+    minimums: dict[str, tuple[str, Any]] = {
+        "width": ("min_width", delivery.min_width),
+        "height": ("min_height", delivery.min_height),
+        "fps": ("min_fps", delivery.min_fps),
+        "duration_s": ("min_duration_s", delivery.min_duration_s),
+    }
+    misses: list[dict[str, Any]] = []
+    unstated: list[str] = []
+    for name, (field, required) in minimums.items():
+        if required is None:
+            continue
+        value = found[name]
+        if value is None:
+            unstated.append(name)
+            continue
+        floor = required * (1 - _FPS_REL_TOL) if name == "fps" else required
+        if value < floor:
+            misses.append({"field": field, "required": required, "found": value})
+    if delivery.codecs is not None:
+        if found["codec"] is None:
+            unstated.append("codec")
+        elif found["codec"] not in delivery.codecs:
+            misses.append(
+                {
+                    "field": "codecs",
+                    "required": delivery.codecs,
+                    "found": found["codec"],
+                }
+            )
+
+    return MetricResult(
+        value=0.0 if misses else 1.0,
+        unit="flag",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "misses": misses,
+            "unstated": unstated,
+            "camera": ctx.stream.source_field,
+        },
+    )
+
+
 def _action_deltas(ctx: StreamContext) -> "list[tuple[np.ndarray, np.ndarray]]":
     """Return `(step_times, moving_mask)` for each usable action stream beside ctx."""
 
@@ -3356,7 +3449,7 @@ def camera_frames(ctx: StreamContext) -> CameraFrames | None:
         identical_adjacent_pairs=identical,
         sample_plan="full_scan_v1" if ctx.full_frame_scan else "evenly_spaced_v1",
         parameters={
-            **ctx.vision.model_dump(),
+            **ctx.vision.model_dump(exclude={"delivery"}),
             "sample_frames": ctx.vision_samples,
             "full_frame_scan": ctx.full_frame_scan,
         },
