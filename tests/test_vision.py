@@ -13,6 +13,7 @@ import shutil
 from contextlib import closing
 from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 # External
 import polars as pl
@@ -693,7 +694,7 @@ def test_the_shared_read_numbers_frames_as_each_read_alone(
     payload = VideoPayload(path=path, frame_count=60, start_s=0.0, end_s=2.0)
     sampled = [15, 25]
     spec = VisionSpec()
-    limits = {
+    limits: dict[str, Any] = {
         "dark_level": spec.dark_level,
         "bright_level": spec.bright_level,
         "max_decode_frames": spec.max_decode_frames,

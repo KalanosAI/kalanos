@@ -6,6 +6,7 @@
 
 # Built-in
 import math
+from typing import TYPE_CHECKING
 
 # External
 import pytest
@@ -49,6 +50,9 @@ from helpers import noise_frame, replaced_frames, scene_frames
 
 
 numpy = pytest.importorskip("numpy")
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -692,7 +696,7 @@ def test_without_footage_there_is_no_visual_variation():
     assert summaries[0].visual_variation is None
 
 
-def _streak_frame(seed: int, size: int = 64) -> "numpy.ndarray":
+def _streak_frame(seed: int, size: int = 64) -> "np.ndarray":
     """A frame of horizontal bands, grey and white, with two noise rows at each edge.
 
     Its noise statistic reads between the metric's floor and its absolute bound,
@@ -713,7 +717,7 @@ def _streak_frame(seed: int, size: int = 64) -> "numpy.ndarray":
     return numpy.repeat(plane[:, :, None], 3, axis=2)
 
 
-def _textured_frame(seed: int, size: int = 64) -> "numpy.ndarray":
+def _textured_frame(seed: int, size: int = 64) -> "np.ndarray":
     """A frame of random 4x4 blocks, which reads 2-4 on the noise statistic."""
 
     rng = numpy.random.default_rng(seed)
@@ -722,7 +726,7 @@ def _textured_frame(seed: int, size: int = 64) -> "numpy.ndarray":
     return numpy.repeat(plane[:, :, None], 3, axis=2)
 
 
-def _stream_with(stream: Stream, frames: "dict[int, numpy.ndarray]") -> Stream:
+def _stream_with(stream: Stream, frames: "dict[int, np.ndarray]") -> Stream:
     """`stream` with the given frames replaced, naming its camera."""
 
     return replaced_frames(stream, frames).model_copy(
@@ -744,6 +748,7 @@ def _corrupt_findings(streams: list[Stream]):
             )
         )
     report = builder.finish(root=UPath("."))
+    assert isinstance(report, Report)
     return report, [
         f for f in report.findings if f.metric_id == "vision.corrupt_frame_pct"
     ]
@@ -828,9 +833,11 @@ def test_streak_garbage_is_caught_against_its_camera():
     assert finding.source_field == "observation.images.up"
     assert finding.evidence["relative_indices"]
     assert finding.value == 50
-    assert {e.id for e in report.episodes if e.eligibility.status == "blocked"} == {
-        "episode_000003"
-    }
+    assert {
+        e.id
+        for e in report.episodes
+        if e.eligibility is not None and e.eligibility.status == "blocked"
+    } == {"episode_000003"}
 
 
 def test_a_textured_camera_is_its_own_norm():
@@ -847,7 +854,10 @@ def test_a_textured_camera_is_its_own_norm():
     report, findings = _corrupt_findings(streams)
 
     assert findings == []
-    assert all(e.eligibility.status != "blocked" for e in report.episodes)
+    assert all(
+        e.eligibility is not None and e.eligibility.status != "blocked"
+        for e in report.episodes
+    )
     [stream] = report.episodes[0].streams
     assert stream.metrics["corrupt_frame_pct"].evidence["candidates"]
 

@@ -1949,10 +1949,15 @@ def test_corrupt_footage_warning_lists_blocked_episodes(tmp_path):
         )
 
     report = builder.finish(root=UPath(tmp_path))
+    assert isinstance(report, Report)
 
     [warning] = [w for w in report.dataset_warnings if w.code == "corrupt_footage"]
     assert warning.message == (
         "2 of 6 episodes are blocked for corrupt camera footage, in 1 run: 2-3"
     )
-    blocked = {e.id for e in report.episodes if e.eligibility.status == "blocked"}
+    blocked = {
+        e.id
+        for e in report.episodes
+        if e.eligibility is not None and e.eligibility.status == "blocked"
+    }
     assert blocked == {"episode_000002", "episode_000003"}
