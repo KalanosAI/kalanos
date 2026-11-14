@@ -98,6 +98,7 @@ from kalanos.analysis.scoring.cameras import (
     camera_key,
     camera_samples,
     compare_cameras,
+    regrade_corrupt_footage,
 )
 from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
@@ -1059,6 +1060,13 @@ class ReportBuilder:
         producer = producer or Producer(version="unknown")
         producer = producer.model_copy(
             update={"metrics": detector_versions(), "adapters": adapters}
+        )
+        findings = regrade_corrupt_footage(
+            findings,
+            (sample for summary in summaries for sample in summary.camera_samples),
+            policy_for=lambda episode_id: scope_policy(
+                policies[episode_id], requirements
+            ),
         )
         findings = apply_calibration(findings, policies, run, scope, producer)
         diagnostic_results = self._diagnostic_results
