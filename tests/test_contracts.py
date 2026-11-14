@@ -95,6 +95,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "cut_count": None,
     "dropped_chunk_count": None,
     "video_control_lag_ms": None,
+    "still_scene_pct": None,
 }
 
 _BUILT_IN_MODULE_PREFIX = "kalanos.analysis.metrics."

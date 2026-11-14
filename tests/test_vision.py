@@ -56,6 +56,7 @@ from kalanos.analysis.metrics.vision import (
     max_gap_s,
     pts_defect_pct,
     sharpness_score,
+    still_scene_pct,
     video_format_consistency,
 )
 from kalanos.analysis.models.binding import RequirementsSection
@@ -3226,3 +3227,163 @@ def test_a_frozen_camera_is_a_finding_only_on_real_footage(simulated):
         assert result.status == MetricStatus.REPORT_ONLY
         assert result.points is None
         assert "simulated" in result.evidence["ungraded_reason"]
+
+
+# ░█▀▀░▀█▀░▀█▀░█░░░█░░░░░█▀▀░█▀▀░█▀▀░█▀█░█▀▀
+# ░▀▀█░░█░░░█░░█░░░█░░░░░▀▀█░█░░░█▀▀░█░█░█▀▀
+# ░▀▀▀░░▀░░▀▀▀░▀▀▀░▀▀▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀▀▀
+
+
+def _still_scene(
+    still: tuple[int, int] | None,
+    *,
+    frames: int = 300,
+    hz: float = 30.0,
+    size: int = 256,
+    sigma: float = 2.0,
+    seed: int = 42,
+) -> Stream:
+    """A gradient scene with a disc crossing it, holding still in `[start, end)`.
+
+    Each frame carries seeded Gaussian noise of `sigma` grey levels.
+    With `still=None` the disc moves throughout.
+    """
+
+    rows, cols = numpy.mgrid[:size, :size]
+    background = 60 + 100 * (rows + cols) / (2 * size)
+    radius = size // 8
+    shots = []
+    for index in range(frames):
+        moved = index
+        if still is not None and still[0] <= index < still[1]:
+            moved = still[0]
+        x = (moved * 4) % size
+        disc = (rows - size // 2) ** 2 + (cols - x) ** 2 < radius**2
+        scene = numpy.where(disc, 220.0, background)
+        noise = numpy.random.default_rng(seed + index).normal(0, sigma, (size, size))
+        gray = numpy.clip(numpy.round(scene + noise), 0, 255).astype(numpy.uint8)
+        shots.append(numpy.repeat(gray[:, :, None], 3, axis=2))
+    base = clean_frames(frames=frames, hz=hz, height=size, width=size)
+    return base.model_copy(update={"payload": SyntheticFrames(frames=shots)})
+
+
+def _still_result(stream: Stream, **kwargs):
+    """Grade `still_scene_pct` over every frame of `stream`."""
+
+    return still_scene_pct(stream_context(stream, full_frame_scan=True, **kwargs))
+
+
+def test_a_still_stretch_is_reported_with_its_time_range():
+    """Seven seconds of a motionless scene is one stretch, placed in time."""
+
+    result = _still_result(_still_scene((60, 270)))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    [(start_s, end_s)] = result.evidence["stretches_s"]
+    assert start_s == pytest.approx(2.0, abs=0.5)
+    assert end_s == pytest.approx(9.0, abs=0.5)
+    [interval] = result.support.intervals
+    # The first reading of a stretch looks back one lag,
+    # and the rolling median lets the last one reach past the pause by up to as much.
+    lag = result.evidence["lag"]
+    assert 60 - lag <= interval.start
+    assert interval.end_exclusive <= 270 + lag
+    assert result.value == pytest.approx(
+        100 * (interval.end_exclusive - interval.start) / 300
+    )
+
+
+def test_sensor_noise_in_a_still_scene_counts_as_still():
+    """A scene that only flickers with sensor noise is one stretch, all of it still."""
+
+    stream = _still_scene((0, 300), sigma=3.0)
+    result = _still_result(stream)
+
+    [(start_s, end_s)] = result.evidence["stretches_s"]
+    assert end_s - start_s >= 9.0
+    frames = vision._frames(stream_context(stream, full_frame_scan=True))
+    assert isinstance(frames, vision._Frames)
+    readings = [change for _index, change in frames.still_changes]
+    assert readings
+    assert max(readings) < vision._STILL_CHANGE
+
+
+def test_a_moving_scene_has_no_still_stretch():
+    """A disc crossing the scene throughout never reads as still."""
+
+    result = _still_result(_still_scene(None))
+
+    assert result.value == 0
+    assert result.evidence["stretches_s"] == []
+    assert result.evidence["first_stretch_index"] is None
+    assert result.support.intervals == []
+
+
+def test_a_pause_under_five_seconds_is_not_counted():
+    """Four seconds of stillness is under the limit."""
+
+    assert _still_result(_still_scene((60, 180))).value == 0
+
+
+def test_blank_frames_are_never_still():
+    """Every reading of an all-black stream is blank, so none is still."""
+
+    black = [numpy.zeros((64, 64, 3), dtype=numpy.uint8)] * 300
+    stream = clean_frames(frames=300, height=64, width=64).model_copy(
+        update={"payload": SyntheticFrames(frames=black)}
+    )
+
+    result = _still_result(stream)
+
+    assert result.value == 0
+    assert result.evidence["n_readings"] > 0
+    assert result.evidence["n_blank_readings"] == result.evidence["n_readings"]
+
+
+def test_simulated_footage_reads_still_like_real():
+    """A rendered scene that repeats exactly reads 0 change, and is a stretch."""
+
+    ramp = numpy.repeat(
+        numpy.linspace(30, 200, 64).astype(numpy.uint8)[None, :, None], 64, axis=0
+    )
+    frame = numpy.repeat(ramp, 3, axis=2)
+    stream = clean_frames(frames=300, height=64, width=64).model_copy(
+        update={"payload": SyntheticFrames(frames=[frame] * 300)}
+    )
+
+    real = _still_result(stream, simulated=False)
+    simulated = _still_result(stream, simulated=True)
+
+    assert simulated == real
+    assert real.value is not None
+    assert real.value > 90
+    frames = vision._frames(stream_context(stream, full_frame_scan=True))
+    assert isinstance(frames, vision._Frames)
+    assert {change for _index, change in frames.still_changes} == {0.0}
+
+
+def test_still_scene_needs_a_full_scan():
+    """The sampled read's 1 s windows cannot hold a 5 s stretch."""
+
+    result = still_scene_pct(stream_context(_still_scene((0, 300))))
+
+    assert (
+        _assert_not_applicable(result)
+        == "needs every frame; grade with --full-frame-scan"
+    )
+
+
+def test_still_scene_decodes_nothing_after_the_shared_read(monkeypatch):
+    """Reading stillness adds no decode to the full scan freezes already share."""
+
+    calls = _count_decodes(monkeypatch)
+    ctx = stream_context(
+        _still_scene((0, 300)),
+        episode_streams=[_moving_actions(300)],
+        full_frame_scan=True,
+    )
+
+    frozen_frame_pct(ctx)
+    still_scene_pct(ctx)
+
+    assert len(calls) == 1

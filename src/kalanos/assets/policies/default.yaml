@@ -176,6 +176,10 @@ metrics:
   vision.video_control_lag_ms:
     report_only: true
 
+  # Reported, never graded: a still stretch can be an idle robot or a dead scene, and the threshold is a candidate (docs/METRICS.md).
+  vision.still_scene_pct:
+    report_only: true
+
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
   vision.frozen_frame_pct:
     weight: 6
