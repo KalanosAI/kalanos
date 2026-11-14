@@ -98,6 +98,7 @@ from kalanos.analysis.scoring.cameras import (
     camera_key,
     camera_samples,
     compare_cameras,
+    find_shared_footage,
     regrade_corrupt_footage,
 )
 from kalanos.analysis.scoring.container_hints import (
@@ -1099,12 +1100,20 @@ class ReportBuilder:
             findings.extend(
                 review_findings([r for rs in diagnostic_results.values() for r in rs])
             )
+        camera_sample_list = [
+            sample for summary in summaries for sample in summary.camera_samples
+        ]
+        vision_graded = grades_vision(requirements)
         cameras, camera_findings = compare_cameras(
-            (sample for summary in summaries for sample in summary.camera_samples),
-            grades_vision=grades_vision(requirements),
-            footage=footage,
+            camera_sample_list, grades_vision=vision_graded, footage=footage
         )
         findings.extend(camera_findings)
+        shared_footage, shared_findings = find_shared_footage(
+            camera_sample_list,
+            [s.id for s in summaries],
+            grades_vision=vision_graded,
+        )
+        findings.extend(shared_findings)
         duplicates, duplicate_findings, near_duplicates, motion_variation = (
             find_duplicate_episodes([s.id for s in summaries], fingerprints)
         )
@@ -1225,6 +1234,7 @@ class ReportBuilder:
             binding_conflicts=list(binding_conflicts),
             cameras=cameras,
             duplicates=duplicates,
+            shared_footage=shared_footage,
             near_duplicates=near_duplicates,
             motion_variation=motion_variation,
             dataset_warnings=dataset_warnings,

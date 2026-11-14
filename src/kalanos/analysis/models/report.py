@@ -612,6 +612,21 @@ class CameraSummary(BaseModel):
     visual_variation: Variation | None = None
 
 
+class FootageStream(BaseModel):
+    """One camera stream of one episode, named by its position in `Report.episodes`.
+
+    Attributes
+    ----------
+    episode : int
+        An index into `Report.episodes`.
+    camera : str
+        The camera key, as `CameraSummary.camera`.
+    """
+
+    episode: int
+    camera: str
+
+
 class NearPairs(BaseModel):
     """The listed pairs of episodes within the near-duplicate limit.
 
@@ -949,6 +964,13 @@ class Report(BaseModel):
         `near_duplicates.pairs_listed` then falls short of `pairs_near`.
         A report written before this encoding listed one object per pair,
         and is converted on load.
+    shared_footage : list[list[FootageStream]]
+        Each group of camera streams whose sampled frames hash identically
+        and that sit under two or more camera keys,
+        each group's streams in episode order,
+        the groups ordered by their first stream.
+        A `vision.repeated_footage_across_cameras` finding's `value` counts
+        the group's streams under other camera keys.
     near_duplicates : NearDuplicateSummary or None
         How many pairs the near-duplicate search found, and whether that many
         leaves the near tier uninformative for this dataset.
@@ -1008,6 +1030,7 @@ class Report(BaseModel):
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
+    shared_footage: list[list[FootageStream]] = Field(default_factory=list)
     near_duplicates: NearDuplicateSummary | None = None
     motion_variation: Variation | None = None
     dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
@@ -1185,7 +1208,7 @@ def check_agreement(
     Every episode carries an eligibility; its compatibility `train_ready`
     mirrors it exactly; the gate's failing list is exactly the blocked
     episodes; the counts partition the episodes plus the failed ones;
-    and every index in `duplicates` names an episode.
+    and every index in `duplicates` and `shared_footage` names an episode.
 
     Parameters
     ----------
@@ -1211,9 +1234,12 @@ def check_agreement(
         *(k for group in report.duplicates.exact for k in group),
         *near.episode,
         *(k for partners in near.partners for k in partners),
+        *(stream.episode for group in report.shared_footage for stream in group),
     ]
     if any(not 0 <= k < len(episode_ids) for k in indices):
-        raise ValueError("duplicates names an episode index outside episodes")
+        raise ValueError(
+            "duplicates or shared_footage names an episode index outside episodes"
+        )
     if report.coverage is not None:
         from kalanos.analysis.coverage import report_coverage
 

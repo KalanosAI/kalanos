@@ -36,6 +36,7 @@ from kalanos.analysis.models.provenance import FailedEpisode, Inventory
 from kalanos.analysis.models.report import (
     AgreementRow,
     DuplicateEpisodes,
+    FootageStream,
     GradedEpisode,
     Report,
     check_agreement,
@@ -636,6 +637,12 @@ def _blocked(report: Report) -> tuple[Report, list[AgreementRow], list]:
             "index outside episodes",
         ),
         (
+            lambda r: _with(
+                r, shared_footage=[[FootageStream(episode=99, camera="up")]]
+            ),
+            "index outside episodes",
+        ),
+        (
             lambda r: (r, _rows(r), [None, *_ledgers(r)[1:]]),
             "requires episode ledgers",
         ),
@@ -706,6 +713,7 @@ def _blocked(report: Report) -> tuple[Report, list[AgreementRow], list]:
     ids=[
         "ids",
         "duplicates",
+        "shared-footage",
         "ledger",
         "coverage",
         "findings",

@@ -22,8 +22,10 @@ from kalanos.analysis.models.report import (
     CameraFrame,
     CameraFrames,
     CameraSummary,
+    FootageStream,
     GradedEpisode,
     GradedStream,
+    Report,
     round_nrmse,
 )
 from kalanos.analysis.models.scoring import Finding, ScoreResult
@@ -33,6 +35,7 @@ from kalanos.analysis.scoring.cameras import (
     FootageVariation,
     camera_samples,
     compare_cameras,
+    find_shared_footage,
 )
 from kalanos.assets.policy import load_default_policy
 
@@ -394,6 +397,163 @@ def test_an_incomplete_read_is_not_compared():
     assert findings == []
 
 
+ACROSS = "vision.repeated_footage_across_cameras"
+HIGH = "observation.images.cam_high"
+LOW = "observation.images.cam_low"
+
+
+def _two_cameras(index: int, high: list[str], low: list[str], **kwargs):
+    """One episode holding a `cam_high` and a `cam_low` stream with the given hashes."""
+
+    return _episode(
+        index,
+        _stream(1.0, 100.0, source_field=HIGH, luma=high),
+        _stream(1.0, 100.0, source_field=LOW, luma=low, **kwargs),
+    )
+
+
+def _shared(
+    episodes: list[GradedEpisode], **options
+) -> tuple[list[list[FootageStream]], list[Finding]]:
+    """The footage shared across camera keys in graded episodes.
+
+    Parameters
+    ----------
+    episodes : list[GradedEpisode]
+        The graded episodes.
+    **options
+        Passed on to `find_shared_footage`.
+
+    Returns
+    -------
+    tuple of (list of list of FootageStream, list of Finding)
+        What `find_shared_footage` returns.
+    """
+
+    return find_shared_footage(
+        [sample for e in episodes for sample in camera_samples(e)],
+        [e.id for e in episodes],
+        **options,
+    )
+
+
+def test_the_same_footage_under_two_cameras_is_flagged():
+    """One recording stored under two camera keys is reported for both."""
+
+    episodes = [_two_cameras(0, ["a", "b", "c"], ["a", "b", "c"])]
+
+    groups, findings = _shared(episodes, grades_vision=True)
+
+    assert groups == [
+        [FootageStream(episode=0, camera=HIGH), FootageStream(episode=0, camera=LOW)]
+    ]
+    assert [(f.metric_id, f.episode_id, f.evidence["camera"]) for f in findings] == [
+        (ACROSS, "episode_0", HIGH),
+        (ACROSS, "episode_0", LOW),
+    ]
+    assert [f.value for f in findings] == [1.0, 1.0]
+    assert all(
+        f.evidence == {"camera": f.evidence["camera"], "n_frames": 3} for f in findings
+    )
+    assert all(f.severity.value == "critical" for f in findings)
+    assert all(f.consequence is Consequence.REVIEW for f in findings)
+
+    _groups, findings = _shared(episodes, grades_vision=False)
+
+    assert len(findings) == 2
+    assert all(f.severity.value == "warning" for f in findings)
+    assert all(f.consequence is Consequence.REPORT_ONLY for f in findings)
+
+
+def test_the_same_footage_across_episodes_and_cameras_is_flagged():
+    """A camera's footage found under another key in another episode is reported."""
+
+    episodes = [
+        _two_cameras(0, ["a", "b", "c"], ["x", "y", "z"]),
+        _two_cameras(1, ["p", "q", "r"], ["a", "b", "c"]),
+    ]
+
+    groups, findings = _shared(episodes, grades_vision=True)
+
+    assert groups == [
+        [FootageStream(episode=0, camera=HIGH), FootageStream(episode=1, camera=LOW)]
+    ]
+    assert [(f.episode_id, f.evidence["camera"]) for f in findings] == [
+        ("episode_0", HIGH),
+        ("episode_1", LOW),
+    ]
+
+
+def test_a_group_is_stored_once_and_counted_in_each_finding():
+    """Three streams of one footage make one group,
+    and each finding counts the streams under other camera keys."""
+
+    episodes = [_two_cameras(i, ["a", "b", "c"], ["x", "y", str(i)]) for i in range(2)]
+    episodes.append(_two_cameras(2, ["p", "q", "r"], ["a", "b", "c"]))
+
+    groups, findings = _shared(episodes, grades_vision=True)
+
+    assert groups == [
+        [
+            FootageStream(episode=0, camera=HIGH),
+            FootageStream(episode=1, camera=HIGH),
+            FootageStream(episode=2, camera=LOW),
+        ]
+    ]
+    assert [f.value for f in findings] == [1.0, 1.0, 2.0]
+    assert all("same_as" not in f.evidence for f in findings)
+
+
+def test_groups_and_members_come_in_order_of_first_appearance():
+    """Two interleaved groups are each ordered by their earliest stream."""
+
+    episodes = [
+        _two_cameras(0, ["a", "b", "c"], ["p", "q", "r"]),
+        _two_cameras(1, ["x", "y", "z"], ["a", "b", "c"]),
+        _two_cameras(2, ["p", "q", "r"], ["s", "t", "u"]),
+    ]
+
+    groups, findings = _shared(episodes, grades_vision=True)
+
+    assert groups == [
+        [FootageStream(episode=0, camera=HIGH), FootageStream(episode=1, camera=LOW)],
+        [FootageStream(episode=0, camera=LOW), FootageStream(episode=2, camera=HIGH)],
+    ]
+    assert {f.unit for f in findings} == {"streams"}
+    assert [(f.episode_id, f.evidence["camera"]) for f in findings] == [
+        ("episode_0", HIGH),
+        ("episode_1", LOW),
+        ("episode_0", LOW),
+        ("episode_2", HIGH),
+    ]
+
+
+def test_cameras_with_different_footage_are_not_flagged():
+    """Two views hash differently, and a constant camera cannot match."""
+
+    for episode in (
+        _two_cameras(0, ["a", "b", "c"], ["a", "b", "d"]),
+        _two_cameras(0, ["a", "a", "a"], ["a", "a", "a"]),
+    ):
+        assert _shared([episode], grades_vision=True) == ([], [])
+
+
+def test_an_incomplete_read_is_not_compared_across_cameras():
+    """A read that missed rows hashes only part of the stream."""
+
+    episodes = [_two_cameras(0, ["a", "b", "c"], ["a", "b", "c"], missing_rows=[2])]
+
+    assert _shared(episodes, grades_vision=True) == ([], [])
+
+
+def test_footage_repeated_under_one_key_alone_is_not_shared():
+    """Same-key repeats are `repeated_footage_vs_camera`'s, not this pass's."""
+
+    episodes = _hashed(["a", "b", "c"], ["a", "b", "c"])
+
+    assert _shared(episodes, grades_vision=True) == ([], [])
+
+
 def test_footage_variation_matches_every_pair():
     """The running sums give the RMS over every pair of the pairs' RMS difference."""
 
@@ -529,6 +689,52 @@ def _cameras(count: int = 6, *, frames: int = 20) -> list[Stream]:
     return [
         _stream_with(scene_frames(frames, seed=number), {}) for number in range(count)
     ]
+
+
+def test_a_report_names_the_episodes_of_its_shared_footage():
+    """A graded report holds the group by episode index, and reloads it."""
+
+    builder = ReportBuilder(policy=load_default_policy(), full_frame_scan=True)
+    scenes = [(0, 100), (1, 0), (2, 102)]
+    for number, (up, down) in enumerate(scenes, start=1):
+        streams = [
+            replaced_frames(scene_frames(20, seed=up), {}).model_copy(
+                update={"source_field": "observation.images.up"}
+            ),
+            replaced_frames(scene_frames(20, seed=down), {}).model_copy(
+                update={"source_field": "observation.images.down"}
+            ),
+        ]
+        builder.add(
+            AnalysedEpisode(
+                episode=Episode(id=f"episode_{number:06d}", streams=streams),
+                adapter="test",
+                adapter_confidence=1.0,
+                policy=load_default_policy(),
+            )
+        )
+    report = builder.finish(root=UPath("."))
+    assert isinstance(report, Report)
+
+    assert [
+        [(report.episodes[s.episode].id, s.camera) for s in group]
+        for group in report.shared_footage
+    ] == [
+        [
+            ("episode_000001", "observation.images.up"),
+            ("episode_000002", "observation.images.down"),
+        ]
+    ]
+    assert [
+        (f.episode_id, f.source_field) for f in report.findings if f.metric_id == ACROSS
+    ] == [
+        ("episode_000001", "observation.images.up"),
+        ("episode_000002", "observation.images.down"),
+    ]
+    payload = report.model_dump(mode="json")
+    assert Report.model_validate(payload).shared_footage == report.shared_footage
+    del payload["shared_footage"]
+    assert Report.model_validate(payload).shared_footage == []
 
 
 def test_streak_frames_read_between_the_floor_and_the_bound():

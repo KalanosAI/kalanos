@@ -262,6 +262,19 @@ def test_a_duplicate_index_outside_the_episodes_is_refused():
         kalanos.Report.model_validate(payload)
 
 
+def test_a_shared_footage_index_outside_the_episodes_is_refused():
+    """Verify `shared_footage` can only name episodes the report holds."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    n = len(payload["episodes"])
+    payload["shared_footage"] = [
+        [{"episode": 0, "camera": "a"}, {"episode": n, "camera": "b"}]
+    ]
+
+    with pytest.raises(ValueError, match="outside episodes"):
+        kalanos.Report.model_validate(payload)
+
+
 def test_a_graded_report_rolls_up_each_metric_and_round_trips_them():
     """Verify the dataset and episode scores carry per-metric rollups that reload."""
 

@@ -21,10 +21,12 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `datasets[].simulator` | `str` or `null` | The simulator a LeRobot dataset card's tags name, lower-cased; `null` when it names none or the dataset has no card. |
 | `streams[].metrics["frozen_frame_pct"].evidence["footage"]` | `"simulated"` | Present only on simulated footage, where the result stays `report_only` with an `ungraded_reason` and raises no finding. |
 | `streams[].metrics["still_scene_pct"]` | `MetricResult` | The share of a camera stream's frames inside stretches of at least 5 s whose picture changes by under 3 grey levels over 1 s, with each stretch's time range in `stretches_s` in its evidence. Measured under a full frame scan only, `not_applicable` otherwise. Report-only. |
+| `shared_footage` | `list[list[FootageStream]]` | Each group of camera streams whose sampled frames hash identically and that sit under two or more camera keys. A `FootageStream` is `{episode, camera}`: `episode` is an index into `episodes`, `camera` a `cameras[].camera`. Streams are in episode order, and groups are ordered by their first stream. Empty by default, so an older report loads unchanged. |
+| `findings[]` with `metric_id` `vision.repeated_footage_across_cameras` | `Finding` | One per stream in a `shared_footage` group. `value` counts the streams in the group under other camera keys, `evidence` holds `camera` and `n_frames`. |
 
 `GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it has no `shared_footage`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 
