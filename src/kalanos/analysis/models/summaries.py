@@ -58,6 +58,18 @@ class CameraSample(BaseModel):
     luma : tuple[str, ...] or None
         The luminance hashes of a complete read, in order,
         `None` when they cannot identify the footage.
+    corrupt_share : float or None
+        The computed `corrupt_frame_pct` value, `None` when it did not compute.
+    corrupt_bad : tuple[int, ...]
+        The frames that metric counted as corrupt.
+    corrupt_median : float or None
+        The median noise statistic over the stream's non-blank frames,
+        `None` when every frame was blank or the metric did not compute.
+    corrupt_candidates : tuple[tuple[int, float], ...]
+        The frames that read between the metric's floor and its noise bound,
+        each with its noise statistic, for the camera-relative rule.
+    n_sampled, n_frames : int or None
+        The metric's sampled and declared frame counts.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -73,6 +85,48 @@ class CameraSample(BaseModel):
     dark_share: float | None
     bright_share: float | None
     luma: tuple[str, ...] | None
+    corrupt_share: float | None = None
+    corrupt_bad: tuple[int, ...] = ()
+    corrupt_median: float | None = None
+    corrupt_candidates: tuple[tuple[int, float], ...] = ()
+    n_sampled: int | None = None
+    n_frames: int | None = None
+
+
+class ContainerSample(BaseModel):
+    """One video file of one camera, with what the container hints read of it.
+
+    Attributes
+    ----------
+    camera : str
+        The camera, as `camera_key` names it.
+    source_path : str
+        The video file.
+    width, height : int or None
+        The container's frame size.
+    fps : float or None
+        The container's average frame rate.
+    bit_rate : int or None
+        The file's bitrate in bits per second.
+    rotation_deg : float or None
+        The display rotation of the file's first frame, in degrees counterclockwise.
+    interlaced : bool or None
+        Whether the file's first frame is interlaced.
+    color_transfer : str or None
+        The transfer characteristic, as FFmpeg names it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    camera: str
+    source_path: str
+    width: int | None
+    height: int | None
+    fps: float | None
+    bit_rate: int | None
+    rotation_deg: float | None
+    interlaced: bool | None
+    color_transfer: str | None
 
 
 class GateCounts(BaseModel):
@@ -115,6 +169,8 @@ class EpisodeSummary(BaseModel):
         The reasons its eligibility owes to the scope's requirements, not to findings.
     camera_samples : list[CameraSample]
         Its first stream of each camera.
+    container_samples : list[ContainerSample]
+        Its camera streams' container formats, one per video file.
     gate_counts : GateCounts
         What the gate's coverage reads of its metric results.
     metric_subjects : list[MetricSubject]
@@ -124,6 +180,9 @@ class EpisodeSummary(BaseModel):
         One row per coverage metric that errored.
     unmapped_types : frozenset[str]
         The taxonomy types of its streams that no mapping typed.
+    ungraded_instruction_missing : bool or None
+        Whether it has no task instruction, when the policy does not grade that.
+        `None` when the metric did not run or the policy grades it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -134,7 +193,9 @@ class EpisodeSummary(BaseModel):
     score: ScoreResult
     requirement_reasons: list[EligibilityReason]
     camera_samples: list[CameraSample]
+    container_samples: list[ContainerSample]
     gate_counts: GateCounts
     metric_subjects: list[MetricSubject]
     operational_errors: list[dict[str, str]]
     unmapped_types: frozenset[str]
+    ungraded_instruction_missing: bool | None

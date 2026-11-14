@@ -6,13 +6,16 @@
 
 # Built-in
 import math
+from fractions import Fraction
 
 # External
 import polars as pl
 import pytest
+from upath import UPath
 
 # Internal
-from kalanos.analysis.metrics import continuity, vision
+from kalanos.analysis.adapters.video import VideoPayload
+from kalanos.analysis.metrics import continuity, registry, vision
 from kalanos.analysis.metrics.continuity import (
     _EDGE,
     _plan_cuts,
@@ -21,8 +24,15 @@ from kalanos.analysis.metrics.continuity import (
     video_control_lag_ms,
 )
 from kalanos.analysis.metrics.vision import sharpness_score
+from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.diagnostics import VisionSpec
-from kalanos.analysis.models.domain import FramePayload, Stream
+from kalanos.analysis.models.domain import (
+    Clock,
+    FramePayload,
+    Kind,
+    Stream,
+    TimestampDtype,
+)
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.assets.policy import load_default_policy
 from kalanos.testing import (
@@ -159,6 +169,71 @@ def _context(video: Stream, *controls: Stream, full_frame_scan: bool = False):
     return stream_context(
         video, episode_streams=[video, *controls], full_frame_scan=full_frame_scan
     )
+
+
+def _denser_camera(tmp_path) -> tuple[Stream, Stream, Stream]:
+    """A camera whose file holds 360 frames over its 300 timestamps, with its controls.
+
+    The payload declares 300 frames over 12 s, a frame rate of 25,
+    so a full read bounded by pts takes all 360 frames the file holds.
+    State and action keep the 300 rows the timestamps cover.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Where to write the video.
+
+    Returns
+    -------
+    tuple of (Stream, Stream, Stream)
+        `(video, state, action)`.
+    """
+
+    av = pytest.importorskip("av")
+    synthetic, state, action = _tracking(samples=360)
+    assert isinstance(synthetic.payload, SyntheticFrames)
+
+    path = tmp_path / "denser.mp4"
+    container = av.open(str(path), "w")
+    encoder = container.add_stream("libx264", rate=30, options={"bf": "0"})
+    encoder.width = encoder.height = 64
+    encoder.pix_fmt = "yuv420p"
+    encoder.codec_context.time_base = Fraction(1, 30)
+    for tick, pixels in enumerate(synthetic.payload.frames):
+        frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+        frame.pts = tick
+        frame.time_base = Fraction(1, 30)
+        for packet in encoder.encode(frame):
+            container.mux(packet)
+    for packet in encoder.encode():
+        container.mux(packet)
+    container.close()
+
+    payload = VideoPayload(path=UPath(path), frame_count=300, start_s=0.0, end_s=12.0)
+    video = Stream(
+        taxonomy_type="unmapped.observation.images.up",
+        kind=Kind.VIDEO,
+        timestamps=pl.Series("time_s", [index / 30 for index in range(300)]),
+        timestamp_dtype=TimestampDtype.FLOAT64,
+        payload=payload,
+        source_path=payload.path,
+        clock=Clock.UNKNOWN,
+        is_regular=True,
+        channels=[],
+    )
+
+    def first_rows(stream: Stream) -> Stream:
+        """`stream` cut to the rows the camera's timestamps cover."""
+
+        assert isinstance(stream.payload, FramePayload)
+        return stream.model_copy(
+            update={
+                "timestamps": stream.timestamps.head(300),
+                "payload": FramePayload(frame=stream.payload.frame.head(300)),
+            }
+        )
+
+    return video, first_rows(state), first_rows(action)
 
 
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
@@ -541,3 +616,20 @@ def test_video_control_lag_passes_the_contract():
         ),
         policy=load_default_policy(),
     )
+
+
+@pytest.mark.parametrize("measure", [dropped_chunk_count, video_control_lag_ms])
+def test_footage_longer_than_its_timestamps_is_not_applicable(tmp_path, measure):
+    """Footage of 360 frames over 300 timestamps is not applicable and never errors."""
+
+    ctx = _context(*_denser_camera(tmp_path), full_frame_scan=True)
+
+    result = measure(ctx)
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert "360" in result.evidence["reason"]
+    assert "300" in result.evidence["reason"]
+    vision.clear_cache()
+    results = registry.run_stream_metrics(ctx)
+    assert results["dropped_chunk_count"].availability != Availability.ERROR
+    assert results["video_control_lag_ms"].availability != Availability.ERROR

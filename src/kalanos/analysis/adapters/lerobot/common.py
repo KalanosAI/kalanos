@@ -9,12 +9,14 @@ import json
 import logging
 import math
 import string
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 # External
 import polars as pl
+from polars.datatypes import DataTypeClass
 from upath import UPath
 
 # Internal
@@ -33,10 +35,14 @@ from kalanos.analysis.models.domain import (
     Kind,
     MappingSource,
     OriginEvidence,
+    SchemaCheck,
+    SchemaMismatch,
+    SchemaProblem,
     Stream,
     TimestampDtype,
 )
 from kalanos.assets.dictionary import load_default_dictionary
+from kalanos.assets.yaml_strict import YAMLError, safe_load_strict
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄░█▀█░▀█▀░▀█▀░█▀█░█▀█
@@ -50,12 +56,35 @@ CONFIDENCE = 0.95
 
 TIME_COLUMN = "timestamp"
 
+# A dataset card tag names a simulator when it starts with one of these,
+# lower-cased, so `Isaac-Sim` and `isaaclab` match `isaac`.
+SIMULATOR_TAGS = ("robosuite", "mujoco", "isaac")
+
+# A card's front matter is a short block of metadata; a file that has not
+# closed it by then is not read further.
+_CARD_FRONT_MATTER_LINES = 500
+
 # These index the dataset rather than measure anything captured in it.
 INDEX_COLUMNS = frozenset(
     {"timestamp", "episode_index", "frame_index", "index", "task_index"}
 )
 
 VIDEO_DTYPE = "video"
+IMAGE_DTYPE = "image"
+
+# Each declared dtype LeRobot writes, mapped to a test on the innermost stored type.
+# Width is not compared: a declared float64 stored as Float32 matches.
+_FAMILIES: dict[str, Callable[[pl.DataType | DataTypeClass], bool]] = {
+    **dict.fromkeys(("float16", "float32", "float64"), lambda t: t.is_float()),
+    **dict.fromkeys(
+        ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"),
+        lambda t: t.is_integer(),
+    ),
+    "bool": lambda t: t == pl.Boolean,
+    "string": lambda t: t == pl.String,
+    # A dataset with no annotations stores empty lists, whose innermost type is Null.
+    "language": lambda t: isinstance(t, pl.Struct) or t in (pl.String, pl.Null),
+}
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -356,9 +385,10 @@ def resolve_taxonomy(
 def declared_names(spec: dict[str, Any]) -> list[str]:
     """A feature's declared channel names, as one flat list.
 
-    LeRobot spells them either as a list (`"names": ["x", "y"]`) or nested
-    under a label, as ALOHA's `"names": {"motors": ["left_waist", ...]}`; the
-    nested lists are joined in order. Anything else declares no names.
+    LeRobot spells them as a list (`"names": ["x", "y"]`), nested under a
+    label, as ALOHA's `"names": {"motors": ["left_waist", ...]}`, or as a list
+    holding lists, as Unitree's `"names": [["kLeftShoulderPitch", ...]]`.
+    The nested lists are joined in order. Anything else declares no names.
 
     Parameters
     ----------
@@ -373,6 +403,15 @@ def declared_names(spec: dict[str, Any]) -> list[str]:
 
     names = spec.get("names")
     if isinstance(names, list):
+        if any(isinstance(item, list) for item in names):
+            if not all(isinstance(item, list) for item in names):
+                return []
+            flat_inner: list[str] = []
+            for inner in names:
+                if not all(isinstance(name, str) for name in inner):
+                    return []
+                flat_inner.extend(inner)
+            return flat_inner
         return [str(name) for name in names if isinstance(name, str)]
     if isinstance(names, dict):
         flat: list[str] = []
@@ -504,7 +543,8 @@ def describe_from_info(name: str, path: UPath, info: dict[str, Any]) -> DatasetI
     Returns
     -------
     DatasetInfo
-        `episode_count`, `nominal_rate_hz` and `robot_type`, as declared.
+        `episode_count`, `nominal_rate_hz` and `robot_type`, as declared,
+        and the `simulator` the dataset card's tags name.
     """
 
     return DatasetInfo(
@@ -513,7 +553,54 @@ def describe_from_info(name: str, path: UPath, info: dict[str, Any]) -> DatasetI
         episode_count=info.get("total_episodes"),
         nominal_rate_hz=_declared_rate(info.get("fps")),
         robot_type=info.get("robot_type"),
+        simulator=card_simulator(path),
     )
+
+
+def card_simulator(path: UPath) -> str | None:
+    """Read the simulator a dataset card's tags name, when it names one.
+
+    The card is `README.md` at the dataset root, whose YAML front matter
+    carries a `tags` list. A card is optional metadata, so any problem reading
+    it gives `None` rather than costing the dataset its other declared facts.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+
+    Returns
+    -------
+    str or None
+        The first tag that starts with a name in `SIMULATOR_TAGS`, lower-cased,
+        or `None` when the card is missing, unreadable or malformed,
+        or its tags name no simulator.
+    """
+
+    try:
+        with (path / "README.md").open("r", encoding="utf-8") as handle:
+            lines = [
+                line.rstrip("\r\n") for line in islice(handle, _CARD_FRONT_MATTER_LINES)
+            ]
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
+    except StopIteration:
+        return None
+    try:
+        front = safe_load_strict("\n".join(lines[1:end]))
+    except YAMLError:
+        return None
+    tags = front.get("tags") if isinstance(front, dict) else None
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        if isinstance(tag, str) and tag.lower().startswith(SIMULATOR_TAGS):
+            return tag.lower()
+    return None
 
 
 def _declared_rate(value: Any) -> float | None:
@@ -654,6 +741,129 @@ def storage_columns(frame: pl.DataFrame) -> pl.DataFrame:
     return frame.with_columns(pl.col(name).ext.storage() for name in extension_columns)
 
 
+def holds_numbers(dtype: pl.DataType) -> bool:
+    """Whether a column of `dtype` holds values grading can read as channels.
+
+    Parameters
+    ----------
+    dtype : pl.DataType
+        A data parquet column's type, as stored or as `storage_columns` left it.
+
+    Returns
+    -------
+    bool
+        True when the innermost type, past any extension, List and Array
+        wrappers, is numeric or Boolean.
+    """
+
+    innermost = _innermost(dtype)
+    # polars counts Boolean as non-numeric, yet Booleans grade as channels.
+    return innermost.is_numeric() or innermost == pl.Boolean
+
+
+def _innermost(dtype: pl.DataType | DataTypeClass) -> pl.DataType | DataTypeClass:
+    """Unwrap every extension, List and Array layer around a column's value type.
+
+    Parameters
+    ----------
+    dtype : pl.DataType | DataTypeClass
+        A data parquet column's type.
+
+    Returns
+    -------
+    pl.DataType | DataTypeClass
+        The type of the values the column ultimately holds.
+    """
+
+    innermost = dtype
+    while True:
+        if isinstance(innermost, pl.Extension):
+            innermost = innermost.ext_storage()
+        elif isinstance(innermost, (pl.List, pl.Array)):
+            innermost = innermost.inner
+        else:
+            return innermost
+
+
+def _declared_shape(spec: Mapping[str, Any]) -> list[int] | None:
+    """Read a feature's declared shape, or `None` when it is not a list of ints.
+
+    Parameters
+    ----------
+    spec : Mapping[str, Any]
+        One `info.json` feature entry.
+
+    Returns
+    -------
+    list[int] or None
+        The declared shape.
+    """
+
+    shape = spec.get("shape")
+    if isinstance(shape, list) and all(
+        isinstance(n, int) and not isinstance(n, bool) for n in shape
+    ):
+        return shape
+    return None
+
+
+def check_schema(
+    info: dict[str, Any], schema: Mapping[str, pl.DataType], source_path: UPath
+) -> SchemaCheck:
+    """Compare a data parquet's schema with every feature `info.json` declares.
+
+    Video and image features live outside the data parquet and are not
+    compared. A feature whose declared dtype this reader does not know is
+    checked for presence only, so an unfamiliar vocabulary never counts as a
+    mismatch.
+
+    Parameters
+    ----------
+    info : dict
+        The parsed `info.json`.
+    schema : Mapping[str, pl.DataType]
+        The data parquet's schema, as `pl.read_parquet_schema` reads it.
+    source_path : UPath
+        The data parquet `schema` was read from.
+
+    Returns
+    -------
+    SchemaCheck
+        The features compared and, for each that disagrees, how.
+    """
+
+    checked = []
+    mismatches = []
+    for key, spec in info.get("features", {}).items():
+        dtype = spec.get("dtype") if isinstance(spec, dict) else None
+        if dtype in (VIDEO_DTYPE, IMAGE_DTYPE):
+            continue
+        checked.append(key)
+        declared_shape = _declared_shape(spec) if isinstance(spec, dict) else None
+        family = _FAMILIES.get(dtype) if isinstance(dtype, str) else None
+        found = schema.get(key)
+        problem = None
+        if found is None:
+            problem = SchemaProblem.MISSING
+        elif family is not None and not family(_innermost(found)):
+            problem = SchemaProblem.DTYPE
+        elif family is not None and declared_shape:
+            outer = found.ext_storage() if isinstance(found, pl.Extension) else found
+            if isinstance(outer, pl.Array) and list(outer.shape) != declared_shape:
+                problem = SchemaProblem.SHAPE
+        if problem is not None:
+            mismatches.append(
+                SchemaMismatch(
+                    column=key,
+                    problem=problem,
+                    declared_dtype=str(dtype),
+                    declared_shape=declared_shape,
+                    found_dtype=None if found is None else str(found),
+                )
+            )
+    return SchemaCheck(source_path=source_path, checked=checked, mismatches=mismatches)
+
+
 def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:
     """Refuse a data parquet whose index columns hold lists instead of scalars.
 
@@ -750,7 +960,7 @@ def series_stream(
 
 def declared_series_streams(
     plan: FeaturePlan,
-    present_columns: Iterable[str],
+    schema: Mapping[str, pl.DataType],
     timestamps: pl.Series,
     source_path: UPath,
     *,
@@ -769,29 +979,39 @@ def declared_series_streams(
     ----------
     plan : FeaturePlan
         The dataset's resolved feature plan.
-    present_columns : Iterable[str]
-        The columns the data parquet's schema declares, from
-        `pl.read_parquet_schema`, so a missing column is still noticed.
+    schema : Mapping[str, pl.DataType]
+        The data parquet's schema, as `pl.read_parquet_schema` reads it, so a
+        missing column is still noticed and a column holding no numbers is skipped.
     """
 
-    present = set(present_columns)
-    return [
-        Stream(
-            taxonomy_type=taxonomy_type,
-            kind=Kind.SERIES,
-            timestamps=timestamps,
-            payload=None,
-            source_path=source_path,
-            source_field=feature,
-            mapping_source=mapping_source,
-            clock=clock,
-            timestamp_dtype=timestamp_dtype,
-            is_regular=is_regular,
-            channels=channels,
+    streams = []
+    for feature, (taxonomy_type, mapping_source, channels) in plan.series.items():
+        if feature not in schema:
+            continue
+        if not holds_numbers(schema[feature]):
+            logger.debug(
+                "%s: feature %r is stored as %s, not numbers; not graded",
+                source_path,
+                feature,
+                schema[feature],
+            )
+            continue
+        streams.append(
+            Stream(
+                taxonomy_type=taxonomy_type,
+                kind=Kind.SERIES,
+                timestamps=timestamps,
+                payload=None,
+                source_path=source_path,
+                source_field=feature,
+                mapping_source=mapping_source,
+                clock=clock,
+                timestamp_dtype=timestamp_dtype,
+                is_regular=is_regular,
+                channels=channels,
+            )
         )
-        for feature, (taxonomy_type, mapping_source, channels) in plan.series.items()
-        if feature in present
-    ]
+    return streams
 
 
 def series_streams(
@@ -809,7 +1029,8 @@ def series_streams(
     """Build one series Stream per `plan.series` feature present in `episode_frame`.
 
     A feature `plan.series` declares but `episode_frame` does not carry is
-    skipped with a debug log rather than raised.
+    skipped with a debug log rather than raised. A feature whose column holds
+    no numbers is skipped the same way.
 
     Parameters
     ----------
@@ -842,6 +1063,15 @@ def series_streams(
                 path,
                 episode_label,
                 feature,
+            )
+            continue
+        if not holds_numbers(episode_frame.schema[feature]):
+            logger.debug(
+                "%s: episode %s: feature %r is stored as %s, not numbers; not graded",
+                path,
+                episode_label,
+                feature,
+                episode_frame.schema[feature],
             )
             continue
         streams.append(

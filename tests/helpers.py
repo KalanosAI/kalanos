@@ -5,9 +5,12 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import math
+import random
 from collections.abc import Container, Sequence
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # External
 import polars as pl
@@ -16,6 +19,7 @@ from upath import UPath
 # Internal
 from kalanos.analysis.inference.dialect import sniff_dialect
 from kalanos.analysis.inference.infer import infer_schema
+from kalanos.analysis.models.binding import ChannelBinding, Representation
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -30,6 +34,12 @@ from kalanos.analysis.models.report import GradedEpisode
 from kalanos.analysis.models.schema import SourceSchema
 from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.assets.policy import load_policy
+from kalanos.testing import clean_frames
+from kalanos.testing.injectors import SyntheticFrames
+
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -247,6 +257,7 @@ def write_arm(
     glitched: set[int],
     tasks=None,
     jittered: Container[int] = frozenset(),
+    repeated: Container[int] = frozenset(),
 ) -> None:
     """Write an HDF5 arm recording of smooth 50 Hz joint commands.
 
@@ -254,6 +265,8 @@ def write_arm(
     `glitched` episodes get large command jumps.
     `jittered` episodes get a physical clock's 50 µs timestamp jitter, so they grade.
     The rest are exactly even, so their timing is not observable.
+    `repeated` episodes repeat the timestamp at rows 50, 51 and 120:
+    three violations, with rows 49-51 one run of three equal timestamps.
 
     Parameters
     ----------
@@ -267,6 +280,8 @@ def write_arm(
         One task instruction per episode, stored when not `None`.
     jittered : Container[int]
         The indices of the episodes whose timestamps get clock jitter.
+    repeated : Container[int]
+        The indices of the episodes whose timestamps repeat at rows 50, 51 and 120.
     """
 
     # Optional extras: importing the other helpers must not need them.
@@ -298,6 +313,11 @@ def write_arm(
             if index in jittered:
                 stamps = t + rng.normal(0, 5e-5, t.shape)
                 stamps[0] = 0.0
+            if index in repeated:
+                stamps = stamps.copy()
+                stamps[50] = stamps[49]
+                stamps[51] = stamps[50]
+                stamps[120] = stamps[119]
             group.create_dataset("timestamps", data=stamps)
             if tasks is not None and tasks[index] is not None:
                 group.attrs["task"] = tasks[index]
@@ -384,4 +404,141 @@ def channel_ctx(
     stream_ctx = StreamContext(stream=stream, is_regular=True)
     return ChannelContext(
         channel=stream.channels[0], values=payload.frame["value"], stream=stream_ctx
+    )
+
+
+def angle_ctx(
+    values: Sequence[float | None],
+    *,
+    unit: str | None,
+    representation: Representation = Representation.ANGLE,
+) -> ChannelContext:
+    """Bind a yaw channel on a 100 Hz clock, as an angle by default.
+
+    Parameters
+    ----------
+    values : Sequence[float or None]
+        The channel's samples.
+    unit : str or None
+        The unit the binding declares.
+    representation : Representation
+        How the binding says the yaw is encoded.
+
+    Returns
+    -------
+    ChannelContext
+        The channel from `channel_ctx`, with the binding set.
+    """
+
+    ctx = channel_ctx(values, rate_hz=100.0)
+    ctx.channel.binding = ChannelBinding(
+        feature="observation.yaw",
+        index=0,
+        taxonomy_type="unmapped.observation.yaw",
+        representation=representation,
+        unit=unit,
+    )
+    return ctx
+
+
+def yaw_swing(scale: float) -> list[float]:
+    """Swing a yaw slowly through 2.5 ± 1 rad, well clear of its seeded noise.
+
+    Parameters
+    ----------
+    scale : float
+        How many of the unit make one radian.
+
+    Returns
+    -------
+    list[float]
+        800 samples at 100 Hz, crossing π several times.
+    """
+
+    rng = random.Random(11)
+    return [
+        scale * (2.5 + math.sin(math.pi * i / 100)) + rng.gauss(0, scale * 0.001)
+        for i in range(800)
+    ]
+
+
+def wrap_angle(values: Sequence[float], half: float) -> list[float]:
+    """Map each value into (-half, half], as a wrapping angle sensor reports it.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        The angle as continuous motion.
+    half : float
+        Half the period the angle wraps by.
+
+    Returns
+    -------
+    list[float]
+        The wrapped values.
+    """
+
+    return [((v + half) % (2 * half)) - half for v in values]
+
+
+def _numpy():
+    """Import numpy, skipping the test that needs it when the video extra is absent."""
+
+    import pytest
+
+    return pytest.importorskip("numpy")
+
+
+def scene_frames(frames: int, size: int = 64, seed: int = 0) -> Stream:
+    """A camera stream of structured frames: a gradient with a moving filled disc.
+
+    The frames are smooth apart from the disc's edge, so they hold detail
+    without pixel noise.
+    """
+
+    numpy = _numpy()
+    rng = numpy.random.default_rng(seed)
+    rows, cols = numpy.mgrid[0:size, 0:size]
+    gradient = 255 * cols / (size - 1)
+    stream = clean_frames(frames=frames, height=size, width=size)
+    made = []
+    for index in range(frames):
+        centre = (size / 4 + (size / 2) * index / max(frames - 1, 1), size / 2)
+        inside = (rows - centre[1]) ** 2 + (cols - centre[0]) ** 2 < (size / 5) ** 2
+        scene = numpy.where(inside, 255, gradient + rng.uniform(-0.4, 0.4))
+        made.append(
+            numpy.repeat(scene[:, :, None], 3, axis=2)
+            .round()
+            .clip(0, 255)
+            .astype("uint8")
+        )
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=made)})
+
+
+def noise_frame(size: int, seed: int) -> "np.ndarray":
+    """One frame of seeded uniform noise."""
+
+    numpy = _numpy()
+    return numpy.random.default_rng(seed).integers(
+        0, 256, (size, size, 3), dtype=numpy.uint8
+    )
+
+
+def replaced_frames(stream: Stream, frames: dict[int, "np.ndarray"]) -> Stream:
+    """Copy `stream` with the frames at the given positions replaced."""
+
+    assert isinstance(stream.payload, SyntheticFrames)
+    spliced = list(stream.payload.frames)
+    for index, frame in frames.items():
+        spliced[index] = frame
+    return stream.model_copy(update={"payload": SyntheticFrames(frames=spliced)})
+
+
+def all_noise(stream: Stream) -> Stream:
+    """Copy `stream` with every frame replaced by seeded uniform noise."""
+
+    assert isinstance(stream.payload, SyntheticFrames)
+    size = stream.payload.frames[0].shape[0]
+    return replaced_frames(
+        stream, {i: noise_frame(size, i) for i in range(len(stream.payload.frames))}
     )

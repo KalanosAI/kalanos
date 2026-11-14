@@ -1,6 +1,6 @@
 """The vision family.
 
-Fourteen metrics measure camera footage:
+Seventeen metrics measure camera footage:
 
 - sharpness_score, exposure_shift_pct and exposure_level measure
   `StreamContext.vision_samples` evenly spaced frames of a camera stream
@@ -8,17 +8,26 @@ Fourteen metrics measure camera footage:
 - blank_frame_pct, contrast_score, dark_frame_pct and bright_frame_pct
   read the statistics blur and exposure keep of those same frames,
   decoding nothing more, and the default policy reports them without a band;
+- corrupt_frame_pct counts the sampled frames that are blank or decoder noise,
+  from each one's native luminance, and blocks through the contract route;
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
+- still_scene_pct reads the change of every frame against the frame 1 s earlier,
+  under a full scan only;
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
   decoding nothing, under a full scan too;
 - camera_sync_skew_ms compares the cameras of one episode through the same probe;
-- camera_stream_present and video_format_consistency share one read of the
-  container header, and presence also takes the segment's first frame.
+- camera_stream_present, video_format_consistency and delivery_spec_met share
+  one read of the container header, and presence also takes the segment's first frame;
+  frames_readable judges the segment's packet probe and the shared decode.
 
 Blur and exposure each judge one episode by itself,
 and `kalanos.analysis.scoring.cameras` compares one camera across episodes.
-Under `StreamContext.full_frame_scan`, blur, exposure and freezes read every frame.
+Under `StreamContext.full_frame_scan`, every frame is decoded,
+and exposure_shift_pct, the per-frame shares and freezes read every one of them.
+sharpness_score, contrast_score and exposure_level summarize the episode:
+they measure `VisionSpec.summary_ratio` of its frames, evenly spaced,
+plus the frames a sampled read would measure.
 
 The three share one decode,
 which also reads `kalanos.analysis.metrics.continuity.cut_count`'s windows
@@ -27,7 +36,7 @@ and the segment's first frame for presence:
 - when frozen_frame_pct runs, the sampled frames are taken from inside its
   windows, and otherwise only the sampled frames are decoded;
 - each frame is decoded as a 128x128 gray image for exposure and freezes,
-  and each sampled frame also at native resolution for blur;
+  and each frame the summary metrics measure also at native resolution for blur;
 - every frame is measured and dropped, so a full scan runs in flat memory;
   of the rest, only cut_count's thumbnails are kept.
 
@@ -46,10 +55,11 @@ import functools
 import hashlib
 import logging
 import math
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from dataclasses import field as dataclass_field
+from typing import TYPE_CHECKING, Any
 
 # External
 import polars as pl
@@ -88,7 +98,7 @@ from kalanos.analysis.models.report import (
     CameraFrames,
     VideoFormat,
 )
-from kalanos.analysis.optional import load_numpy
+from kalanos.analysis.optional import load_cv2, load_numpy
 from kalanos.assets.dictionary import load_dictionary
 
 
@@ -105,12 +115,14 @@ if TYPE_CHECKING:
         tuple[tuple[int, int], ...],  # the [start, end) windows read
         tuple[int, ...],  # the sampled frame positions
         tuple[int, ...],  # the evidence frame positions
+        tuple[int, ...],  # the summary frame positions
         int,  # VisionSpec.dark_level
         int,  # VisionSpec.bright_level
         int | None,  # the max_decode_frames cap, None under a full scan
         int,  # VisionSpec.max_pixels
         tuple[tuple[int, int], ...],  # cut_count's [start, end) windows
         bool,  # whether the first frame is read in a window of its own
+        tuple[int, int] | None,  # the (grid step, lag) stillness is read at
     ]
 
     _CutPlanEntry = tuple[
@@ -135,6 +147,8 @@ _SAMPLE_SIZE = 128
 # Blur is the share of edge energy a further 3x3 box blur removes:
 # a sharp frame loses most of it, an already soft one little, whatever its content.
 _REBLUR = 3
+# The 5-point Laplacian; `_laplacian_var` builds it as a float32 kernel.
+_LAPLACIAN_KERNEL = ((0, 1, 0), (1, -4, 1), (0, 1, 0))
 
 # Exposure is judged against the camera's own typical frame, not fixed gray levels:
 # a simulator's white background reads exactly like a camera blown out 4x.
@@ -149,6 +163,21 @@ _CLIP_RISE = 0.20
 # Contrast is otherwise no exposure signal: it follows what is in view,
 # and on lerobot/pusht a third of clean frames hold half the typical spread.
 _BLANK_SPREAD = 5
+# A non-blank frame is decoder noise when its Laplacian variance is at least this
+# multiple of its luminance variance, measured at native resolution.
+# Candidate: pixel noise reads about 20 in theory and 6-18 on a corrupt simulated
+# dataset, while clean footage on the calibration datasets reads 0.003-3.6.
+_NOISE_RATIO = 5.0
+# Candidate: a native P95 - P5 below this is a dark, noisy real scene and no garbage.
+# Dark frames with added noise read 5-12 at a spread of 11-22,
+# and every corrupt frame measured had a spread of 41 or more.
+_NOISE_MIN_SPREAD = 32
+# Candidate: on frames this small, edges alone dominate the noise statistic.
+# The smallest real camera in the calibration set is 96 px on its shorter side.
+_MIN_NOISE_SIDE = 32
+# Candidate: a frame between this and `_NOISE_RATIO` is kept as a candidate,
+# for the camera-relative rule in `kalanos.analysis.scoring.cameras`.
+_RELATIVE_FLOOR = 2.0
 # A frame is dark or bright when at least this share of its pixels is crushed
 # or clipped, the share `kalanos.analysis.scoring.cameras` uses for a camera's traits.
 _EXPOSED_SHARE = 0.5
@@ -175,6 +204,25 @@ _FREEZE_NOISE_PCT = 10
 # Freeze differences are scaled to this contrast,
 # so a dim camera's smaller frame changes are not mistaken for repeats.
 _FREEZE_CONTRAST = 255
+# Stillness is read from a small thumbnail of each frame.
+# The thumbnail is the 2x2 mean of the 64x64 one, which averages away sensor noise.
+_STILL_SIZE = 32
+# It is read on a grid of this many frames per second.
+_STILL_GRID_HZ = 2.0
+# Each grid frame is compared with the frame this long before it.
+_STILL_LAG_S = 1.0
+# A small moving arm changes a few cells by tens of levels,
+# so the change is a high percentile of the difference, not its mean.
+_STILL_PCT = 98
+# A reading is smoothed by the median of those within this much grid time
+# either side, when at least this many are finite.
+_STILL_SMOOTH_S = 2.0
+_STILL_SMOOTH_MIN = 3
+# Candidate: 2.0 splits a low-resolution camera's still stretches into pieces
+# (docs/METRICS.md, "Still scenes").
+_STILL_CHANGE = 3.0
+# The shortest stretch reported.
+_STILL_MIN_S = 5.0
 # A step moves if its mean |d action| exceeds this share of the 90th percentile (rda).
 _MOVING_SHARE = 0.05
 _MOVING_PCT = 90
@@ -240,18 +288,32 @@ class _Frames:
     n_read : int
         How many frames were decoded.
     sampled : list of int
-        The positions of the frames blur and exposure measure, among those decoded.
+        The positions of the frames exposure measures, among those decoded.
+    summary : list of int
+        The positions of the sampled frames also measured at native resolution,
+        the ones the summary metrics read: every sampled frame,
+        unless the read is a full scan.
+    summary_slots : list of int
+        Each summary frame's index into `sampled` and the lists aligned to it.
     loss : list of float
-        Each sampled frame's share of Laplacian variance
+        Each summary frame's share of Laplacian variance
         lost under a `_REBLUR` box blur.
     laplacian : list of float
-        Each sampled frame's native Laplacian variance.
+        Each summary frame's native Laplacian variance.
     mean, p5, p95 : list of float
         Each sampled frame's mean, 5th and 95th percentile gray level.
     white_share : list of float
         Each sampled frame's share of pixels at or above `VisionSpec.bright_level`.
     dark_share : list of float
         Each sampled frame's share of pixels at or below `VisionSpec.dark_level`.
+    noise : list of float
+        Each sampled frame's native Laplacian variance over its luminance variance,
+        `nan` for a frame of one gray level.
+    native_spread : list of float
+        Each sampled frame's native P95 - P5 spread.
+    min_side : int or None
+        The shortest side of any sampled frame at native resolution,
+        `None` when none was measured.
     diffs : list of tuple of (int, numpy.ndarray)
         Per range that decoded at least two frames, its start
         and the contrast-scaled mean absolute difference between each pair
@@ -260,13 +322,13 @@ class _Frames:
         The same ranges' starts, and the unscaled mean absolute difference
         between each pair of neighbouring thumbnails, blank or not.
     pts : list of float or None
-        Each sampled frame's presentation time, `None` where the payload has none.
+        Each summary frame's presentation time, `None` where the payload has none.
     shape : list of tuple of (int, int)
-        Each sampled frame's native `(height, width)`.
+        Each summary frame's native `(height, width)`.
     luma_sha256 : list of str
-        SHA-256 of each sampled frame's native luminance.
+        SHA-256 of each summary frame's native luminance.
     requested : list of int
-        The positions `_layout` asked blur and exposure to measure.
+        The summary positions the read was asked to measure.
     evidence_positions : list of int
         The positions a sampled read would measure,
         equal to `requested` unless the read is a full scan.
@@ -275,11 +337,19 @@ class _Frames:
         of its `_SAMPLE_SIZE` gray image, scaled to 0-1, keyed by position.
     stopped : tuple of (Availability, str) or None
         Why the read stopped early, `None` when it ran to the end.
+    failure : DecodeFailed or None
+        The decode failure that stopped the read, a `ReadInterrupted` included.
+    still_changes : list of tuple of (int, float)
+        Each grid frame's index with its change against the frame
+        `lag` frames earlier, NaN where either is blank;
+        empty unless the read was a full scan.
     """
 
     windows: list[tuple[int, int]]
     n_read: int
     sampled: list[int]
+    summary: list[int]
+    summary_slots: list[int]
     loss: list[float]
     laplacian: list[float]
     mean: list[float]
@@ -287,6 +357,9 @@ class _Frames:
     p95: list[float]
     white_share: list[float]
     dark_share: list[float]
+    noise: list[float]
+    native_spread: list[float]
+    min_side: int | None
     diffs: "list[tuple[int, np.ndarray]]"
     luma_steps: "list[tuple[int, np.ndarray]]"
     pts: list[float | None]
@@ -296,6 +369,8 @@ class _Frames:
     evidence_positions: list[int]
     pooled: "dict[int, np.ndarray]"
     stopped: tuple[Availability, str] | None = None
+    failure: DecodeFailed | None = None
+    still_changes: list[tuple[int, float]] = dataclass_field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -345,9 +420,11 @@ class _VisionAccumulator:
         windows: list[tuple[int, int]],
         sampled: list[int],
         evidence: list[int],
+        summary: list[int],
         *,
         dark_level: int,
         bright_level: int,
+        still: tuple[int, int] | None = None,
     ) -> None:
         """Start an empty accumulation over `windows`.
 
@@ -356,11 +433,16 @@ class _VisionAccumulator:
         windows : list of tuple of (int, int)
             The ascending `[start, end)` windows the vision metrics read.
         sampled : list of int
-            The positions blur and exposure measure.
+            The positions exposure measures.
         evidence : list of int
             The positions whose frames are pooled for the footage vector.
+        summary : list of int
+            The positions among `sampled` also measured at native resolution.
         dark_level, bright_level : int
             `VisionSpec.dark_level` and `VisionSpec.bright_level`.
+        still : tuple of (int, int) or None
+            `(grid_step, lag)` in frames to read stillness at,
+            or `None` to skip it.
         """
 
         numpy = load_numpy()
@@ -369,7 +451,9 @@ class _VisionAccumulator:
         self.windows = windows
         self.sampled = sampled
         self.evidence = evidence
+        self.summary = summary
         self.wanted = set(sampled)
+        self.native = set(summary)
         self.evidence_set = set(evidence)
         self.dark_level = dark_level
         self.bright_level = bright_level
@@ -383,9 +467,13 @@ class _VisionAccumulator:
                 "p95",
                 "white_share",
                 "dark_share",
+                "noise",
+                "native_spread",
             )
         }
+        self.min_side: int | None = None
         self.measured: list[int] = []
+        self.summary_measured: list[int] = []
         self.pts: list[float | None] = []
         self.shapes: list[tuple[int, int]] = []
         self.hashes: list[str] = []
@@ -397,6 +485,12 @@ class _VisionAccumulator:
         self.previous_window = -1
         self.previous_spread = 0.0
         self.levels = numpy.arange(256)
+        self.still = still
+        # Only the last `lag + 1` thumbnails are kept: a full scan stays flat in memory.
+        self.still_ring: deque[tuple[int, np.ndarray, float]] | None = (
+            deque(maxlen=still[1] + 1) if still is not None else None
+        )
+        self.still_changes: list[tuple[int, float]] = []
 
     def add(
         self,
@@ -417,7 +511,7 @@ class _VisionAccumulator:
         frame : numpy.ndarray
             The frame as `gray_windows` yields it at `_SAMPLE_SIZE`.
         full : numpy.ndarray or None
-            Its native luminance, present when `index` is sampled.
+            Its native luminance, present when `index` is a sampled position.
         frame_pts : float or None
             Its presentation time.
 
@@ -435,15 +529,9 @@ class _VisionAccumulator:
         cumulative = numpy.cumsum(histogram)
         p5, p95 = _percentile(cumulative, 5), _percentile(cumulative, 95)
         spread = p95 - p5
+        laplacian: float | None = None
         if index in self.wanted:
-            assert full is not None
-            laplacian = _laplacian_var(full)
             self.measured.append(index)
-            self.pts.append(frame_pts)
-            self.shapes.append((int(full.shape[0]), int(full.shape[1])))
-            self.hashes.append(hashlib.sha256(full.tobytes()).hexdigest())
-            self.kept["loss"].append(_reblur_loss(full, laplacian))
-            self.kept["laplacian"].append(laplacian)
             self.kept["mean"].append(int(histogram @ self.levels) / frame.size)
             self.kept["p5"].append(p5)
             self.kept["p95"].append(p95)
@@ -455,6 +543,26 @@ class _VisionAccumulator:
             self.kept["dark_share"].append(
                 int(histogram[: self.dark_level + 1].sum()) / frame.size
             )
+            # Every sampled frame arrives at native resolution.
+            assert full is not None
+            if index in self.native:
+                laplacian = _laplacian_var(full)
+            noise, native_spread = _noise_score(full, laplacian)
+            self.kept["noise"].append(noise)
+            self.kept["native_spread"].append(native_spread)
+            shortest = min(full.shape)
+            self.min_side = (
+                shortest if self.min_side is None else min(self.min_side, shortest)
+            )
+        # Every summary position is also sampled, so its slot in `measured` exists.
+        if index in self.native:
+            assert full is not None and laplacian is not None
+            self.summary_measured.append(index)
+            self.pts.append(frame_pts)
+            self.shapes.append((int(full.shape[0]), int(full.shape[1])))
+            self.hashes.append(hashlib.sha256(full.tobytes()).hexdigest())
+            self.kept["loss"].append(_reblur_loss(full, laplacian))
+            self.kept["laplacian"].append(laplacian)
 
         # Only the frames a sample measures are pooled,
         # so a full scan's vector matches a sampled read's.
@@ -462,6 +570,8 @@ class _VisionAccumulator:
             self.pooled[index] = _thumbnail(frame, _VARIATION_SIZE) / 255
 
         thumbnail = _thumbnail(frame)
+        if self.still is not None:
+            self._add_still(window, index, thumbnail, spread)
         if window == self.previous_window and self.previous is not None:
             difference = float(numpy.abs(thumbnail - self.previous).mean())
             self.steps[window].append(difference)
@@ -473,6 +583,49 @@ class _VisionAccumulator:
         self.previous, self.previous_window = thumbnail, window
         self.previous_spread = spread
         return thumbnail
+
+    def _add_still(
+        self, window: int, index: int, thumbnail: "np.ndarray", spread: float
+    ) -> None:
+        """Compare a grid frame with the frame `lag` frames before it.
+
+        Parameters
+        ----------
+        window : int
+            The frame's window; a new window starts a new comparison,
+            since its first frames have no predecessor to compare with.
+        index : int
+            The frame's index in the stream.
+        thumbnail : numpy.ndarray
+            The frame's `_thumbnail`.
+        spread : float
+            The frame's P95 - P5.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+        assert self.still is not None and self.still_ring is not None
+
+        grid_step, lag = self.still
+        # `previous_window` is reassigned after this call.
+        if window != self.previous_window:
+            self.still_ring.clear()
+        # The 2x2 means, as strided sums: the thumbnail's values are
+        # multiples of 0.25, so the sum is exact in any order.
+        small = (
+            thumbnail[0::2, 0::2]
+            + thumbnail[1::2, 0::2]
+            + thumbnail[0::2, 1::2]
+            + thumbnail[1::2, 1::2]
+        ) * numpy.float32(0.25)
+        self.still_ring.append((index, small, spread))
+        if index % grid_step or self.still_ring[0][0] != index - lag:
+            return
+        _then_index, then, then_spread = self.still_ring[0]
+        if min(spread, then_spread) < _BLANK_SPREAD:
+            self.still_changes.append((index, float("nan")))
+            return
+        self.still_changes.append((index, _still_change(small - then)))
 
     def finish(
         self,
@@ -494,6 +647,9 @@ class _VisionAccumulator:
             What was kept, or `not_applicable` when no frame was read:
             a failure before any frame decoded, such as a file that cannot be opened,
             and a read that ended without a frame, are not camera footage to grade.
+            A failure in the file after a frame decoded is `unavailable`,
+            since `frames_readable` grades it,
+            and a failure outside the file, such as on the network, is an `error`.
         """
 
         numpy = load_numpy()
@@ -505,14 +661,23 @@ class _VisionAccumulator:
             # one that never yields a frame was never camera footage to read.
             if not n_read:
                 return not_applicable(str(failure))
-            stopped = (Availability.ERROR, str(failure))
+            stopped = (
+                Availability.ERROR
+                if isinstance(failure, ReadInterrupted)
+                else Availability.UNAVAILABLE,
+                str(failure),
+            )
         if not n_read and stopped is None:
             return not_applicable("no frame could be decoded")
 
+        slot = {index: k for k, index in enumerate(self.measured)}
         return _Frames(
             windows=self.windows,
             n_read=n_read,
             sampled=self.measured,
+            summary=self.summary_measured,
+            summary_slots=[slot[index] for index in self.summary_measured],
+            min_side=self.min_side,
             diffs=[
                 (start, numpy.asarray(window_diffs, dtype=numpy.float32))
                 for (start, _end), window_diffs in zip(
@@ -530,10 +695,12 @@ class _VisionAccumulator:
             pts=self.pts,
             shape=self.shapes,
             luma_sha256=self.hashes,
-            requested=list(self.sampled),
+            requested=list(self.summary),
             evidence_positions=list(self.evidence),
             pooled=self.pooled,
             stopped=stopped,
+            failure=failure,
+            still_changes=self.still_changes,
             **self.kept,
         )
 
@@ -599,8 +766,10 @@ def _readable(ctx: StreamContext) -> SampledFrames | MetricResult:
         return payload
     if not isinstance(payload, SampledFrames):
         return not_applicable("the stream's frames cannot be sampled")
-    if load_numpy() is None:
-        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
     return payload
 
 
@@ -615,6 +784,62 @@ def _frame_rate(ctx: StreamContext) -> float | None:
         return None
     gap = float(numpy.median(numpy.diff(timestamps)))
     return 1 / gap if gap > 0 else None
+
+
+def _still_plan(ctx: StreamContext) -> tuple[int, int] | None:
+    """Where stillness is read, as `(grid_step, lag)` in frames.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream.
+
+    Returns
+    -------
+    tuple of (int, int) or None
+        `None` unless the read is a full scan of a stream with a frame rate.
+    """
+
+    fps = _frame_rate(ctx)
+    if not ctx.full_frame_scan or fps is None:
+        return None
+    return max(1, round(fps / _STILL_GRID_HZ)), max(1, round(fps * _STILL_LAG_S))
+
+
+def _still_change(difference: "np.ndarray") -> float:
+    """The change between two thumbnails, once their common shift is removed.
+
+    Equal to the `_STILL_PCT`th percentile of `|difference - median(difference)|`,
+    taken with two partial sorts instead of `numpy.median` and `numpy.percentile`,
+    which cost several times as much on a thumbnail this small.
+
+    Parameters
+    ----------
+    difference : numpy.ndarray
+        The `(_STILL_SIZE, _STILL_SIZE)` float32 difference of two thumbnails.
+
+    Returns
+    -------
+    float
+        The change, in gray levels.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    flat = difference.ravel()
+    middle = flat.size // 2
+    low, high = numpy.partition(flat, [middle - 1, middle])[middle - 1 : middle + 1]
+    # The median of an even count, the mean of its two middle values.
+    centred = numpy.abs(flat - (low + high) / 2)
+    # Linear interpolation between the neighbouring ranks, as `numpy.percentile`.
+    rank = (flat.size - 1) * (_STILL_PCT / 100)
+    below = int(rank)
+    weight = rank - below
+    low, high = numpy.partition(centred, [below, below + 1])[below : below + 2]
+    if weight < 0.5:
+        return float(low + (high - low) * weight)
+    return float(high - (high - low) * (1 - weight))
 
 
 def _min_run(fps: float) -> int:
@@ -635,14 +860,15 @@ def _spread(n: int, count: int) -> list[int]:
 def _layout(
     ctx: StreamContext, full_frame_scan: bool
 ) -> tuple[list[tuple[int, int]], list[int]]:
-    """Pick frozen frames' windows and the frames blur and exposure measure.
+    """Pick frozen frames' windows and the frames exposure measures.
 
     Frozen frames read `vision_samples` evenly spaced windows,
     each two minimum freeze runs long (about 1 s),
     or the whole stream when the windows would cover it.
     Blur and exposure measure `vision_samples` evenly spaced frames,
     each inside a window, so one decode serves all three.
-    Under `full_frame_scan`, all three read every frame.
+    Under `full_frame_scan`, exposure and freezes read every frame,
+    and `_summary_positions` picks the frames blur measures.
 
     Parameters
     ----------
@@ -678,6 +904,38 @@ def _layout(
         [(start, start + length) for start in starts],
         [start + offset for start, offset in zip(starts, offsets, strict=True)],
     )
+
+
+def _summary_positions(
+    ctx: StreamContext, sampled: list[int], evidence: list[int]
+) -> list[int]:
+    """Pick the frames the summary metrics measure, each decoded at native resolution.
+
+    A sampled read measures its sampled frames.
+    A full scan measures `VisionSpec.summary_ratio` of the stream's frames,
+    evenly spaced, plus the frames a sampled read would measure,
+    so their hashes and the footage vector match a sampled read's.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to lay out.
+    sampled : list of int
+        The positions `_layout` picked for exposure.
+    evidence : list of int
+        The positions a sampled read would measure.
+
+    Returns
+    -------
+    list of int
+        The ascending summary positions.
+    """
+
+    if not ctx.full_frame_scan:
+        return sampled
+    n = ctx.n_samples
+    ratio = _spread(n, math.ceil(ctx.vision.summary_ratio * n))
+    return sorted(set(evidence) | set(ratio))
 
 
 def _freeze_reads(ctx: StreamContext) -> bool:
@@ -825,6 +1083,7 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
 
     windows, sampled = _layout(ctx, ctx.full_frame_scan)
     evidence = _layout(ctx, False)[1] if ctx.full_frame_scan else sampled
+    summary = _summary_positions(ctx, sampled, evidence)
     if not _freeze_reads(ctx):
         windows = _ranges(sampled)
     spec = ctx.vision
@@ -838,17 +1097,20 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
         plan = None
     cut_windows = [] if plan is None or isinstance(plan, MetricResult) else plan.windows
     first = [] if any(start == 0 for start, _end in windows + cut_windows) else [(0, 1)]
+    still = _still_plan(ctx)
     key = (
         id(payload),
         tuple(windows),
         tuple(sampled),
         tuple(evidence),
+        tuple(summary),
         spec.dark_level,
         spec.bright_level,
         max_decode_frames,
         spec.max_pixels,
         tuple(cut_windows),
         bool(first),
+        still,
     )
     if key in _CACHE and _CACHE[key][0] is payload:
         _CACHE.move_to_end(key)
@@ -860,11 +1122,13 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
         windows,
         sampled,
         evidence,
+        summary,
         cut_windows,
         dark_level=spec.dark_level,
         bright_level=spec.bright_level,
         max_decode_frames=max_decode_frames,
         max_pixels=spec.max_pixels,
+        still=still,
     )
     _CACHE[key] = (payload, result)
     while len(_CACHE) > _CACHE_SIZE:
@@ -981,12 +1245,14 @@ def _pass(
     windows: list[tuple[int, int]],
     sampled: list[int],
     evidence: list[int],
+    summary: list[int],
     cut_windows: list[tuple[int, int]],
     *,
     dark_level: int,
     bright_level: int,
     max_decode_frames: int | None,
     max_pixels: int,
+    still: tuple[int, int] | None = None,
 ) -> _Read:
     """Decode `ranges` of `payload` once, handing each frame to the consumers it serves.
 
@@ -1010,9 +1276,11 @@ def _pass(
     windows : list of tuple of (int, int)
         The vision metrics' windows.
     sampled : list of int
-        The positions blur and exposure measure.
+        The positions exposure measures.
     evidence : list of int
         The positions pooled for the footage vector.
+    summary : list of int
+        The positions among `sampled` also decoded at native resolution.
     cut_windows : list of tuple of (int, int)
         cut_count's windows.
     dark_level, bright_level : int
@@ -1020,7 +1288,9 @@ def _pass(
     max_decode_frames : int or None
         The most frames the whole pass may decode.
     max_pixels : int
-        The most pixels a sampled frame may hold.
+        The most pixels a summary frame may hold.
+    still : tuple of (int, int) or None
+        `(grid_step, lag)` in frames to read stillness at, `None` to skip it.
 
     Returns
     -------
@@ -1037,7 +1307,13 @@ def _pass(
     from kalanos.analysis.metrics.continuity import _window_thumbnails
 
     accumulator = _VisionAccumulator(
-        windows, sampled, evidence, dark_level=dark_level, bright_level=bright_level
+        windows,
+        sampled,
+        evidence,
+        summary,
+        dark_level=dark_level,
+        bright_level=bright_level,
+        still=still,
     )
     cut: dict[int, np.ndarray] = {}
     vision_numbering = _Numbering(windows, ranges)
@@ -1100,10 +1376,12 @@ def _pass(
                 windows,
                 sampled,
                 evidence,
+                summary,
                 dark_level=dark_level,
                 bright_level=bright_level,
                 max_decode_frames=max_decode_frames,
                 max_pixels=max_pixels,
+                still=still,
             )
         # cut_count's own read takes no frame at native resolution,
         # so it never meets a frame over max_pixels.
@@ -1123,10 +1401,12 @@ def _pass(
             windows,
             sampled,
             evidence,
+            summary,
             dark_level=dark_level,
             bright_level=bright_level,
             max_decode_frames=max_decode_frames,
             max_pixels=max_pixels,
+            still=still,
         )
     if cut_numbering.irregular:
         cut, cut_failure = _window_thumbnails(payload, cut_windows)
@@ -1220,24 +1500,35 @@ def _read(
     windows: list[tuple[int, int]],
     sampled: list[int],
     evidence: list[int],
+    summary: list[int],
     *,
     dark_level: int,
     bright_level: int,
     max_decode_frames: int | None,
     max_pixels: int,
+    still: tuple[int, int] | None = None,
 ) -> "_Frames | MetricResult":
     """Decode `windows` of `payload` for the vision metrics alone.
 
     The reader the shared pass falls back on when a failure in another consumer's
     frames stopped it before the vision metrics' own.
     A read stopped by a decode cap, or by a decode failure after its first frame,
-    keeps what it read, with the reason in `stopped`.
+    keeps what it read, with the reason in `stopped`:
+    `unavailable` for a cap or a failure in the file, which `frames_readable` grades,
+    and `error` for a failure outside the file, such as on the network.
     A failure before any frame decoded, such as a file that cannot be opened,
     is `not_applicable`.
+    `still` is `(grid_step, lag)` in frames to read stillness at, `None` to skip it.
     """
 
     accumulator = _VisionAccumulator(
-        windows, sampled, evidence, dark_level=dark_level, bright_level=bright_level
+        windows,
+        sampled,
+        evidence,
+        summary,
+        dark_level=dark_level,
+        bright_level=bright_level,
+        still=still,
     )
     stopped: tuple[Availability, str] | None = None
     failure: DecodeFailed | None = None
@@ -1454,40 +1745,103 @@ def _video_file(ctx: StreamContext) -> VideoPayload | MetricResult:
     return payload
 
 
-def _laplacian_var(frame: "np.ndarray") -> float:
-    """Variance of the 3x3 Laplacian over the whole frame."""
+def _noise_score(
+    full: "np.ndarray", laplacian: float | None = None
+) -> tuple[float, float]:
+    """Measure how much of a frame's variance is pixel-to-pixel noise.
 
-    image = frame.astype("float64")
-    laplacian = (
-        image[:-2, 1:-1]
-        + image[2:, 1:-1]
-        + image[1:-1, :-2]
-        + image[1:-1, 2:]
-        - 4 * image[1:-1, 1:-1]
-    )
-    return float(laplacian.var())
+    Parameters
+    ----------
+    full : numpy.ndarray
+        The frame's native luminance.
+    laplacian : float, optional
+        The frame's `_laplacian_var`, when the caller already has it.
+
+    Returns
+    -------
+    tuple of (float, float)
+        The Laplacian variance over the luminance variance, `nan` for a frame
+        of one gray level or under 3 pixels on a side,
+        and the native P95 - P5 spread.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    cumulative = numpy.cumsum(numpy.bincount(full.ravel(), minlength=256))
+    spread = _percentile(cumulative, 95) - _percentile(cumulative, 5)
+    variance = float(full.var())
+    if variance == 0:
+        return math.nan, spread
+    if laplacian is None:
+        laplacian = _laplacian_var(full)
+    return laplacian / variance, spread
+
+
+def _laplacian_var(frame: "np.ndarray") -> float:
+    """Variance of the 3x3 Laplacian over the whole frame.
+
+    The border row and column on each side are left out,
+    since their Laplacian would need pixels outside the frame.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D uint8 or float32 luminance frame.
+
+    Returns
+    -------
+    float
+        The variance, or `nan` for a frame under 3 pixels in either dimension.
+    """
+
+    height, width = frame.shape
+    if height < 3 or width < 3:
+        return math.nan
+    numpy = load_numpy()
+    cv2 = load_cv2()
+    assert numpy is not None and cv2 is not None
+
+    image = frame if frame.dtype == numpy.float32 else frame.astype(numpy.float32)
+    kernel = numpy.array(_LAPLACIAN_KERNEL, numpy.float32)
+    laplacian = cv2.filter2D(image, -1, kernel, borderType=cv2.BORDER_REPLICATE)
+    _, deviation = cv2.meanStdDev(laplacian[1:-1, 1:-1])
+    return float(deviation[0, 0]) ** 2
 
 
 def _reblur_loss(frame: "np.ndarray", laplacian: float) -> float:
     """Share of `laplacian` a `_REBLUR` box blur of the frame removes.
 
-    0.0 for a frame with no edges.
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D uint8 luminance frame.
+    laplacian : float
+        `_laplacian_var` of the frame.
+
+    Returns
+    -------
+    float
+        The share, or 0.0 for a frame with no edges.
     """
 
     if laplacian == 0:
         return 0.0
-    numpy = load_numpy()
-    assert numpy is not None
+    cv2 = load_cv2()
+    assert cv2 is not None
 
-    height, width = frame.shape
-    pad = _REBLUR // 2
-    padded = numpy.pad(frame.astype("float64"), pad, mode="edge")
-    blurred = numpy.zeros((height, width))
-    for dy in range(_REBLUR):
-        for dx in range(_REBLUR):
-            blurred += padded[dy : dy + height, dx : dx + width]
-    blurred /= _REBLUR * _REBLUR
-    return 1 - _laplacian_var(blurred) / laplacian
+    # The 3x3 sums of uint8 pixels and their Laplacian are exact integers in float32;
+    # dividing each pixel by 9 would round it,
+    # which on smooth frames shifts the loss by up to about 4e-6.
+    # Dividing the variance by `_REBLUR ** 4` afterwards is exact.
+    window_sum = cv2.boxFilter(
+        frame,
+        cv2.CV_32F,
+        (_REBLUR, _REBLUR),
+        normalize=False,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    return 1 - _laplacian_var(window_sum) / _REBLUR**4 / laplacian
 
 
 def _stopped_result(stopped: tuple[Availability, str]) -> MetricResult:
@@ -1551,9 +1905,11 @@ def _exposure(frames: _Frames) -> _Exposure:
 
 @metric(level=Level.STREAM, family=Family.VISION, label="low sharpness")
 def sharpness_score(ctx: StreamContext) -> MetricResult:
-    """Median share of the sampled frames' edge energy a 3x3 box re-blur removes.
+    """Median share of the summary frames' edge energy a 3x3 box re-blur removes.
 
-    Higher is sharper.
+    Higher is sharper. The summary frames are the sampled frames,
+    or under a full scan `VisionSpec.summary_ratio` of the stream's frames
+    plus the sampled read's.
 
     Parameters
     ----------
@@ -1571,7 +1927,7 @@ def sharpness_score(ctx: StreamContext) -> MetricResult:
         return frames
     if frames.stopped is not None:
         return _stopped_result(frames.stopped)
-    if not frames.sampled:
+    if not frames.summary:
         return not_applicable("no sampled frame could be decoded")
     numpy = load_numpy()
     assert numpy is not None
@@ -1587,7 +1943,7 @@ def sharpness_score(ctx: StreamContext) -> MetricResult:
             "n_frames": len(ctx.timestamps),
             "laplacian_var": float(numpy.median(frames.laplacian)),
             "min_loss": float(losses[worst]),
-            "worst_index": int(frames.sampled[worst]),
+            "worst_index": int(frames.summary[worst]),
         },
     )
 
@@ -1651,7 +2007,9 @@ def exposure_shift_pct(ctx: StreamContext) -> MetricResult:
 
 @metric(level=Level.STREAM, family=Family.VISION, label="exposure level")
 def exposure_level(ctx: StreamContext) -> MetricResult:
-    """Median mean gray of the sampled frames, 0 to 255; reported, never graded.
+    """Median mean gray of the summary frames, 0 to 255; reported, never graded.
+
+    The summary frames are those sharpness_score measures.
 
     It describes the episode by itself:
     a white simulator scene and an overexposed camera read alike here,
@@ -1673,20 +2031,21 @@ def exposure_level(ctx: StreamContext) -> MetricResult:
         return frames
     if frames.stopped is not None:
         return _stopped_result(frames.stopped)
-    if not frames.sampled:
+    if not frames.summary:
         return not_applicable("no sampled frame could be decoded")
     numpy = load_numpy()
     assert numpy is not None
 
+    slots = frames.summary_slots
     return MetricResult(
-        value=float(numpy.median(frames.mean)),
+        value=float(numpy.median([frames.mean[k] for k in slots])),
         unit="gray level",
         status=MetricStatus.REPORT_ONLY,
         evidence={
-            "n_sampled": len(frames.sampled),
+            "n_sampled": len(frames.summary),
             "n_frames": len(ctx.timestamps),
-            "dark_share": float(numpy.median(frames.dark_share)),
-            "bright_share": float(numpy.median(frames.white_share)),
+            "dark_share": float(numpy.median([frames.dark_share[k] for k in slots])),
+            "bright_share": float(numpy.median([frames.white_share[k] for k in slots])),
         },
     )
 
@@ -1766,12 +2125,91 @@ def blank_frame_pct(ctx: StreamContext) -> MetricResult:
     return _frame_pct(ctx, frames, bad, min_spread=float(min(spreads)))
 
 
+@metric(level=Level.STREAM, family=Family.VISION, label="corrupt camera frames")
+def corrupt_frame_pct(ctx: StreamContext) -> MetricResult:
+    """Share of sampled frames that are blank or hold decoder noise.
+
+    A frame is blank when its P95 - P5 spread on the `_SAMPLE_SIZE` decode is below
+    `_BLANK_SPREAD`, at any gray level.
+    Any other frame is noise when its native P95 - P5 spread is at least
+    `_NOISE_MIN_SPREAD` and its Laplacian variance is at least `_NOISE_RATIO`
+    times its luminance variance, the signature of pixel noise and grey streaks.
+    The spread guard keeps dark, noisy real scenes out.
+
+    The frames that read between `_RELATIVE_FLOOR` and `_NOISE_RATIO`
+    are published as candidates,
+    for a rule that judges them against the same camera across the dataset.
+    The share is report-only here; the default policy grades it.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only`, the share in percent with each corrupt frame as a support
+        interval, or `not_applicable` when the stream cannot be sampled
+        or its frames are under `_MIN_NOISE_SIDE` pixels on their shorter side.
+    """
+
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if not frames.sampled:
+        return not_applicable("no sampled frame could be decoded")
+    if frames.min_side is None or frames.min_side < _MIN_NOISE_SIDE:
+        return not_applicable("frames too small to tell noise from detail")
+
+    bad: list[int] = []
+    blank = noise = 0
+    scores: list[float] = []
+    candidates: list[list[float]] = []
+    for index, p5, p95, ratio, spread in zip(
+        frames.sampled,
+        frames.p5,
+        frames.p95,
+        frames.noise,
+        frames.native_spread,
+        strict=True,
+    ):
+        if p95 - p5 < _BLANK_SPREAD:
+            blank += 1
+            bad.append(int(index))
+            continue
+        if not math.isnan(ratio):
+            scores.append(ratio)
+        if spread < _NOISE_MIN_SPREAD or math.isnan(ratio):
+            continue
+        if ratio >= _NOISE_RATIO:
+            noise += 1
+            bad.append(int(index))
+        elif ratio >= _RELATIVE_FLOOR:
+            candidates.append([int(index), round(ratio, 4)])
+
+    numpy = load_numpy()
+    assert numpy is not None
+    return _frame_pct(
+        ctx,
+        frames,
+        bad,
+        blank=blank,
+        noise=noise,
+        median_score=float(numpy.median(scores)) if scores else None,
+        candidates=candidates,
+    )
+
+
 @metric(level=Level.STREAM, family=Family.VISION, label="low contrast")
 def contrast_score(ctx: StreamContext) -> MetricResult:
-    """Median P95 - P5 spread of the sampled frames, 0 to 255 gray levels.
+    """Median P95 - P5 spread of the summary frames, 0 to 255 gray levels.
 
     Lower is flatter. It follows what is in view as much as the camera,
     so it is reported and not graded.
+    The summary frames are those sharpness_score measures.
 
     Parameters
     ----------
@@ -1789,22 +2227,22 @@ def contrast_score(ctx: StreamContext) -> MetricResult:
         return frames
     if frames.stopped is not None:
         return _stopped_result(frames.stopped)
-    if not frames.sampled:
+    if not frames.summary:
         return not_applicable("no sampled frame could be decoded")
     numpy = load_numpy()
     assert numpy is not None
 
-    spreads = [p95 - p5 for p5, p95 in zip(frames.p5, frames.p95, strict=True)]
+    spreads = [frames.p95[k] - frames.p5[k] for k in frames.summary_slots]
     worst = min(range(len(spreads)), key=spreads.__getitem__)
     return MetricResult(
         value=float(numpy.median(spreads)),
         unit="gray level",
         status=MetricStatus.REPORT_ONLY,
         evidence={
-            "n_sampled": len(frames.sampled),
+            "n_sampled": len(frames.summary),
             "n_frames": len(ctx.timestamps),
             "min_spread": float(spreads[worst]),
-            "worst_index": int(frames.sampled[worst]),
+            "worst_index": int(frames.summary[worst]),
         },
     )
 
@@ -2193,7 +2631,7 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
     That frame need not sit exactly at the segment's start,
     so a frame the encoder dropped there does not read as a missing camera.
     A decode failure after that frame is not this metric's to judge:
-    the sampled metrics report it, and the episode stays unknown.
+    `frames_readable` judges it.
 
     Parameters
     ----------
@@ -2211,8 +2649,10 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
     payload = _video_file(ctx)
     if isinstance(payload, MetricResult):
         return payload
-    if load_numpy() is None:
-        return not_applicable("sampling frames needs numpy; add kalanos[video]")
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
 
     reason: str | None = None
     try:
@@ -2293,6 +2733,97 @@ def _first_frame(
         return _stopped_result((Availability.UNAVAILABLE, str(exc)))
     except DecodeFailed as exc:
         return False, str(exc)
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="unreadable camera frames")
+def frames_readable(ctx: StreamContext) -> MetricResult:
+    """Whether the segment's packets demux and its frames decode past the first.
+
+    Judges the packet probe the timing metrics share
+    and the decode the other vision metrics share.
+    A file that does not open, or yields no frame of the segment,
+    is `camera_stream_present`'s to judge, so one cause raises one finding.
+    A failure outside the file, such as on the network, is `unavailable`.
+    The sampled read finds only failures in the frames it reads,
+    and the full tier reads every frame.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` with 1.0 when every frame the segment's reads asked for
+        demuxed and decoded, and 0.0 when the file failed in the segment,
+        for the policy to regrade;
+        `not_applicable` when the stream is not backed by a video file
+        or no frame of it decoded.
+    """
+
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if load_numpy() is None or load_cv2() is None:
+        return not_applicable(
+            "sampling frames needs numpy and OpenCV; add kalanos[video]"
+        )
+
+    # A failure outside the file hides no defect another stage found,
+    # so it only decides the result when neither stage found one.
+    interrupted: ReadInterrupted | None = None
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(header, ReadInterrupted):
+        interrupted = header
+    elif isinstance(header, DecodeFailed):
+        return not_applicable("the file does not open; camera_stream_present judges it")
+
+    try:
+        read = _shared_read(ctx)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(read, MetricResult) or isinstance(read.frames, MetricResult):
+        if interrupted is not None:
+            return _stopped_result((Availability.UNAVAILABLE, str(interrupted)))
+        return not_applicable(
+            "no frame of the segment decoded; camera_stream_present judges it"
+        )
+
+    defect: DecodeFailed | None = None
+    stage: str | None = None
+    failure = read.frames.failure
+    if failure is None and isinstance(read.cut_failure, DecodeFailed):
+        failure = read.cut_failure
+    packets = _packets(payload)
+    # ReadInterrupted subclasses DecodeFailed, so it is checked first.
+    if isinstance(packets, ReadInterrupted):
+        interrupted = interrupted or packets
+    elif isinstance(packets, DecodeFailed):
+        defect, stage = packets, "demux"
+    if isinstance(failure, ReadInterrupted):
+        interrupted = interrupted or failure
+    elif failure is not None and defect is None:
+        defect, stage = failure, "decode"
+    if defect is None and interrupted is not None:
+        return _stopped_result((Availability.UNAVAILABLE, str(interrupted)))
+    if defect is None and read.frames.stopped is not None:
+        return _stopped_result(read.frames.stopped)
+
+    return MetricResult(
+        value=0.0 if defect is not None else 1.0,
+        unit="flag",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "camera": ctx.stream.source_field,
+            "path": str(payload.path),
+            "stage": stage,
+            "reason": str(defect) if defect is not None else None,
+        },
+    )
 
 
 def _fps_differs(found: float, declared: float) -> bool:
@@ -2388,6 +2919,99 @@ def video_format_consistency(ctx: StreamContext) -> MetricResult:
     )
 
 
+@metric(
+    level=Level.STREAM,
+    family=Family.VISION,
+    label="footage misses the delivery spec",
+)
+def delivery_spec_met(ctx: StreamContext) -> MetricResult:
+    """Whether the stream's footage meets the declared delivery spec.
+
+    Compares the container header with `VisionSpec.delivery`, decoding nothing:
+    width, height and frame rate against their minimums,
+    the segment's span against the minimum duration,
+    and the codec against the allowed names.
+    A frame rate meets its minimum within `_FPS_REL_TOL`.
+    A value the container does not state is listed under `unstated` and skipped.
+    A file that cannot be opened is `camera_stream_present`'s to report.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to check.
+
+    Returns
+    -------
+    MetricResult
+        A flag, 1 when every declared field is met and 0 otherwise,
+        with each miss's field, required and found values in the evidence,
+        or `not_applicable` when no spec is declared
+        or the stream is not backed by a readable video file.
+    """
+
+    delivery = ctx.vision.delivery
+    if not delivery.declared():
+        return not_applicable("no delivery spec is declared")
+    payload = _video_file(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    try:
+        header = _header(payload)
+    except DecoderUnavailable as exc:
+        return not_applicable(str(exc))
+    if isinstance(header, DecodeFailed):
+        return not_applicable(str(header))
+
+    # The segment's span: one LeRobot v3 file holds many episodes.
+    found: dict[str, Any] = {
+        "width": header.width,
+        "height": header.height,
+        "fps": header.fps,
+        "duration_s": payload.end_s - payload.start_s,
+        "codec": None if header.codec is None else header.codec.lower(),
+    }
+    minimums: dict[str, tuple[str, Any]] = {
+        "width": ("min_width", delivery.min_width),
+        "height": ("min_height", delivery.min_height),
+        "fps": ("min_fps", delivery.min_fps),
+        "duration_s": ("min_duration_s", delivery.min_duration_s),
+    }
+    misses: list[dict[str, Any]] = []
+    unstated: list[str] = []
+    for name, (field, required) in minimums.items():
+        if required is None:
+            continue
+        value = found[name]
+        if value is None:
+            unstated.append(name)
+            continue
+        floor = required * (1 - _FPS_REL_TOL) if name == "fps" else required
+        if value < floor:
+            misses.append({"field": field, "required": required, "found": value})
+    if delivery.codecs is not None:
+        if found["codec"] is None:
+            unstated.append("codec")
+        elif found["codec"] not in delivery.codecs:
+            misses.append(
+                {
+                    "field": "codecs",
+                    "required": delivery.codecs,
+                    "found": found["codec"],
+                }
+            )
+
+    return MetricResult(
+        value=0.0 if misses else 1.0,
+        unit="flag",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "misses": misses,
+            "unstated": unstated,
+            "camera": ctx.stream.source_field,
+        },
+    )
+
+
 def _action_deltas(ctx: StreamContext) -> "list[tuple[np.ndarray, np.ndarray]]":
     """Return `(step_times, moving_mask)` for each usable action stream beside ctx."""
 
@@ -2468,6 +3092,8 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
     and a pair with a blank frame is never frozen.
     It counts only while an action stream of the same episode moves over it:
     an idle robot in a still scene looks frozen too.
+    On simulated footage a still scene repeats its frames exactly,
+    so the result is marked and scoring keeps it ungraded.
     It reads the windows `_layout` picks,
     in the decode it shares with blur and exposure.
 
@@ -2547,25 +3173,163 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
     read = frames.n_read
     repeated = sum(run for _index, run in counted)
     longest = max((run for _index, run in counted), default=0)
+    evidence: dict[str, Any] = {
+        "n_frames": n,
+        "n_read": read,
+        "n_windows": len(frames.windows),
+        "full_scan": bool(frames.windows == [(0, n)]),
+        "n_runs": len(counted),
+        "n_idle_runs": idle,
+        "longest_run_s": float(longest / fps),
+        "first_run_index": counted[0][0] if counted else None,
+        "eps": float(eps),
+        "n_blank_pairs": n_blank,
+    }
+    if ctx.simulated:
+        evidence["footage"] = "simulated"
     return MetricResult(
         value=float(100 * repeated / read),
         unit="%",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "n_frames": n,
-            "n_read": read,
-            "n_windows": len(frames.windows),
-            "full_scan": bool(frames.windows == [(0, n)]),
-            "n_runs": len(counted),
-            "n_idle_runs": idle,
-            "longest_run_s": float(longest / fps),
-            "first_run_index": counted[0][0] if counted else None,
-            "eps": float(eps),
-            "n_blank_pairs": n_blank,
-        },
+        evidence=evidence,
         support=support_for(
             list(range(n)), [(index, index + run) for index, run in counted]
         ),
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="still scene")
+def still_scene_pct(ctx: StreamContext) -> MetricResult:
+    """Share of frames inside stretches where the camera's picture does not move.
+
+    Every second frame is compared with the frame 1 s before it,
+    on 32x32 gray thumbnails, and the change is the 98th percentile of the
+    difference once its median is removed.
+    Each reading is then the median of those within 2 s either side.
+    A stretch is a run of frames whose readings stay under 3 grey levels
+    for at least 5 s, and sensor noise in a still scene reads under that.
+    A reading with a blank frame is never still.
+    The footage setting is not read: a still simulated scene reads 0,
+    and is as much a stretch as a still real one.
+    The metric needs every frame, so it is `not_applicable` outside a full scan.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` in percent, with each stretch's time range in evidence
+        and as a support interval, or `not_applicable` outside a full scan,
+        without a frame rate, or when the stream is shorter than a stretch.
+    """
+
+    # Step 1: the stream must be a camera read in full, long enough to hold a stretch.
+    payload = _readable(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if not ctx.full_frame_scan:
+        return not_applicable("needs every frame; grade with --full-frame-scan")
+    plan = _still_plan(ctx)
+    if plan is None:
+        return not_applicable("the stream has no frame rate to measure stillness in")
+    grid_step, lag = plan
+    numpy = load_numpy()
+    assert numpy is not None
+    timestamps = ctx.timestamps.to_numpy()
+    n = len(timestamps)
+    if timestamps[-1] - timestamps[0] < _STILL_MIN_S:
+        return not_applicable(
+            f"shorter than {_STILL_MIN_S:g} s, too short to hold a still stretch"
+        )
+
+    # Step 2: the readings from the shared full read.
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if frames.n_read > n:
+        return not_applicable(
+            f"the footage decodes to {frames.n_read} frames"
+            f" but the stream has {n} timestamps"
+        )
+    if not frames.still_changes:
+        return not_applicable("too few frames decoded to compare over 1 s")
+
+    # Step 3: smooth each reading over +-2 s, and call it still under the threshold.
+    positions = numpy.array([index for index, _change in frames.still_changes])
+    changes = numpy.array([change for _index, change in frames.still_changes])
+    times = timestamps[positions]
+    lows = numpy.searchsorted(times, times - _STILL_SMOOTH_S, side="left")
+    highs = numpy.searchsorted(times, times + _STILL_SMOOTH_S, side="right")
+    still = numpy.zeros(len(changes), dtype=bool)
+    for k in range(len(changes)):
+        if not numpy.isfinite(changes[k]):
+            continue
+        near = changes[lows[k] : highs[k]]
+        near = near[numpy.isfinite(near)]
+        still[k] = near.size >= _STILL_SMOOTH_MIN and numpy.median(near) < _STILL_CHANGE
+
+    # Step 4: a run of still grid frames, with the second each reading looks back over,
+    # is a stretch when it lasts long enough.
+    stretches: list[tuple[int, int]] = []
+    k = 0
+    while k < len(still):
+        if not still[k]:
+            k += 1
+            continue
+        end = k
+        while (
+            end + 1 < len(still)
+            and still[end + 1]
+            and positions[end + 1] - positions[end] == grid_step
+        ):
+            end += 1
+        first, last = int(positions[k]) - lag, int(positions[end])
+        # Neighbouring runs can look back over the same frames.
+        if stretches:
+            first = max(first, stretches[-1][1])
+        if timestamps[last] - timestamps[first] >= _STILL_MIN_S:
+            stretches.append((first, last + 1))
+        k = end + 1
+
+    covered = sum(end - start for start, end in stretches)
+    longest = round(
+        max(
+            (
+                float(timestamps[end - 1] - timestamps[start])
+                for start, end in stretches
+            ),
+            default=0.0,
+        ),
+        3,
+    )
+    return MetricResult(
+        value=float(100 * covered / n),
+        unit="%",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "n_frames": n,
+            "grid_step": grid_step,
+            "lag": lag,
+            "threshold": _STILL_CHANGE,
+            "min_stretch_s": _STILL_MIN_S,
+            "n_readings": len(changes),
+            "n_blank_readings": int(numpy.isnan(changes).sum()),
+            "stretches_s": [
+                [
+                    round(float(timestamps[start]), 3),
+                    round(float(timestamps[end - 1]), 3),
+                ]
+                for start, end in stretches
+            ],
+            "longest_s": longest,
+            "first_stretch_index": stretches[0][0] if stretches else None,
+        },
+        support=support_for(list(range(n)), stretches),
     )
 
 
@@ -2619,7 +3383,8 @@ def camera_format(stream: Stream, *, reads_payloads: bool) -> CameraFormat | Non
 def camera_frames(ctx: StreamContext) -> CameraFrames | None:
     """Publish the stream's shared read as evidence.
 
-    Evidence frames, the ones that carry a hash,
+    One row per summary frame, the frames decoded at native resolution.
+    Evidence frames, the rows that carry a hash,
     are those a sampled read would measure and exposure_shift_pct's bad frames.
 
     Parameters
@@ -2654,16 +3419,15 @@ def camera_frames(ctx: StreamContext) -> CameraFrames | None:
             presentation_time_s=pts,
             shape=list(shape),
             blur_score=laplacian,
-            clipped_fraction=dark + white,
+            clipped_fraction=frames.dark_share[slot] + frames.white_share[slot],
             luma_sha256=digest if index in evidence else None,
         )
-        for index, pts, shape, laplacian, dark, white, digest in zip(
-            frames.sampled,
+        for index, slot, pts, shape, laplacian, digest in zip(
+            frames.summary,
+            frames.summary_slots,
             frames.pts,
             frames.shape,
             frames.laplacian,
-            frames.dark_share,
-            frames.white_share,
             frames.luma_sha256,
             strict=True,
         )
@@ -2678,14 +3442,14 @@ def camera_frames(ctx: StreamContext) -> CameraFrames | None:
     availability, reason = frames.stopped or (Availability.COMPUTED, None)
     return CameraFrames(
         requested_rows=frames.requested,
-        missing_rows=sorted(set(frames.requested) - set(frames.sampled)),
+        missing_rows=sorted(set(frames.requested) - set(frames.summary)),
         frames=records,
         decoded_frames=frames.n_read,
         adjacent_pairs_examined=sum(len(d) for _start, d in frames.diffs),
         identical_adjacent_pairs=identical,
         sample_plan="full_scan_v1" if ctx.full_frame_scan else "evenly_spaced_v1",
         parameters={
-            **ctx.vision.model_dump(),
+            **ctx.vision.model_dump(exclude={"delivery"}),
             "sample_frames": ctx.vision_samples,
             "full_frame_scan": ctx.full_frame_scan,
         },

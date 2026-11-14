@@ -234,6 +234,20 @@ def grade(
             ),
         ),
     ] = False,
+    vision_summary_ratio: Annotated[
+        float | None,
+        typer.Option(
+            "--vision-summary-ratio",
+            min=0.0,
+            max=1.0,
+            help=(
+                "Share of each episode's frames sharpness, contrast and exposure "
+                "level measure under a full frame scan. "
+                "Defaults to KALANOS_VISION_SUMMARY_RATIO, "
+                "then the bundle's vision section (0.1)."
+            ),
+        ),
+    ] = None,
     map_: Annotated[
         list[str] | None,
         typer.Option(
@@ -384,6 +398,11 @@ def grade(
         Read every video frame for frame metrics instead of a sample.
         When absent, `Settings.full_frame_scan` decides,
         then the bundle's `vision` section, or `--tier full` implies it.
+    vision_summary_ratio : float or None
+        The share of each episode's frames sharpness, contrast and exposure level
+        measure under a full frame scan, besides the sampled frames.
+        `None` falls back to `Settings.vision_summary_ratio`,
+        then the bundle's `vision` section.
     map_ : list[str] or None
         `FEATURE=TYPE` overrides, each typing one source field for this run.
     map_file : Path or None
@@ -427,6 +446,11 @@ def grade(
         Code 1 when the gate in `fail_on` trips.
     """
 
+    # typer's range is closed; `VisionSpec.summary_ratio` must be above 0.
+    if vision_summary_ratio == 0:
+        raise typer.BadParameter(
+            "must be above 0", param_hint="'--vision-summary-ratio'"
+        )
     settings = get_settings()
     limits = SourceLimits(
         max_bytes=int(max_remote_gb * 1e9)
@@ -508,6 +532,7 @@ def grade(
                 tier=tier,
                 vision_samples=vision_samples,
                 full_frame_scan=True if full_frame_scan else None,
+                vision_summary_ratio=vision_summary_ratio,
                 hash_source=hash_source,
                 keep_episodes=report is not None and report.suffix.lower() != ".json",
             )

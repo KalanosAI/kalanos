@@ -1,8 +1,34 @@
 # Report schema
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, and the 8.0.0 changes (written by Kalanos 0.9.0) below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0) and the 8.1.0 additions below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 8.1.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `ChannelBinding.representation` | `str` | Takes a new value, `quaternion`: the channel is one of four whose names end in `qx`, `qy`, `qz` and `qw`, read together as a unit quaternion. Under `streams[].channels[].channel.binding`. |
+| `streams[].metrics["rotation_snr_db"]` | `MetricResult` | The signal-to-noise ratio of a stream's unit-quaternion rotation, in dB, measured on the angle between rotations. Present on every series stream, `not_applicable` where the stream holds no quaternion. Its `snr_db` on each of the four channels is `not_applicable`. |
+| `DatasetWarning.code` | `"task_instruction_missing"` | Takes a new value: some episodes have no task instruction and the policy does not grade that. The message gives the count and up to 10 episode ids. Feeds no score. |
+| `DatasetWarning.code` | `"episode_count_mismatch"` | Takes a new value: a source declares an episode count that disagrees with its episode metadata or its data. The message gives the declared count and both counts found. Feeds no score. |
+| `DatasetWarning.code` | `"camera_swap"` | Takes a new value: two cameras hold each other's footage over 3 or more consecutive episodes. The message names both cameras and gives the episodes as up to 20 runs of consecutive numbers. Feeds no score. |
+| `DatasetWarning.code` | `"camera_viewpoint_change"` | Takes a new value: a camera's view changes between two groups of consecutive episodes. The message names the camera, the episode the change follows and the episodes on each side as up to 20 runs of consecutive numbers. Feeds no score. |
+| `streams[].metrics["corrupt_frame_pct"]` | `MetricResult` | The share of a camera stream's sampled frames that are blank or hold decoder noise, with `blank`, `noise`, `median_score` and `candidates` as evidence. `not_applicable` where the frames are under 32 px on their shorter side. |
+| `DatasetWarning.code` | `"corrupt_footage"` | Takes a new value: some episodes are blocked because a camera stream is mostly blank or decoder noise. The message gives the count and up to 20 runs of consecutive episode numbers. Feeds no score. |
+| `VideoFormat.rotation_deg` | `float` or `null` | The display rotation the first frame carries, in degrees counterclockwise, read from its display matrix. `null` when no frame decodes. Under `streams[].video_format.found` only. |
+| `VideoFormat.interlaced` | `bool` or `null` | Whether the first frame is interlaced. `null` when no frame decodes. Under `streams[].video_format.found` only. |
+| `DatasetWarning.code` | `"low_bitrate"`, `"high_bitrate"`, `"rotation"`, `"hdr_transfer"`, `"interlaced"` | Take five new values: video files whose bitrate is far below or far above the median of the same camera's other files, that carry rotation metadata, that use an HDR transfer function, or that are interlaced. Each message names the camera, file and value of up to 10 files. Feed no score. |
+| `episodes[].metrics["episode_not_in_metadata"]` | `MetricResult` | 1 when the episode has rows in the data and no row in the episode metadata, else 0, with the files holding its rows as evidence. Such an episode is listed in `episodes` with no streams. `not_applicable` where the format names no data file per episode. |
+| `datasets[].simulator` | `str` or `null` | The simulator a LeRobot dataset card's tags name, lower-cased; `null` when it names none or the dataset has no card. |
+| `streams[].metrics["frozen_frame_pct"].evidence["footage"]` | `"simulated"` | Present only on simulated footage, where the result stays `report_only` with an `ungraded_reason` and raises no finding. |
+| `streams[].metrics["still_scene_pct"]` | `MetricResult` | The share of a camera stream's frames inside stretches of at least 5 s whose picture changes by under 3 grey levels over 1 s, with each stretch's time range in `stretches_s` in its evidence. Measured under a full frame scan only, `not_applicable` otherwise. Report-only. |
+| `shared_footage` | `list[list[FootageStream]]` | Each group of camera streams whose sampled frames hash identically and that sit under two or more camera keys. A `FootageStream` is `{episode, camera}`: `episode` is an index into `episodes`, `camera` a `cameras[].camera`. Streams are in episode order, and groups are ordered by their first stream. Empty by default, so an older report loads unchanged. |
+| `findings[]` with `metric_id` `vision.repeated_footage_across_cameras` | `Finding` | One per stream in a `shared_footage` group. `value` counts the streams in the group under other camera keys, `evidence` holds `camera` and `n_frames`. |
+
+`GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
+
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it has no `shared_footage`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `camera_swap`, `camera_viewpoint_change`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 
@@ -173,7 +199,7 @@ A 7.0.0 report loads with `family_weights`, `duplicates`, every `metrics` and ev
 
 - `Stream.clock_info: ClockInfo` — `origin` (`capture`, `receive`, `publish`, `log`, `presentation`, `generated`, `simulation`, `unknown`), `origin_evidence` (`producer`, `adapter`, `inferred`, `none`), native unit/dtype, transforms. `ClockInfo.from_legacy(Clock.RECONSTRUCTED)` yields inferred generation, never certified capture. Adapters populate it and expose `clock`, `clock_info` and `source_order` on each graded stream. `tick_period_s` optionally expresses an adapter-generated grid. Legacy capture labels migrate with inferred evidence; they do not supply a producer declaration. Native ticks remain in `Stream.native_timestamps` during analysis and are omitted from the report JSON.
 - `Stream.source_order: SourceOrder` — whether rows are in source order and the index map back when not. LeRobot sample order is preserved; no sample timestamp sort remains.
-- `ChannelBinding` — `actuator`, `quantity`, `representation`, `unit`, `command`, `device`, `origin`, `status`, `validations[]`. Metrics are routed through typed views built from these.
+- `ChannelBinding` — `actuator`, `quantity`, `representation` (`continuous`, `discrete`, `angle`, `quaternion`, `unknown`), `unit`, `command`, `device`, `origin`, `status`, `validations[]`. Metrics are routed through typed views built from these.
 
 ## Policy additions
 

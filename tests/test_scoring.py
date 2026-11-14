@@ -14,6 +14,7 @@ import pytest
 # Internal
 from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.domain import Channel
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.errors import ConfigurationError, MixedWeights
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
@@ -714,6 +715,49 @@ def test_a_drop_rate_at_the_midpoint_scores_the_channel_fifty():
     assert finding.points == pytest.approx(50.0)
 
 
+def test_a_repeated_timestamp_is_a_critical_finding_that_requests_review():
+    """Verify the default policy grades any repeated or backwards step critical.
+
+    The count is a whole number and the band is good 0.5 / bad 1,
+    so one violation already scores zero.
+    The route is statistical, so without a calibration manifest
+    the finding requests review rather than blocking.
+    """
+
+    policy = load_default_policy()
+
+    _, _score, findings = score_metrics(
+        {"monotonic_violations": _report_only(1.0, unit="count")},
+        level=Level.STREAM,
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+        location=_LOCATION.model_copy(update={"channel": None}),
+    )
+
+    [finding] = findings
+    assert finding.metric_id == "timing.monotonic_violations"
+    assert finding.severity == Severity.CRITICAL
+    assert finding.consequence == Consequence.REVIEW
+    assert finding.route is None
+
+
+def test_an_ordered_clock_grades_good_with_no_order_finding():
+    """Verify a stream with no repeated or backwards step passes the order check."""
+
+    policy = load_default_policy()
+
+    graded, _score, findings = score_metrics(
+        {"monotonic_violations": _report_only(0.0, unit="count")},
+        level=Level.STREAM,
+        taxonomy_type=_TAXONOMY_TYPE,
+        policy=policy,
+        location=_LOCATION.model_copy(update={"channel": None}),
+    )
+
+    assert graded["monotonic_violations"].status == MetricStatus.GOOD
+    assert findings == []
+
+
 def test_a_good_result_raises_no_finding():
     """Verify a passing metric produces a score but no finding.
 
@@ -1371,6 +1415,29 @@ def test_spike_pct_stays_report_only_for_a_frame_reward():
     assert resolved.points is None
 
 
+@pytest.mark.parametrize(
+    ("metric_name", "value"), [("flatline_pct", 100.0), ("spike_pct", 5.0)]
+)
+def test_sensor_checks_stay_report_only_for_a_computed_feature(
+    metric_name: str, value: float
+):
+    """Verify a computed feature's null bands reach scoring.
+
+    A direction level or an activity flag holds and steps by construction,
+    so neither a full flatline nor a high spike share earns points.
+    """
+
+    resolved = resolve_status(
+        _report_only(value, unit="%"),
+        metric_name=metric_name,
+        taxonomy_type="derived.computed_feature",
+        policy=load_default_policy(),
+    )
+
+    assert resolved.status == MetricStatus.REPORT_ONLY
+    assert resolved.points is None
+
+
 def test_drift_stays_report_only_by_policy_design():
     """Verify drift's ungraded reason names its design, not a missing band.
 
@@ -1597,3 +1664,31 @@ def test_dataset_metric_rollups_count_distinct_subjects():
     assert missing.n_graded == 2
     assert missing.n_flagged == 1
     assert missing.n_episodes_flagged == 2
+
+
+def test_a_simulated_footage_mark_keeps_frozen_frames_report_only():
+    """A freeze on simulated footage stays ungraded under the default policy."""
+
+    policy = load_default_policy()
+    evidence = {"n_runs": 1}
+
+    def resolved(extra):
+        return resolve_status(
+            MetricResult(
+                value=50.0,
+                unit="%",
+                status=MetricStatus.REPORT_ONLY,
+                evidence={**evidence, **extra},
+            ),
+            metric_name="frozen_frame_pct",
+            taxonomy_type="unmapped.camera",
+            policy=policy,
+        )
+
+    graded = resolved({})
+    marked = resolved({"footage": "simulated"})
+
+    assert graded.status != MetricStatus.REPORT_ONLY
+    assert marked.status == MetricStatus.REPORT_ONLY
+    assert marked.points is None
+    assert "simulated footage" in marked.evidence["ungraded_reason"]

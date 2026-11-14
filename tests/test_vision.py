@@ -5,9 +5,15 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import dataclasses
 import json
+import math
 import random
+import shutil
+from contextlib import closing
 from fractions import Fraction
+from pathlib import Path
+from typing import Any
 
 # External
 import polars as pl
@@ -22,6 +28,7 @@ from kalanos.analysis.adapters.video import (
     ContainerHeader,
     DeclaredFormat,
     DecodeFailed,
+    ReadInterrupted,
     SegmentPackets,
     VideoPayload,
 )
@@ -40,20 +47,24 @@ from kalanos.analysis.metrics.vision import (
     camera_frames,
     camera_stream_present,
     contrast_score,
+    corrupt_frame_pct,
     dark_frame_pct,
+    delivery_spec_met,
     exposure_level,
     exposure_shift_pct,
     footage_vector,
     frame_count_vs_timebase,
+    frames_readable,
     frozen_frame_pct,
     max_gap_s,
     pts_defect_pct,
     sharpness_score,
+    still_scene_pct,
     video_format_consistency,
 )
 from kalanos.analysis.models.binding import RequirementsSection
 from kalanos.analysis.models.coverage import Availability
-from kalanos.analysis.models.diagnostics import VisionSpec
+from kalanos.analysis.models.diagnostics import DeliverySpec, VisionSpec
 from kalanos.analysis.models.domain import (
     Clock,
     Episode,
@@ -100,7 +111,15 @@ from kalanos.testing import (
 from kalanos.testing.injectors import SyntheticFrames, blur_frames
 
 # Local
-from helpers import LEROBOT_FIXTURE
+from helpers import (
+    LEROBOT_FIXTURE,
+    LEROBOT_V2_0_FIXTURE,
+    LEROBOT_V2_1_FIXTURE,
+    all_noise,
+    noise_frame,
+    replaced_frames,
+    scene_frames,
+)
 
 
 numpy = pytest.importorskip("numpy")
@@ -120,9 +139,17 @@ VISION_METRICS = [
     frame_count_vs_timebase,
     pts_defect_pct,
     max_gap_s,
+    frames_readable,
 ]
 
 ACTION_TYPE = "action.joint_position_command"
+
+# Vision metrics the default policy grades in every scope.
+STRUCTURAL_VISION_METRICS = frozenset(
+    key
+    for key, entry in load_default_policy().metrics.items()
+    if entry.graded_in_every_scope
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -282,6 +309,77 @@ def _assert_not_applicable(result) -> str:
     return reason
 
 
+def _fail_after_the_first_frame(monkeypatch, failure: type[DecodeFailed]) -> None:
+    """Make every video read yield its first frame and then raise `failure`."""
+
+    windows = VideoPayload._windows
+
+    def failing(self, *args, **kwargs):
+        with closing(windows(self, *args, **kwargs)) as frames:
+            for count, item in enumerate(frames):
+                if count:
+                    raise failure(f"{self.path}: corrupt packet")
+                yield item
+
+    monkeypatch.setattr(VideoPayload, "_windows", failing)
+
+
+def _fail_the_packet_probe(monkeypatch, failure: type[DecodeFailed]) -> None:
+    """Make every packet probe raise `failure`."""
+
+    def failing(self):
+        raise failure(f"{self.path}: unreadable packet")
+
+    monkeypatch.setattr(VideoPayload, "packet_times", failing)
+
+
+def _scopes():
+    """The packaged policy under a video scope and under the default scope."""
+
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    return video_scope, scope_policy(load_default_policy(), RequirementsSection())
+
+
+def _grade_camera(stream: Stream, policy, full_frame_scan: bool = False):
+    """Grade `stream` under `policy`, returning its metrics and its findings by id."""
+
+    graded, findings = grade_stream(
+        stream,
+        policy=policy,
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+        full_frame_scan=full_frame_scan,
+    )
+    return graded, {finding.metric_id: finding for finding in findings}
+
+
+def _assert_blocks_the_camera(finding: Finding, stage: str, message: str) -> None:
+    """Assert `finding` blocks by contract, naming the camera, file and `stage`."""
+
+    assert (finding.consequence, finding.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    assert finding.source_field == CAMERA_FIELD
+    assert finding.source_path is not None
+    assert finding.source_path.endswith(LEROBOT_VIDEO.name)
+    assert finding.evidence["stage"] == stage
+    assert message in finding.evidence["reason"]
+
+
+def _eligibility_reasons(report) -> list[set[str]]:
+    """Each episode's eligibility reason ids."""
+
+    return [
+        {reason.id for reason in episode.eligibility.reasons}
+        for episode in report.episodes
+    ]
+
+
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
 # ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
 # ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
@@ -331,8 +429,8 @@ def test_a_corrupt_video_is_not_applicable_and_the_stream_still_grades(tmp_path)
     assert graded.metrics["sharpness_score"].availability == Availability.UNAVAILABLE
 
 
-def test_a_short_video_blocks_only_under_a_video_scope():
-    """A frame-count mismatch blocks through its contract under a video scope."""
+def test_a_short_video_blocks_in_every_scope():
+    """A frame-count mismatch blocks through its contract in either scope."""
 
     truncated = _video_stream(
         VideoPayload(path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30),
@@ -345,13 +443,12 @@ def test_a_short_video_blocks_only_under_a_video_scope():
     default_scope = scope_policy(load_default_policy(), RequirementsSection())
     metric_id = "vision.frame_count_vs_timebase"
 
-    finding = _grade(truncated, video_scope)[metric_id]
-    assert (finding.consequence, finding.route) == (
-        Consequence.BLOCK,
-        BlockingRoute.CONTRACT,
-    )
-    reported = _grade(truncated, default_scope).get(metric_id)
-    assert reported is None or reported.consequence != Consequence.BLOCK
+    for scoped in (video_scope, default_scope):
+        finding = _grade(truncated, scoped)[metric_id]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
 
 
 CAMERA_FIELD = "observation.images.up"
@@ -404,7 +501,7 @@ def _unreadable(tmp_path) -> UPath:
     ],
     ids=["missing", "unreadable", "frameless", "segment_past_the_end", "remote"],
 )
-def test_an_absent_camera_blocks_only_under_a_video_scope(tmp_path, build):
+def test_an_absent_camera_blocks_in_every_scope(tmp_path, build):
     """A camera with no first frame to read blocks through its contract, naming it."""
 
     stream = build(tmp_path)
@@ -415,16 +512,14 @@ def test_an_absent_camera_blocks_only_under_a_video_scope(tmp_path, build):
     default_scope = scope_policy(load_default_policy(), RequirementsSection())
     metric_id = "vision.camera_stream_present"
 
-    finding = _grade(stream, video_scope)[metric_id]
-    assert (finding.consequence, finding.route) == (
-        Consequence.BLOCK,
-        BlockingRoute.CONTRACT,
-    )
-    assert finding.source_field == CAMERA_FIELD
-    assert all(
-        finding.consequence != Consequence.BLOCK
-        for finding in _grade(stream, default_scope).values()
-    )
+    for scoped in (video_scope, default_scope):
+        finding = _grade(stream, scoped)[metric_id]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
+        assert finding.source_field == CAMERA_FIELD
+        assert "vision.frames_readable" not in _grade(stream, scoped)
 
 
 @pytest.mark.parametrize("failing", ["open", "read"])
@@ -599,7 +694,7 @@ def test_the_shared_read_numbers_frames_as_each_read_alone(
     payload = VideoPayload(path=path, frame_count=60, start_s=0.0, end_s=2.0)
     sampled = [15, 25]
     spec = VisionSpec()
-    limits = {
+    limits: dict[str, Any] = {
         "dark_level": spec.dark_level,
         "bright_level": spec.bright_level,
         "max_decode_frames": spec.max_decode_frames,
@@ -608,9 +703,9 @@ def test_the_shared_read_numbers_frames_as_each_read_alone(
 
     ranges = vision._split(windows + cut_windows + [(0, 1)], 60)
     shared = vision._pass(
-        payload, ranges, windows, sampled, sampled, cut_windows, **limits
+        payload, ranges, windows, sampled, sampled, sampled, cut_windows, **limits
     )
-    alone = vision._read(payload, windows, sampled, sampled, **limits)
+    alone = vision._read(payload, windows, sampled, sampled, sampled, **limits)
     cut, failure = _window_thumbnails(payload, cut_windows)
 
     assert isinstance(shared.frames, vision._Frames)
@@ -726,6 +821,103 @@ def test_video_format_consistency_lists_undeclared_fields():
     )
 
 
+def _with_spec(**fields) -> StreamContext:
+    """A camera context whose bundle declares a delivery spec of `fields`."""
+
+    ctx = stream_context(_camera(LEROBOT_VIDEO))
+    return ctx.model_copy(
+        update={"vision": VisionSpec(delivery=DeliverySpec(**fields))}
+    )
+
+
+def _fixture_header() -> ContainerHeader:
+    """The header of the fixture video."""
+
+    payload = _camera(LEROBOT_VIDEO).payload
+    assert isinstance(payload, VideoPayload)
+    header = vision._header(payload)
+    assert isinstance(header, ContainerHeader)
+    assert header.fps is not None and header.codec is not None
+    return header
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["min_width", "min_height", "min_fps", "min_duration_s", "codecs"],
+)
+def test_delivery_spec_names_each_missed_field(field):
+    """One field below its minimum is the one miss, with both values."""
+
+    header = _fixture_header()
+    payload = _camera(LEROBOT_VIDEO).payload
+    assert isinstance(payload, VideoPayload)
+    span = payload.end_s - payload.start_s
+    required, found = {
+        "min_width": (header.width + 1, header.width),
+        "min_height": (header.height + 1, header.height),
+        "min_fps": (float(header.fps or 0) * 2, header.fps),
+        "min_duration_s": (span + 1, span),
+        "codecs": (["not-a-codec"], header.codec),
+    }[field]
+
+    result = delivery_spec_met(_with_spec(**{field: required}))
+
+    assert result.value == 0.0
+    (miss,) = result.evidence["misses"]
+    assert miss["field"] == field
+    assert miss["required"] == required
+    assert miss["found"] == pytest.approx(found)
+
+
+def test_delivery_spec_met_at_the_minimums():
+    """A spec equal to the header's values passes, and the rate keeps its tolerance."""
+
+    header = _fixture_header()
+    result = delivery_spec_met(
+        _with_spec(
+            min_width=header.width,
+            min_height=header.height,
+            min_fps=float(header.fps or 0) * (1 + vision._FPS_REL_TOL / 2),
+            min_duration_s=6 / 30,
+            codecs=[str(header.codec).upper()],
+        )
+    )
+
+    assert result.value == 1.0
+    assert result.evidence["misses"] == []
+
+
+def test_delivery_spec_lists_unstated_fields(monkeypatch):
+    """A header that does not state the codec contradicts no allowed list."""
+
+    header = dataclasses.replace(_fixture_header(), codec=None)
+    monkeypatch.setattr(vision, "_header", lambda payload: header)
+
+    result = delivery_spec_met(_with_spec(codecs=["h264"]))
+
+    assert result.value == 1.0
+    assert result.evidence["unstated"] == ["codec"]
+    assert result.evidence["misses"] == []
+
+
+def test_delivery_spec_not_applicable_without_a_spec():
+    """The default bundle declares no spec, so nothing is checked."""
+
+    _assert_not_applicable(delivery_spec_met(stream_context(_camera(LEROBOT_VIDEO))))
+    _assert_not_applicable(delivery_spec_met(_with_spec()))
+
+
+def test_camera_frames_parameters_leave_out_the_delivery_spec():
+    """The frame evidence does not change when a spec is declared."""
+
+    plain = camera_frames(stream_context(_camera(LEROBOT_VIDEO)))
+    with_spec = camera_frames(_with_spec(min_width=1))
+
+    assert plain is not None and with_spec is not None
+    assert "delivery" not in with_spec.parameters
+    assert with_spec.parameters == plain.parameters
+
+
 def test_format_reads_the_header_without_numpy(monkeypatch):
     """Comparing the header needs only the decoder; presence still names numpy."""
 
@@ -734,6 +926,18 @@ def test_format_reads_the_header_without_numpy(monkeypatch):
 
     assert video_format_consistency(stream_context(stream)).value == 0.0
     assert "numpy" in _assert_not_applicable(
+        camera_stream_present(stream_context(stream))
+    )
+
+
+def test_vision_reads_need_opencv(monkeypatch):
+    """Sampling frames needs OpenCV for the blur; comparing the header does not."""
+
+    monkeypatch.setattr(vision, "load_cv2", lambda: None)
+    stream = _camera(LEROBOT_VIDEO, DeclaredFormat(fps=30.0))
+
+    assert video_format_consistency(stream_context(stream)).value == 0.0
+    assert "OpenCV" in _assert_not_applicable(
         camera_stream_present(stream_context(stream))
     )
 
@@ -774,7 +978,7 @@ def test_presence_and_format_skip_in_memory_frames():
     """Frames held in memory have no file to be missing or to declare a format."""
 
     stream = clean_frames()
-    for check in (camera_stream_present, video_format_consistency):
+    for check in (camera_stream_present, video_format_consistency, delivery_spec_met):
         _assert_not_applicable(check(stream_context(stream)))
 
 
@@ -826,6 +1030,354 @@ def test_an_absent_camera_alone_gives_vision_no_score(tmp_path):
     episode = score_episode([stream_grade], {}, policy=video_scope)
     assert "vision" not in episode.families
     assert episode.metrics["vision.camera_stream_present"].points == 0.0
+
+
+def test_the_default_scope_grades_only_the_structural_vision_checks():
+    """Outside a video scope only the structural checks grade, and at weight 0."""
+
+    scoped = scope_policy(load_default_policy(), RequirementsSection())
+
+    vision_keys = [key for key in scoped.metrics if key.startswith("vision.")]
+    assert STRUCTURAL_VISION_METRICS == {
+        "vision.frame_count_vs_timebase",
+        "vision.camera_stream_present",
+        "vision.frames_readable",
+        "vision.corrupt_frame_pct",
+        "vision.delivery_spec_met",
+    }
+    for key in vision_keys:
+        entry = scoped.metrics[key]
+        if key in STRUCTURAL_VISION_METRICS:
+            assert (entry.report_only, entry.weight) == (False, 0), key
+        else:
+            assert entry.report_only, key
+    video_scope = scope_policy(
+        load_default_policy(),
+        RequirementsSection(required_capabilities=["sampled_video_quality"]),
+    )
+    assert video_scope.metrics["vision.frame_count_vs_timebase"].weight == 4
+    assert video_scope.metrics["vision.frames_readable"].weight == 0
+
+
+def test_a_users_report_only_structural_check_stays_report_only():
+    """The default scope keeps a policy's own report_only on a structural check."""
+
+    policy = load_default_policy()
+    key = "vision.frame_count_vs_timebase"
+    policy.metrics[key] = policy.metrics[key].model_copy(update={"report_only": True})
+
+    assert scope_policy(policy, RequirementsSection()).metrics[key].report_only
+
+
+@pytest.mark.parametrize("truncated", [False, True], ids=["clean", "truncated"])
+def test_the_structural_checks_leave_the_default_score_unchanged(truncated):
+    """At weight 0 the structural checks score an episode as report-only ones do."""
+
+    stream = (
+        _video_stream(
+            VideoPayload(
+                path=LEROBOT_VIDEO, frame_count=8, start_s=8 / 30, end_s=16 / 30
+            ),
+            8,
+        ).model_copy(update={"source_field": CAMERA_FIELD})
+        if truncated
+        else _camera(LEROBOT_VIDEO)
+    )
+    requirements = RequirementsSection()
+    graded = scope_policy(load_default_policy(), requirements)
+    reported = load_default_policy()
+    for key in STRUCTURAL_VISION_METRICS:
+        reported.metrics[key] = reported.metrics[key].model_copy(
+            update={"report_only": True}
+        )
+    reported = scope_policy(reported, requirements)
+
+    def scored(policy):
+        """Grade the camera beside a clean numeric stream, scored as one episode."""
+
+        stream_grade, findings = grade_stream(
+            stream, policy=policy, is_regular=True, episode_id="e0", category=None
+        )
+        # Without a numeric stream the episode has no score to move.
+        numeric, _findings = grade_stream(
+            clean_recording(),
+            policy=policy,
+            is_regular=True,
+            episode_id="e0",
+            category=None,
+        )
+        episode = score_episode([stream_grade, numeric], {}, policy=policy)
+        return stream_grade, findings, episode
+
+    stream_grade, findings, episode = scored(graded)
+    _reported_stream, _reported_findings, baseline = scored(reported)
+    assert "vision" not in stream_grade.score.families
+    assert "vision" not in episode.families
+    assert episode.score is not None
+    assert (episode.score, episode.n_contributing) == (
+        baseline.score,
+        baseline.n_contributing,
+    )
+    blocking = [
+        finding.metric_id
+        for finding in findings
+        if finding.consequence == Consequence.BLOCK
+    ]
+    assert blocking == (["vision.frame_count_vs_timebase"] if truncated else [])
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [LEROBOT_FIXTURE, LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE],
+    ids=lambda fixture: fixture.name,
+)
+def test_the_video_fixtures_keep_their_decisions_in_the_default_scope(fixture):
+    """Clean video datasets block nothing and keep a full score in the default scope."""
+
+    report = kalanos.api.grade(str(fixture))
+
+    assert report.gate is not None and not report.gate.failing_episodes
+    assert not [
+        finding
+        for finding in report.findings
+        if finding.metric_id in STRUCTURAL_VISION_METRICS
+    ]
+    assert report.readiness is not None and report.readiness.score == 100.0
+
+
+def _lerobot_with_a_cut_short_video(tmp_path: Path) -> Path:
+    """The tiny LeRobot v3 fixture with its shared video cut after episode 0's frames.
+
+    Both episodes share one file: episode 0 holds frames 0-7 and episode 1 frames 8-13.
+    Keeping only the first 8 leaves episode 1's declared segment with no frame in it.
+    """
+
+    av = pytest.importorskip("av")
+
+    copy = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), copy)
+    video_file = copy / "videos" / CAMERA_FIELD / "chunk-000" / "file-000.mp4"
+    source = video_file.with_suffix(".source.mp4")
+    video_file.rename(source)
+    with av.open(str(source)) as reader, av.open(str(video_file), "w") as writer:
+        decoded = reader.streams.video[0]
+        encoded = writer.add_stream("libx264", rate=30, options={"bf": "0"})
+        encoded.width, encoded.height = decoded.width, decoded.height
+        encoded.pix_fmt = "yuv420p"
+        for index, frame in enumerate(reader.decode(decoded)):
+            if index == 8:
+                break
+            frame.pts, frame.time_base = index, Fraction(1, 30)
+            for packet in encoded.encode(frame):
+                writer.mux(packet)
+        for packet in encoded.encode():
+            writer.mux(packet)
+    source.unlink()
+    return copy
+
+
+def test_a_video_cut_short_blocks_only_the_episodes_it_lost(tmp_path):
+    """A shared video that ends early blocks the episode it lost, by contract."""
+
+    report = kalanos.api.grade(str(_lerobot_with_a_cut_short_video(tmp_path)))
+
+    assert report.gate is not None
+    failing = report.gate.failing_episodes
+    assert [item.episode_id.rpartition("::")[2] for item in failing] == [
+        "episode_000001"
+    ]
+    assert all(
+        reason.endswith(tuple(f".{metric}" for metric in STRUCTURAL_VISION_METRICS))
+        for reason in failing[0].reasons
+    )
+    findings = {
+        finding.metric_id: finding
+        for finding in report.findings
+        if finding.episode_id is not None
+        and finding.episode_id.endswith("episode_000001")
+    }
+    frame_count = findings["vision.frame_count_vs_timebase"]
+    assert (frame_count.consequence, frame_count.route) == (
+        Consequence.BLOCK,
+        BlockingRoute.CONTRACT,
+    )
+    assert (frame_count.evidence["present"], frame_count.evidence["implied"]) == (0, 6)
+    assert frame_count.source_path is not None
+    assert frame_count.source_path.endswith(f"{CAMERA_FIELD}/chunk-000/file-000.mp4")
+    assert findings["vision.camera_stream_present"].consequence == Consequence.BLOCK
+
+
+@pytest.mark.parametrize("full_frame_scan", [False, True], ids=["sampled", "full"])
+def test_a_frame_that_fails_to_decode_blocks_in_every_scope(
+    monkeypatch, full_frame_scan
+):
+    """A frame that fails to decode after the first blocks, naming camera and file."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        graded, findings = _grade_camera(stream, scoped, full_frame_scan)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "decode", "corrupt packet"
+        )
+        assert graded.metrics["sharpness_score"].availability == (
+            Availability.UNAVAILABLE
+        )
+        assert "vision.camera_stream_present" not in findings
+
+
+def test_unreadable_packets_block_in_every_scope(monkeypatch):
+    """A segment whose packets cannot be demuxed blocks, naming camera and file."""
+
+    _fail_the_packet_probe(monkeypatch, DecodeFailed)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "demux", "unreadable packet"
+        )
+
+
+def test_a_failure_only_in_cut_windows_reads_as_a_defect(monkeypatch, tmp_path):
+    """A frame that fails to decode in cut_count's windows alone is still a defect."""
+
+    stream = _paced_camera(
+        UPath(tmp_path / "long.mp4"), list(range(1000)), CAMERA_FIELD
+    )
+    ctx = stream_context(stream, episode_streams=[_moving_actions(1000)])
+    windows, _sampled = vision._layout(ctx, False)
+    plan = _plan_cuts(ctx)
+    assert not isinstance(plan, MetricResult)
+    cut_only = [
+        (start, end)
+        for start, end in vision._merge(windows + plan.windows, 1000)
+        if not any(s < end and start < e for s, e in windows)
+    ]
+    failing_at = cut_only[0][0]
+
+    gray_windows = VideoPayload.gray_windows
+
+    def failing(self, windows, size, native=frozenset(), **caps):
+        counts = [0] * len(windows)
+        for item in gray_windows(self, windows, size, native, **caps):
+            index = windows[item[0]][0] + counts[item[0]]
+            counts[item[0]] += 1
+            if index == failing_at:
+                raise DecodeFailed("corrupt packet")
+            yield item
+
+    monkeypatch.setattr(VideoPayload, "gray_windows", failing)
+    result = frames_readable(ctx)
+
+    assert sharpness_score(ctx).value is not None
+    assert result.value == 0.0
+    assert (result.evidence["stage"], result.evidence["reason"]) == (
+        "decode",
+        "corrupt packet",
+    )
+
+
+@pytest.mark.parametrize("stage", ["decode", "demux"])
+def test_a_network_interruption_reads_no_defect(monkeypatch, stage):
+    """A read that fails outside the file says nothing about it, and blocks nothing."""
+
+    if stage == "decode":
+        _fail_after_the_first_frame(monkeypatch, ReadInterrupted)
+    else:
+        _fail_the_packet_probe(monkeypatch, ReadInterrupted)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        graded, findings = _grade_camera(stream, scoped)
+        result = graded.metrics["frames_readable"]
+        assert (result.value, result.availability) == (None, Availability.UNAVAILABLE)
+        assert "vision.frames_readable" not in findings
+        if stage == "decode":
+            assert graded.metrics["sharpness_score"].availability == (
+                Availability.ERROR
+            )
+
+
+@pytest.mark.parametrize("probe", ["header", "packets"])
+def test_a_network_failure_elsewhere_still_blocks_a_corrupt_frame(monkeypatch, probe):
+    """A corrupt frame blocks though another read of its file fails on the network."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    if probe == "header":
+
+        def interrupted(self):
+            raise ReadInterrupted(f"{self.path}: connection reset")
+
+        monkeypatch.setattr(VideoPayload, "header", interrupted)
+    else:
+        _fail_the_packet_probe(monkeypatch, ReadInterrupted)
+    stream = _camera(LEROBOT_VIDEO)
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        _assert_blocks_the_camera(
+            findings["vision.frames_readable"], "decode", "corrupt packet"
+        )
+
+
+def test_an_undecodable_frame_blocks_the_episode_by_name(monkeypatch):
+    """A corrupt frame blocks each episode it falls in, as an unreadable camera."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE))
+
+    assert report.gate is not None
+    failing = report.gate.failing_episodes
+    assert len(failing) == len(report.episodes) == 2
+    assert all(
+        reason.endswith(".vision.frames_readable")
+        for item in failing
+        for reason in item.reasons
+    )
+    assert all("analysis_error" not in ids for ids in _eligibility_reasons(report))
+    findings = [
+        finding
+        for finding in report.findings
+        if finding.metric_id == "vision.frames_readable"
+    ]
+    assert len(findings) == 2
+    for finding in findings:
+        assert finding.source_path is not None
+        assert finding.source_path.endswith(f"{CAMERA_FIELD}/chunk-000/file-000.mp4")
+
+
+def test_an_interrupted_read_leaves_the_episode_unknown(monkeypatch):
+    """A read that fails on the network keeps the episode unknown and blocks nothing."""
+
+    _fail_after_the_first_frame(monkeypatch, ReadInterrupted)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE))
+
+    assert not [
+        finding
+        for finding in report.findings
+        if finding.metric_id == "vision.frames_readable"
+    ]
+    assert all("analysis_error" in ids for ids in _eligibility_reasons(report))
+
+
+def test_the_metadata_tier_blocks_no_undecodable_frame(monkeypatch):
+    """The metadata tier reads no frame and no packet, so it blocks on neither."""
+
+    _fail_after_the_first_frame(monkeypatch, DecodeFailed)
+    _fail_the_packet_probe(monkeypatch, DecodeFailed)
+
+    report = kalanos.api.grade(str(LEROBOT_FIXTURE), tier=ExecutionTier.METADATA)
+
+    assert report.gate is not None
+    assert not report.gate.failing_episodes
 
 
 @pytest.mark.parametrize(
@@ -1374,6 +1926,130 @@ def test_blurring_lowers_sharpness_score():
     assert blurred < sharp
 
 
+def _reference_laplacian_var(frame) -> float:
+    """Variance of the 3x3 Laplacian over the frame's interior, in float64.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D luminance frame.
+
+    Returns
+    -------
+    float
+        The variance, or `nan` for a frame under 3 pixels in either dimension.
+    """
+
+    image = frame.astype("float64")
+    laplacian = (
+        image[:-2, 1:-1]
+        + image[2:, 1:-1]
+        + image[1:-1, :-2]
+        + image[1:-1, 2:]
+        - 4 * image[1:-1, 1:-1]
+    )
+    return float(laplacian.var())
+
+
+def _reference_reblur_loss(frame, laplacian: float) -> float:
+    """Share of `laplacian` a normalised 3x3 box blur removes, in float64.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        A 2-D luminance frame.
+    laplacian : float
+        `_reference_laplacian_var` of the frame.
+
+    Returns
+    -------
+    float
+        The share, or 0.0 for a frame with no edges.
+    """
+
+    if laplacian == 0:
+        return 0.0
+    height, width = frame.shape
+    padded = numpy.pad(frame.astype("float64"), 1, mode="edge")
+    blurred = numpy.zeros((height, width))
+    for dy in range(3):
+        for dx in range(3):
+            blurred += padded[dy : dy + height, dx : dx + width]
+    blurred /= 9
+    return 1 - _reference_laplacian_var(blurred) / laplacian
+
+
+def _blur_frame(kind: str, height: int, width: int):
+    """Build a uint8 luminance frame for the blur reference test.
+
+    Parameters
+    ----------
+    kind : str
+        `noise`, `smooth` (Gaussian-smoothed noise), `ramp` (0 to 255 left to right),
+        `edge` (left half black, right half white), `black` or `white`.
+    height : int
+        Rows of the frame.
+    width : int
+        Columns of the frame.
+
+    Returns
+    -------
+    numpy.ndarray
+        The frame.
+    """
+
+    rng = numpy.random.default_rng(42)
+    if kind == "noise":
+        return rng.integers(0, 256, (height, width), dtype=numpy.uint8)
+    if kind == "smooth":
+        taps = numpy.exp(-0.5 * (numpy.arange(-6, 7) / 2.0) ** 2)
+        taps /= taps.sum()
+        image = rng.integers(0, 256, (height, width)).astype("float64")
+        for axis in (0, 1):
+            image = numpy.apply_along_axis(
+                lambda line: numpy.convolve(line, taps, mode="same"), axis, image
+            )
+        return numpy.clip(numpy.rint(image), 0, 255).astype(numpy.uint8)
+    if kind == "ramp":
+        row = numpy.rint(numpy.linspace(0, 255, width)).astype(numpy.uint8)
+        return numpy.tile(row, (height, 1))
+    if kind == "edge":
+        frame = numpy.zeros((height, width), numpy.uint8)
+        frame[:, width // 2 :] = 255
+        return frame
+    return numpy.full((height, width), 255 if kind == "white" else 0, numpy.uint8)
+
+
+@pytest.mark.parametrize("kind", ["noise", "smooth", "ramp", "edge", "black", "white"])
+@pytest.mark.parametrize("shape", [(5, 7), (448, 448), (480, 640), (720, 1280)])
+def test_opencv_blur_matches_the_float64_reference(kind, shape):
+    """The float32 OpenCV blur stays within 1e-12 of the float64 computation."""
+
+    pytest.importorskip("cv2")
+    frame = _blur_frame(kind, *shape)
+
+    laplacian = vision._laplacian_var(frame)
+    loss = vision._reblur_loss(frame, laplacian)
+
+    if kind in ("black", "white"):
+        assert laplacian == 0.0
+        assert loss == 0.0
+        return
+    reference = _reference_laplacian_var(frame)
+    assert laplacian == pytest.approx(reference, rel=1e-12, abs=0)
+    assert loss == pytest.approx(
+        _reference_reblur_loss(frame, reference), rel=0, abs=1e-12
+    )
+
+
+def test_a_frame_under_three_pixels_has_no_laplacian_variance():
+    """A frame with no interior pixel has no Laplacian to take the variance of."""
+
+    pytest.importorskip("cv2")
+
+    assert math.isnan(vision._laplacian_var(numpy.zeros((2, 8), numpy.uint8)))
+
+
 def test_a_flat_frame_reads_as_fully_blurred():
     """A frame with no edges has nothing a re-blur could remove."""
 
@@ -1619,9 +2295,15 @@ def test_a_different_read_decodes_its_own_frames():
     three = sharpness_score(stream_context(stream, vision_samples=3))
     full = sharpness_score(stream_context(stream, full_frame_scan=True))
 
+    full_ctx = stream_context(stream, full_frame_scan=True)
+    rows = camera_frames(full_ctx)
+
     assert ten.evidence["n_sampled"] == 10
     assert three.evidence["n_sampled"] == 3
-    assert full.evidence["n_sampled"] == 1000
+    assert rows is not None
+    assert full.evidence["n_sampled"] == len(rows.requested_rows)
+    assert 100 <= full.evidence["n_sampled"] <= 110
+    assert exposure_shift_pct(full_ctx).evidence["n_sampled"] == 1000
 
 
 def test_a_stream_without_a_frame_rate_samples_single_frames():
@@ -1650,6 +2332,106 @@ def test_a_full_scan_finds_a_blown_out_moment_the_windows_miss():
 
     assert sampled.value == 0
     assert full.value == pytest.approx(3.0)
+
+
+def _with_ratio(ctx: StreamContext, ratio: float) -> StreamContext:
+    """The same context with `VisionSpec.summary_ratio` set to `ratio`."""
+
+    return ctx.model_copy(update={"vision": VisionSpec(summary_ratio=ratio)})
+
+
+def _summary_count(n: int, ratio: float, sampled: list[int]) -> int:
+    """How many frames a full scan of `n` frames summarizes at `ratio`."""
+
+    return len(set(vision._spread(n, math.ceil(ratio * n))) | set(sampled))
+
+
+def test_a_full_scan_measures_native_frames_only_for_the_summary(monkeypatch):
+    """Blur runs once per summary frame, not once per decoded frame."""
+
+    stream = clean_frames(frames=1000)
+    sampled = camera_frames(stream_context(stream))
+    reblur = vision._reblur_loss
+    calls: list[int] = []
+
+    def counting(frame, laplacian):
+        calls.append(1)
+        return reblur(frame, laplacian)
+
+    monkeypatch.setattr(vision, "_reblur_loss", counting)
+    vision.clear_cache()
+    full = camera_frames(stream_context(stream, full_frame_scan=True))
+
+    assert sampled is not None and full is not None
+    assert full.decoded_frames == 1000
+    assert len(calls) == _summary_count(1000, 0.1, sampled.requested_rows)
+
+
+@pytest.mark.parametrize("ratio", [0.1, 0.5])
+def test_summary_metrics_use_the_ratio_and_the_sampled_frames(ratio):
+    """Sharpness, contrast and exposure level measure the ratio plus the sample."""
+
+    stream = clean_frames(frames=1000)
+    sampled = camera_frames(stream_context(stream))
+    ctx = _with_ratio(stream_context(stream, full_frame_scan=True), ratio)
+    assert sampled is not None
+    expected = _summary_count(1000, ratio, sampled.requested_rows)
+
+    counts = [
+        func(ctx).evidence["n_sampled"]
+        for func in (sharpness_score, contrast_score, exposure_level)
+    ]
+    rows = camera_frames(ctx)
+
+    assert counts == [expected] * 3
+    assert rows is not None
+    assert rows.parameters["summary_ratio"] == ratio
+
+
+def test_a_ratio_of_one_measures_every_frame():
+    """At a ratio of 1 a full scan summarizes, and lists, every frame."""
+
+    ctx = _with_ratio(
+        stream_context(clean_frames(frames=200), full_frame_scan=True), 1.0
+    )
+
+    rows = camera_frames(ctx)
+
+    assert sharpness_score(ctx).evidence["n_sampled"] == 200
+    assert rows is not None and len(rows.frames) == 200
+
+
+@pytest.mark.parametrize(
+    ("func", "level"),
+    [(blank_frame_pct, 128), (dark_frame_pct, 0), (bright_frame_pct, 255)],
+    ids=["blank", "dark", "bright"],
+)
+def test_event_metrics_read_every_frame_under_a_full_scan(func, level):
+    """A full scan's per-frame shares count frames outside the summary."""
+
+    stream = clean_frames(frames=1000)
+    assert isinstance(stream.payload, SyntheticFrames)
+    frames = list(stream.payload.frames)
+    for index in range(40, 70):
+        frames[index] = frames[index] * 0 + level
+    altered = stream.model_copy(update={"payload": SyntheticFrames(frames=frames)})
+
+    result = func(stream_context(altered, full_frame_scan=True))
+
+    assert result.evidence["n_sampled"] == 1000
+    assert result.value == pytest.approx(3.0)
+
+
+def test_a_sampled_read_ignores_the_ratio():
+    """Without a full scan the summary is the sample, whatever the ratio."""
+
+    stream = clean_frames(frames=1000)
+
+    default = sharpness_score(stream_context(stream))
+    vision.clear_cache()
+    halved = sharpness_score(_with_ratio(stream_context(stream), 0.5))
+
+    assert halved == default
 
 
 def test_exposure_catches_part_of_a_stream_blown_out():
@@ -1762,6 +2544,141 @@ def test_blank_frame_pct_counts_only_blank_frames():
     assert all(20 <= index < 60 for index in result.evidence["bad_indices"])
     intervals = [(i.start, i.end_exclusive) for i in result.support.intervals]
     assert intervals == [(i, i + 1) for i in result.evidence["bad_indices"]]
+
+
+def test_corrupt_frames_read_zero_on_a_clean_scene():
+    """Structured frames hold detail, and the noise rule leaves them alone."""
+
+    result = corrupt_frame_pct(stream_context(scene_frames(30)))
+
+    assert result.value == 0
+    assert (result.evidence["noise"], result.evidence["blank"]) == (0, 0)
+    assert result.evidence["median_score"] < 1
+
+
+def test_corrupt_frame_pct_passes_the_contract():
+    """Noise reads unlike a clean scene, and the policy declares the metric."""
+
+    clean = scene_frames(30)
+    check_metric(
+        corrupt_frame_pct,
+        clean=stream_context(clean),
+        defective=stream_context(all_noise(clean)),
+        policy=load_default_policy(),
+    )
+
+
+def test_noise_in_every_frame_reads_100():
+    """Uniform noise in every frame is all noise, and none of it blank."""
+
+    result = corrupt_frame_pct(stream_context(all_noise(scene_frames(30))))
+
+    assert result.value == 100
+    assert result.evidence["noise"] == result.evidence["n_sampled"]
+    assert result.evidence["blank"] == 0
+
+
+def test_noise_alternating_with_real_frames_is_counted():
+    """Every other frame noise reads 50 under a full scan."""
+
+    stream = scene_frames(40)
+    noisy = replaced_frames(stream, {i: noise_frame(64, i) for i in range(0, 40, 2)})
+
+    result = corrupt_frame_pct(stream_context(noisy, full_frame_scan=True))
+
+    assert result.value == 50
+    assert result.evidence["bad_indices"] == list(range(0, 40, 2))
+
+
+def test_black_alternating_with_noise_is_counted():
+    """Black and noise alternating are all corrupt, half of each."""
+
+    stream = scene_frames(40)
+    black = numpy.zeros((64, 64, 3), numpy.uint8)
+    frames = {i: black if i % 2 else noise_frame(64, i) for i in range(40)}
+
+    result = corrupt_frame_pct(
+        stream_context(replaced_frames(stream, frames), full_frame_scan=True)
+    )
+
+    assert result.value == 100
+    assert (result.evidence["blank"], result.evidence["noise"]) == (20, 20)
+
+
+def test_a_black_stream_reads_100():
+    """A stream black in every frame is blank throughout."""
+
+    stream = replaced_frames(
+        scene_frames(30), {i: numpy.zeros((64, 64, 3), numpy.uint8) for i in range(30)}
+    )
+
+    result = corrupt_frame_pct(stream_context(stream))
+
+    assert result.value == 100
+    assert result.evidence["median_score"] is None
+
+
+def test_a_white_simulator_scene_reads_clean():
+    """A white background with a coloured disc has crisp edges and no noise."""
+
+    frames = []
+    for index in range(30):
+        frame = numpy.full((64, 64, 3), 250, numpy.uint8)
+        frame[20:40, 5 + index : 25 + index] = (200, 30, 30)
+        frames.append(frame)
+    stream = scene_frames(30).model_copy(
+        update={"payload": SyntheticFrames(frames=frames)}
+    )
+
+    assert corrupt_frame_pct(stream_context(stream)).value == 0
+
+
+def test_a_dark_noisy_scene_reads_clean():
+    """Gaussian noise on a dim scene scores high but spans under 32 gray levels."""
+
+    clean = scene_frames(30)
+    assert isinstance(clean.payload, SyntheticFrames)
+    rng = numpy.random.default_rng(42)
+    dark = [
+        numpy.clip(frame * 0.03 + rng.normal(0, 3, frame.shape), 0, 255).astype(
+            numpy.uint8
+        )
+        for frame in clean.payload.frames
+    ]
+    stream = clean.model_copy(update={"payload": SyntheticFrames(frames=dark)})
+
+    frames = vision._frames(stream_context(stream))
+    assert isinstance(frames, vision._Frames)
+    assert max(frames.noise) >= 5
+    assert max(frames.native_spread) < 32
+    assert corrupt_frame_pct(stream_context(stream)).value == 0
+
+
+def test_frames_under_32_px_are_not_applicable():
+    """Frames that small have too little structure to tell noise from detail."""
+
+    result = corrupt_frame_pct(stream_context(clean_frames()))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert result.evidence["reason"] == "frames too small to tell noise from detail"
+
+
+def test_a_corrupt_stream_blocks_its_episode():
+    """An all-noise camera blocks through the contract route, in every scope."""
+
+    stream = all_noise(scene_frames(30)).model_copy(
+        update={"source_field": CAMERA_FIELD}
+    )
+
+    for scoped in _scopes():
+        vision.clear_cache()
+        _graded, findings = _grade_camera(stream, scoped)
+        finding = findings["vision.corrupt_frame_pct"]
+        assert (finding.consequence, finding.route) == (
+            Consequence.BLOCK,
+            BlockingRoute.CONTRACT,
+        )
+        assert finding.source_field == CAMERA_FIELD
 
 
 def test_contrast_score_is_low_on_a_flat_stream():
@@ -1903,6 +2820,7 @@ def test_the_metadata_tier_reads_no_frames(monkeypatch, _fixture_stream):
         "pts_defect_pct",
         "max_gap_s",
         "camera_stream_present",
+        "frames_readable",
         "video_format_consistency",
     ):
         assert "metadata tier" in _assert_not_applicable(graded.metrics[name])
@@ -1930,6 +2848,23 @@ def test_vision_metric_coverage_leaves_depth_out():
 
     assert vision_metric_coverage([]) == (False, False)
     assert vision_metric_coverage([camera, depth]) == (True, False)
+
+
+def test_full_coverage_needs_only_exposure_on_every_frame():
+    """A full scan reads every frame for exposure and covers the camera fully."""
+
+    graded, _findings = grade_stream(
+        clean_frames(frames=300),
+        policy=load_default_policy(),
+        is_regular=True,
+        episode_id="episode_0",
+        category=None,
+        full_frame_scan=True,
+    )
+    sharpness = graded.metrics["sharpness_score"].evidence
+
+    assert sharpness["n_sampled"] < sharpness["n_frames"]
+    assert vision_metric_coverage([graded]) == (True, True)
 
 
 def test_a_read_that_runs_out_early_leaves_the_camera_unsampled(monkeypatch):
@@ -2011,28 +2946,38 @@ def test_a_full_scan_reads_past_the_decode_budget():
 
     assert frames is not None
     assert frames.availability == Availability.COMPUTED
-    assert len(frames.frames) == 100
+    assert frames.decoded_frames == 100
+    assert not frames.missing_rows
 
 
-def test_a_decode_failure_is_an_error_and_keeps_its_frames(monkeypatch):
-    """A decode that fails part-way is an error, and the frame before it is kept."""
+@pytest.mark.parametrize(
+    ("failure", "availability"),
+    [
+        (DecodeFailed, Availability.UNAVAILABLE),
+        (ReadInterrupted, Availability.ERROR),
+    ],
+    ids=["in_the_file", "network"],
+)
+def test_a_decode_failure_keeps_its_frames(monkeypatch, failure, availability):
+    """A decode that fails part-way keeps the frame before it.
+
+    A failure in the file is unavailable, since frames_readable grades it,
+    and one outside the file is an error.
+    """
 
     gray_windows = SyntheticFrames.gray_windows
 
     def failing(self, windows, size, native=frozenset(), **caps):
         yield next(gray_windows(self, windows, size, native, **caps))
-        raise DecodeFailed("corrupt packet")
+        raise failure("corrupt packet")
 
     monkeypatch.setattr(SyntheticFrames, "gray_windows", failing)
     ctx = stream_context(clean_frames(frames=100))
 
-    assert sharpness_score(ctx).availability == Availability.ERROR
+    assert sharpness_score(ctx).availability == availability
     frames = camera_frames(ctx)
     assert frames is not None
-    assert (frames.availability, frames.reason) == (
-        Availability.ERROR,
-        "corrupt packet",
-    )
+    assert (frames.availability, frames.reason) == (availability, "corrupt packet")
     assert len(frames.frames) == 1
 
 
@@ -2102,26 +3047,35 @@ def test_frame_count_finds_frames_past_the_timestamps_on_every_read(full_frame_s
     assert result.value == pytest.approx(0.5)
 
 
-def test_evidence_frames_alone_carry_hashes_on_a_full_scan():
-    """A full scan lists every frame, hashing only the sample's frames and bad ones."""
+def test_a_full_scan_lists_and_hashes_the_summary_frames():
+    """A full scan lists its summary frames, hashing the sample's and bad ones.
 
-    clean = clean_frames(frames=100)
+    Each row carries its own frame's clipped share,
+    the one a scan listing every frame gives it.
+    """
+
+    clean = clean_frames(frames=300)
     assert isinstance(clean.payload, SyntheticFrames)
-    dim = [(frame * 0.3).astype(frame.dtype) for frame in clean.payload.frames]
-    stream = _with_frames(clean, dim, 20, 60)
+    dim = [(frame * 0.02).astype(frame.dtype) for frame in clean.payload.frames]
+    stream = _with_frames(clean, dim, 20, 120)
     sampled = camera_frames(stream_context(stream))
     full_ctx = stream_context(stream, full_frame_scan=True)
 
     full = camera_frames(full_ctx)
+    every = camera_frames(_with_ratio(full_ctx, 1.0))
     bad = exposure_shift_pct(full_ctx).evidence["bad_indices"]
 
-    assert sampled is not None and full is not None
-    assert len(full.frames) == 100
-    assert bad == list(range(20, 60))
+    assert sampled is not None and full is not None and every is not None
+    rows = [f.source_row for f in full.frames]
+    assert rows == sorted(set(vision._spread(300, 30)) | set(sampled.requested_rows))
+    assert bad == list(range(20, 120))
     assert {f.source_row for f in full.frames if f.luma_sha256} == {
         *sampled.requested_rows,
-        *bad,
+        *(row for row in bad if row in rows),
     }
+    clipped = {f.source_row: f.clipped_fraction for f in every.frames}
+    assert any(f.clipped_fraction > 0 for f in full.frames)
+    assert all(f.clipped_fraction == clipped[f.source_row] for f in full.frames)
 
 
 def test_a_critical_vision_result_carries_its_worst_frame():
@@ -2326,3 +3280,211 @@ def test_an_incomplete_read_is_not_counted():
     assert counted["capped"].episodes == 0
     assert counted["capped"].reason == _TOO_FEW_FOOTAGE
     assert counted["whole"].episodes == 1
+
+
+def test_simulated_footage_marks_a_freeze_it_still_measures():
+    """A freeze on simulated footage keeps its value and gains the footage mark."""
+
+    frames = freeze_frames(clean_frames(frames=100), start=25, length=25)
+    actions = [_moving_actions(100)]
+
+    real = frozen_frame_pct(stream_context(frames, episode_streams=actions))
+    simulated = frozen_frame_pct(
+        stream_context(frames, episode_streams=actions, simulated=True)
+    )
+
+    assert real.value is not None and real.value > 0
+    assert "footage" not in real.evidence
+    assert simulated.value == real.value
+    assert simulated.evidence == {**real.evidence, "footage": "simulated"}
+
+
+@pytest.mark.parametrize("simulated", [False, True])
+def test_a_frozen_camera_is_a_finding_only_on_real_footage(simulated):
+    """A freeze under moving actions requests review unless the footage is simulated."""
+
+    episode = Episode(
+        id="episode_0",
+        streams=[
+            freeze_frames(clean_frames(frames=100), start=25, length=25),
+            _moving_actions(100),
+        ],
+    )
+
+    graded, findings = grade_episode(
+        episode,
+        adapter="test",
+        adapter_confidence=1.0,
+        policy=load_default_policy(),
+        dictionary=load_default_dictionary(),
+        simulated=simulated,
+    )
+
+    camera = next(s for s in graded.streams if "frozen_frame_pct" in s.metrics)
+    result = camera.metrics["frozen_frame_pct"]
+    flagged = any(f.metric_id == "vision.frozen_frame_pct" for f in findings)
+    assert flagged is not simulated
+    if simulated:
+        assert result.status == MetricStatus.REPORT_ONLY
+        assert result.points is None
+        assert "simulated" in result.evidence["ungraded_reason"]
+
+
+# ░█▀▀░▀█▀░▀█▀░█░░░█░░░░░█▀▀░█▀▀░█▀▀░█▀█░█▀▀
+# ░▀▀█░░█░░░█░░█░░░█░░░░░▀▀█░█░░░█▀▀░█░█░█▀▀
+# ░▀▀▀░░▀░░▀▀▀░▀▀▀░▀▀▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀▀▀
+
+
+def _still_scene(
+    still: tuple[int, int] | None,
+    *,
+    frames: int = 300,
+    hz: float = 30.0,
+    size: int = 256,
+    sigma: float = 2.0,
+    seed: int = 42,
+) -> Stream:
+    """A gradient scene with a disc crossing it, holding still in `[start, end)`.
+
+    Each frame carries seeded Gaussian noise of `sigma` grey levels.
+    With `still=None` the disc moves throughout.
+    """
+
+    rows, cols = numpy.mgrid[:size, :size]
+    background = 60 + 100 * (rows + cols) / (2 * size)
+    radius = size // 8
+    shots = []
+    for index in range(frames):
+        moved = index
+        if still is not None and still[0] <= index < still[1]:
+            moved = still[0]
+        x = (moved * 4) % size
+        disc = (rows - size // 2) ** 2 + (cols - x) ** 2 < radius**2
+        scene = numpy.where(disc, 220.0, background)
+        noise = numpy.random.default_rng(seed + index).normal(0, sigma, (size, size))
+        gray = numpy.clip(numpy.round(scene + noise), 0, 255).astype(numpy.uint8)
+        shots.append(numpy.repeat(gray[:, :, None], 3, axis=2))
+    base = clean_frames(frames=frames, hz=hz, height=size, width=size)
+    return base.model_copy(update={"payload": SyntheticFrames(frames=shots)})
+
+
+def _still_result(stream: Stream, **kwargs):
+    """Grade `still_scene_pct` over every frame of `stream`."""
+
+    return still_scene_pct(stream_context(stream, full_frame_scan=True, **kwargs))
+
+
+def test_a_still_stretch_is_reported_with_its_time_range():
+    """Seven seconds of a motionless scene is one stretch, placed in time."""
+
+    result = _still_result(_still_scene((60, 270)))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    [(start_s, end_s)] = result.evidence["stretches_s"]
+    assert start_s == pytest.approx(2.0, abs=0.5)
+    assert end_s == pytest.approx(9.0, abs=0.5)
+    [interval] = result.support.intervals
+    # The first reading of a stretch looks back one lag,
+    # and the rolling median lets the last one reach past the pause by up to as much.
+    lag = result.evidence["lag"]
+    assert 60 - lag <= interval.start
+    assert interval.end_exclusive <= 270 + lag
+    assert result.value == pytest.approx(
+        100 * (interval.end_exclusive - interval.start) / 300
+    )
+
+
+def test_sensor_noise_in_a_still_scene_counts_as_still():
+    """A scene that only flickers with sensor noise is one stretch, all of it still."""
+
+    stream = _still_scene((0, 300), sigma=3.0)
+    result = _still_result(stream)
+
+    [(start_s, end_s)] = result.evidence["stretches_s"]
+    assert end_s - start_s >= 9.0
+    frames = vision._frames(stream_context(stream, full_frame_scan=True))
+    assert isinstance(frames, vision._Frames)
+    readings = [change for _index, change in frames.still_changes]
+    assert readings
+    assert max(readings) < vision._STILL_CHANGE
+
+
+def test_a_moving_scene_has_no_still_stretch():
+    """A disc crossing the scene throughout never reads as still."""
+
+    result = _still_result(_still_scene(None))
+
+    assert result.value == 0
+    assert result.evidence["stretches_s"] == []
+    assert result.evidence["first_stretch_index"] is None
+    assert result.support.intervals == []
+
+
+def test_a_pause_under_five_seconds_is_not_counted():
+    """Four seconds of stillness is under the limit."""
+
+    assert _still_result(_still_scene((60, 180))).value == 0
+
+
+def test_blank_frames_are_never_still():
+    """Every reading of an all-black stream is blank, so none is still."""
+
+    black = [numpy.zeros((64, 64, 3), dtype=numpy.uint8)] * 300
+    stream = clean_frames(frames=300, height=64, width=64).model_copy(
+        update={"payload": SyntheticFrames(frames=black)}
+    )
+
+    result = _still_result(stream)
+
+    assert result.value == 0
+    assert result.evidence["n_readings"] > 0
+    assert result.evidence["n_blank_readings"] == result.evidence["n_readings"]
+
+
+def test_simulated_footage_reads_still_like_real():
+    """A rendered scene that repeats exactly reads 0 change, and is a stretch."""
+
+    ramp = numpy.repeat(
+        numpy.linspace(30, 200, 64).astype(numpy.uint8)[None, :, None], 64, axis=0
+    )
+    frame = numpy.repeat(ramp, 3, axis=2)
+    stream = clean_frames(frames=300, height=64, width=64).model_copy(
+        update={"payload": SyntheticFrames(frames=[frame] * 300)}
+    )
+
+    real = _still_result(stream, simulated=False)
+    simulated = _still_result(stream, simulated=True)
+
+    assert simulated == real
+    assert real.value is not None
+    assert real.value > 90
+    frames = vision._frames(stream_context(stream, full_frame_scan=True))
+    assert isinstance(frames, vision._Frames)
+    assert {change for _index, change in frames.still_changes} == {0.0}
+
+
+def test_still_scene_needs_a_full_scan():
+    """The sampled read's 1 s windows cannot hold a 5 s stretch."""
+
+    result = still_scene_pct(stream_context(_still_scene((0, 300))))
+
+    assert (
+        _assert_not_applicable(result)
+        == "needs every frame; grade with --full-frame-scan"
+    )
+
+
+def test_still_scene_decodes_nothing_after_the_shared_read(monkeypatch):
+    """Reading stillness adds no decode to the full scan freezes already share."""
+
+    calls = _count_decodes(monkeypatch)
+    ctx = stream_context(
+        _still_scene((0, 300)),
+        episode_streams=[_moving_actions(300)],
+        full_frame_scan=True,
+    )
+
+    frozen_frame_pct(ctx)
+    still_scene_pct(ctx)
+
+    assert len(calls) == 1

@@ -59,6 +59,19 @@ class Settings(BaseSettings):
         Refuse a remote root listing more files than this,
         overridden for one invocation by the CLI's `--max-remote-files` option.
         Defaults to 10,000; `None` lifts the limit.
+    remote_block_bytes : int
+        The size of each range request a remote video is read in,
+        set by `KALANOS_REMOTE_BLOCK_BYTES`. Defaults to 4 MiB.
+    remote_readahead_blocks : int
+        How many blocks are fetched ahead of a sequential reader
+        of each open remote video, set by `KALANOS_REMOTE_READAHEAD_BLOCKS`.
+        Defaults to 5; `0` turns readahead off.
+        Each open remote video holds at most
+        `(remote_readahead_blocks + 5) * remote_block_bytes`:
+        the blocks fetched ahead, the block being read and the 4 before it.
+        It briefly holds `(2 * remote_readahead_blocks + 5) * remote_block_bytes`
+        while fetches dropped by a seek finish.
+        Up to 4 idle files stay open, plus the one being read.
     vision_samples : int or None
         How many frames blur and exposure sample, and windows frozen frames read,
         overridden for one invocation by the CLI's `--vision-samples` option.
@@ -67,6 +80,11 @@ class Settings(BaseSettings):
         Make frame metrics read every frame instead of a sample,
         overridden for one invocation by the CLI's `--full-frame-scan` option.
         `None` leaves it to the bundle's `vision` section, off by default.
+    vision_summary_ratio : float or None
+        The share of each episode's frames sharpness, contrast and exposure level
+        measure under a full frame scan, set by `KALANOS_VISION_SUMMARY_RATIO`
+        and overridden for one invocation by the CLI's `--vision-summary-ratio` option.
+        `None` leaves it to the bundle's `vision` section, 0.1 by default.
     hub_url : str
         Where `kalanos publish` sends reports, set by `KALANOS_HUB_URL`.
     """
@@ -87,8 +105,11 @@ class Settings(BaseSettings):
     verbosity: Verbosity = Verbosity.WARNING
     remote_max_bytes: int | None = 20_000_000_000
     remote_max_files: int | None = 10_000
+    remote_block_bytes: int = Field(default=4 * 1024 * 1024, ge=64 * 1024)
+    remote_readahead_blocks: int = Field(default=5, ge=0)
     vision_samples: int | None = Field(default=None, ge=1)
     full_frame_scan: bool | None = None
+    vision_summary_ratio: float | None = Field(default=None, gt=0, le=1)
     hub_url: str = "https://hub.kalanos.ai"
 
 

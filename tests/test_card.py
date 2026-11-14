@@ -26,7 +26,7 @@ from kalanos.analysis.models.eligibility import (
     SufficiencyStatus,
 )
 from kalanos.analysis.models.metrics import Level
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.report import DatasetWarning, Report
 from kalanos.analysis.models.scoring import MetricRollup
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.card.sections import _under_root
@@ -578,3 +578,110 @@ def test_unmapped_stream_types_get_a_mapping_row(csv_report, vision_report):
     assert _row(render_terminal(vision_report), "mapping").startswith(
         "2 stream types unmapped - type them with --map"
     )
+
+
+def test_a_missing_instruction_warning_gets_an_instructions_row(csv_report):
+    message = "2 of 4 episodes checked carry no task instruction: a, b"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="task_instruction_missing", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.split(maxsplit=1)[1] for row in rows if row.split()[0] == "instructions"
+    ] == [message]
+    assert not any(row.split()[0] == "instructions" for row in unwarned)
+
+
+def test_an_episode_count_warning_gets_an_episode_count_row(csv_report):
+    """Verify a declared count that disagrees renders as its own coverage row."""
+
+    message = (
+        "ds: declares 0 episodes; its episode metadata lists 8 and its data holds 8"
+    )
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="episode_count_mismatch", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("episode count").strip()
+        for row in rows
+        if row.strip().startswith("episode count")
+    ] == [message]
+    assert not any(row.strip().startswith("episode count") for row in unwarned)
+
+
+def test_a_camera_swap_warning_gets_a_camera_swap_row(csv_report):
+    """Verify two cameras holding each other's footage render as a coverage row."""
+
+    message = "a and b hold each other's footage in 3 of 9 episodes, in 1 run: 5-7"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [DatasetWarning(code="camera_swap", message=message)]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("camera swap").strip()
+        for row in rows
+        if row.strip().startswith("camera swap")
+    ] == [message]
+    assert not any(row.strip().startswith("camera swap") for row in unwarned)
+
+
+def test_a_viewpoint_change_warning_gets_a_viewpoint_change_row(csv_report):
+    """Verify a camera whose view changes renders as a coverage row."""
+
+    message = "the view of a changes after episode 6 (score 2.35): 0-6 against 7-13"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="camera_viewpoint_change", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("viewpoint change").strip()
+        for row in rows
+        if row.strip().startswith("viewpoint change")
+    ] == [message]
+    assert not any(row.strip().startswith("viewpoint change") for row in unwarned)
+
+
+def test_a_container_hint_warning_gets_a_row_of_its_kind(csv_report):
+    """Verify a `rotation` warning renders as a `rotation` coverage row."""
+
+    message = "1 video file carries rotation metadata: cam cam/a.mp4 90 deg"
+    warned = csv_report.model_copy(
+        update={"dataset_warnings": [DatasetWarning(code="rotation", message=message)]}
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("rotation").strip()
+        for row in rows
+        if row.strip().startswith("rotation")
+    ] == [message]
+    assert not any(row.strip().startswith("rotation") for row in unwarned)

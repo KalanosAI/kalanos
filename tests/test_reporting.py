@@ -28,12 +28,14 @@ from kalanos.analysis.models.discovery import SkippedSource, SkipReason
 from kalanos.analysis.models.domain import (
     Attribution,
     Channel,
+    ClockInfo,
     Episode,
     FramePayload,
     Kind,
     Stream,
     TimestampDtype,
 )
+from kalanos.analysis.models.eligibility import Consequence
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -59,7 +61,15 @@ from kalanos.analysis.models.scoring import (
     ScoreResult,
     Severity,
 )
+from kalanos.analysis.reporting import assemble
 from kalanos.analysis.reporting.assemble import (
+    _CORRUPT_RUNS_SHOWN,
+    ReportBuilder,
+    _camera_swap_warnings,
+    _corrupt_footage_warning,
+    _episode_runs,
+    _merge_shared_timelines,
+    _viewpoint_change_warnings,
     assemble_report,
     grade_episode,
     grade_stream,
@@ -68,12 +78,14 @@ from kalanos.analysis.reporting.families import FAMILY_LABELS, family_scores
 from kalanos.analysis.reporting.omit import omit_empty_defaults
 from kalanos.analysis.reporting.registry import registered_reporters
 from kalanos.analysis.reporting.render import (
+    _stream_finding_counts,
     render_compact_json,
     render_html,
     render_json,
     render_yaml,
 )
 from kalanos.analysis.reporting.write import write_report
+from kalanos.analysis.scoring.cameras import CameraSwap, ViewpointChange
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import (
     grade_for,
@@ -90,7 +102,9 @@ from helpers import (
     FIXTURES_DIR,
     DisclosureStateCollector,
     ScoreAttributeCollector,
+    all_noise,
     decided,
+    scene_frames,
     score_attr,
     write_arm,
 )
@@ -109,6 +123,9 @@ _POLICY = load_default_policy()
 
 # What `assemble_report` looks each stream's category up in, for calls that bypass it.
 _DICTIONARY = load_default_dictionary()
+
+# A clock shared by the streams the timeline-merge tests build.
+_CLOCK = ClockInfo(domain="recording#episode:0", source_field="timestamp")
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -309,6 +326,73 @@ def _series(timestamps: list[float]) -> Stream:
         source_path=UPath("recording.csv"),
         timestamp_dtype=TimestampDtype.FLOAT64,
         channels=[Channel(name="x")],
+    )
+
+
+def _timeline_stream(
+    taxonomy_type: str, clock: ClockInfo | None, source_field: str = "observation.state"
+) -> Stream:
+    """Build a series stream read from `source_field`, on the clock `clock`.
+
+    Parameters
+    ----------
+    taxonomy_type : str
+        The stream's taxonomy type.
+    clock : ClockInfo or None
+        The stream's clock, or `None` for a stream with no clock information.
+    source_field : str
+        The column the stream's payload was read from.
+
+    Returns
+    -------
+    Stream
+        A four-row series stream carrying `clock`.
+    """
+
+    return _series([0.0, 0.1, 0.1, 0.2]).model_copy(
+        update={
+            "taxonomy_type": taxonomy_type,
+            "source_field": source_field,
+            "clock_info": clock,
+        }
+    )
+
+
+def _order_finding(
+    stream: Stream,
+    *,
+    indices: list[int],
+    metric_id: str = "timing.monotonic_violations",
+) -> Finding:
+    """Build a critical finding raised on `stream`, naming the rows `indices`.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream the finding is located on.
+    indices : list[int]
+        The offending rows, as `sample_indices`.
+    metric_id : str
+        The metric that raised it.
+
+    Returns
+    -------
+    Finding
+        A finding whose value is the number of offending rows.
+    """
+
+    return Finding(
+        metric_id=metric_id,
+        family=metric_id.split(".")[0],
+        severity=Severity.CRITICAL,
+        value=float(len(indices)),
+        unit="count",
+        points=0.0,
+        episode_id="episode_0",
+        source_field=stream.source_field,
+        stream=stream.taxonomy_type,
+        instance=stream.instance,
+        evidence={"n_repeated": len(indices), "sample_indices": indices},
     )
 
 
@@ -1446,7 +1530,7 @@ def test_a_camera_stream_reports_its_declared_and_container_format():
         assert declared.width is None and declared.height is None
         assert (found.width, found.height, found.fps) == (32, 32, 30.0)
         assert (found.codec, found.profile) == ("h264", "High")
-        assert (found.bit_rate, found.frame_count) == (26910, 8)
+        assert (found.bit_rate, found.frame_count) == (36750, 8)
         assert found.duration_s == pytest.approx(4096 / 15360)
         # The fixture's colour codes are all unspecified.
         assert found.color_range is None and found.color_primaries is None
@@ -1520,6 +1604,62 @@ def test_a_camera_stream_reports_what_its_feature_declares(tmp_path):
     assert declared.is_depth_map is False and declared.has_audio is False
 
 
+def _rotate_up_camera(root: UPath, degrees: int) -> None:
+    """Rewrite the v2 fixture's `up` camera video with a display rotation."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+    path = root / "videos/chunk-000/observation.images.up/episode_000000.mp4"
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=30)
+    stream.width = stream.height = 32
+    stream.pix_fmt = "yuv420p"
+    stream.set_display_rotation(degrees)
+    for _ in range(8):
+        pixels = numpy.full((32, 32, 3), 128, dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def test_a_rotated_camera_file_is_reported_as_a_dataset_warning(tmp_path):
+    """Verify the rotation reaches `found`, and one warning names the camera."""
+
+    root = _copy_v2_fixture(tmp_path)
+    _rotate_up_camera(root, 90)
+
+    report = grade(root)
+
+    camera = _source_stream(report, "observation.images.up")
+    assert camera.video_format is not None
+    assert camera.video_format.found.rotation_deg == 90.0
+    (warning,) = [w for w in report.dataset_warnings if w.code == "rotation"]
+    assert "observation.images.up" in warning.message
+    assert "90 deg" in warning.message
+
+
+def test_a_container_hint_changes_no_score_or_decision(tmp_path, monkeypatch):
+    """Verify grading with the hints off differs only in `dataset_warnings`."""
+
+    root = _copy_v2_fixture(tmp_path)
+    _rotate_up_camera(root, 90)
+
+    hinted = grade(root)
+    monkeypatch.setattr(assemble, "container_hints", lambda samples: [])
+    unhinted = grade(root)
+
+    assert [w.code for w in hinted.dataset_warnings] != [
+        w.code for w in unhinted.dataset_warnings
+    ]
+    assert hinted.score == unhinted.score
+    assert [e.score for e in hinted.episodes] == [e.score for e in unhinted.episodes]
+    assert [e.eligibility for e in hinted.episodes] == [
+        e.eligibility for e in unhinted.episodes
+    ]
+
+
 def test_a_camera_stream_reports_its_tags_and_colour_but_no_location(tmp_path):
     """Verify make, model and colour reach the report, and a location tag does not."""
 
@@ -1590,3 +1730,234 @@ def test_a_graded_episode_carries_its_split():
 
     reloaded = Report.model_validate_json(report.model_dump_json())
     assert [e.split for e in reloaded.episodes] == ["train", "train"]
+
+
+def test_findings_on_one_timeline_merge_into_the_first():
+    """Verify two streams on one timestamp column with the same rows raise one finding.
+
+    The finding stays on the first stream, and names the second under `shared_by`.
+    """
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    [merged] = _merge_shared_timelines(findings, [first, second])
+
+    assert merged.stream == "robot.joint.position"
+    assert merged.evidence["shared_by"] == [
+        {
+            "stream": "robot.gripper.width",
+            "source_field": "observation.state",
+            "instance": None,
+        }
+    ]
+    assert "shared_by" not in findings[0].evidence
+
+
+def test_findings_merge_under_whatever_family_the_policy_files_the_metric():
+    """Verify a metric the policy files under another family still merges."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2], metric_id="integrity.monotonic_violations"),
+        _order_finding(second, indices=[2], metric_id="integrity.monotonic_violations"),
+    ]
+
+    [merged] = _merge_shared_timelines(findings, [first, second])
+
+    assert [entry["stream"] for entry in merged.evidence["shared_by"]] == [
+        "robot.gripper.width"
+    ]
+
+
+def test_findings_on_one_clock_with_different_rows_stay_apart():
+    """Verify streams on one clock that name different rows keep their own findings."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[3]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_findings_on_different_clock_domains_stay_apart():
+    """Verify streams on separate clocks keep their own findings, even on equal rows."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    other_clock = _CLOCK.model_copy(update={"domain": "recording#episode:1"})
+    second = _timeline_stream("robot.gripper.width", other_clock)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_a_stream_without_clock_information_keeps_its_finding():
+    """Verify a stream with no clock information is never merged into another."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", None)
+    findings = [
+        _order_finding(first, indices=[2]),
+        _order_finding(second, indices=[2]),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_other_metrics_on_one_timeline_are_not_merged():
+    """Verify only timestamp-order findings merge across streams on one timeline."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    findings = [
+        _order_finding(first, indices=[2], metric_id="timing.drop_rate"),
+        _order_finding(second, indices=[2], metric_id="timing.drop_rate"),
+    ]
+
+    assert _merge_shared_timelines(findings, [first, second]) == findings
+
+
+def test_a_merged_finding_counts_for_every_stream_that_shares_it():
+    """Verify the per-stream finding count includes the streams under `shared_by`."""
+
+    first = _timeline_stream("robot.joint.position", _CLOCK)
+    second = _timeline_stream("robot.gripper.width", _CLOCK)
+    [merged] = _merge_shared_timelines(
+        [_order_finding(first, indices=[2]), _order_finding(second, indices=[2])],
+        [first, second],
+    )
+
+    assert _stream_finding_counts([merged]) == {
+        ("episode_0", "robot.joint.position", None): 1,
+        ("episode_0", "robot.gripper.width", None): 1,
+    }
+
+
+def test_corrupt_footage_runs():
+    """Episode numbers group into runs, and ids without one follow, sorted."""
+
+    ids = [f"episode_{n:06d}" for n in (1, 2, 3, 7)]
+
+    assert _episode_runs(ids) == ["1-3", "7"]
+    assert _episode_runs([*ids, "take_b", "take_a"]) == ["1-3", "7", "take_a", "take_b"]
+
+
+def test_corrupt_footage_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    findings = [
+        Finding.model_construct(
+            metric_id="vision.corrupt_frame_pct",
+            consequence=Consequence.BLOCK,
+            episode_id=f"episode_{2 * n:06d}",
+        )
+        for n in range(_CORRUPT_RUNS_SHOWN + 3)
+    ]
+
+    warning = _corrupt_footage_warning(findings, 100)
+
+    assert warning is not None
+    assert warning.code == "corrupt_footage"
+    assert warning.message.startswith(
+        f"{_CORRUPT_RUNS_SHOWN + 3} of 100 episodes are blocked"
+    )
+    assert warning.message.endswith(", and 3 more runs")
+
+
+def test_camera_swap_warning_names_both_cameras_and_the_runs():
+    """One warning per swap names the cameras and the runs of episode numbers."""
+
+    ids = [f"episode_{n:06d}" for n in (5, 6, 7, 20, 21, 22)]
+
+    [warning] = _camera_swap_warnings(
+        [CameraSwap(cameras=("top", "wrist"), episodes=ids)], 40
+    )
+
+    assert warning.code == "camera_swap"
+    assert warning.message == (
+        "top and wrist hold each other's footage in 6 of 40 episodes,"
+        " in 2 runs: 5-7, 20-22"
+    )
+
+
+def test_camera_swap_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    ids = [f"episode_{n:06d}" for n in range(0, 2 * (_CORRUPT_RUNS_SHOWN + 3), 2)]
+
+    [warning] = _camera_swap_warnings(
+        [CameraSwap(cameras=("a", "b"), episodes=ids)], 100
+    )
+
+    assert warning.message.endswith(", and 3 more runs")
+
+
+def test_viewpoint_change_warning_names_the_camera_and_both_sides():
+    """One warning per change names the camera, the episode and the runs."""
+
+    ids = [f"episode_{n:06d}" for n in range(14)]
+
+    [warning] = _viewpoint_change_warnings(
+        [ViewpointChange(camera="top", before=ids[:7], after=ids[7:], score=2.345)]
+    )
+
+    assert warning.code == "camera_viewpoint_change"
+    assert warning.message == (
+        "the view of top changes after episode 6 (score 2.35):"
+        " episodes 0-6 against 7-13"
+    )
+
+
+def test_viewpoint_change_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    ids = [f"episode_{n:06d}" for n in range(0, 2 * (_CORRUPT_RUNS_SHOWN + 3), 2)]
+
+    [warning] = _viewpoint_change_warnings(
+        [ViewpointChange(camera="top", before=ids, after=["episode_000099"], score=2.0)]
+    )
+
+    assert ", and 3 more runs against 99" in warning.message
+
+
+def test_corrupt_footage_warning_lists_blocked_episodes(tmp_path):
+    """Episodes with a corrupt camera are blocked and named in one warning."""
+
+    builder = ReportBuilder(policy=load_default_policy())
+    for number in range(1, 7):
+        camera = scene_frames(30, seed=number)
+        if number in (2, 3):
+            camera = all_noise(camera)
+        builder.add(
+            AnalysedEpisode(
+                episode=Episode(id=f"episode_{number:06d}", streams=[camera]),
+                adapter="test",
+                adapter_confidence=1.0,
+                policy=load_default_policy(),
+            )
+        )
+
+    report = builder.finish(root=UPath(tmp_path))
+    assert isinstance(report, Report)
+
+    [warning] = [w for w in report.dataset_warnings if w.code == "corrupt_footage"]
+    assert warning.message == (
+        "2 of 6 episodes are blocked for corrupt camera footage, in 1 run: 2-3"
+    )
+    blocked = {
+        e.id
+        for e in report.episodes
+        if e.eligibility is not None and e.eligibility.status == "blocked"
+    }
+    assert blocked == {"episode_000002", "episode_000003"}

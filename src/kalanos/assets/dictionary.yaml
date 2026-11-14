@@ -160,7 +160,7 @@ entries:
     kind: series
     shape: scalar
     unit: m
-    aliases: [finger_width, gripper_qpos, gripper_state, gripper_width, robot0_gripper_qpos]
+    aliases: [finger_width, gripper_open_scale_state, gripper_qpos, gripper_state, gripper_width, robot0_gripper_qpos]
     typical_rate_hz: [20.0, 100.0]
     plausible_range: [0, 0.15]
   proprio.grasp_contact:
@@ -235,7 +235,7 @@ entries:
     shape: free
     aliases: [
       CAM_FRONT, agentview_image, exterior_image_1_left, exterior_image_2_left, image,
-      observation.images.top, rgb_static]
+      observation.images.agentview, observation.images.top, rgb_static]
     typical_rate_hz: [15.0, 60.0]
   extero.stereo_rgb:
     label: Stereo pair (left+right raw)
@@ -434,7 +434,7 @@ entries:
     modality: numeric
     kind: series
     shape: scalar
-    aliases: [grasp, gripper_action, gripper_closedness_action]
+    aliases: [grasp, gripper_action, gripper_closedness_action, gripper_open_scale_action]
     typical_rate_hz: [20.0, 100.0]
   action.base_velocity_command:
     label: Base velocity command (cmd_vel)
@@ -591,6 +591,17 @@ entries:
     aliases: [6d_pose, T_world_object, obj_pose, object_pose, pose_estimate]
     typical_rate_hz: [10.0, 30.0]
     group_hint: axes
+  # Features computed from the recorded state, as RoboCOIN datasets carry them: direction and speed levels, gripper activity flags, a forward-kinematics pose.
+  # They step or hold by construction, so the stuck-sensor, spike and noise checks don't apply to them.
+  derived.computed_feature:
+    label: Computed per-frame feature
+    modality: numeric
+    kind: series
+    shape: free
+    aliases: [
+      eef_acc_mag_action, eef_acc_mag_state, eef_direction_action, eef_direction_state,
+      eef_sim_pose_action, eef_sim_pose_state, eef_velocity_action, eef_velocity_state,
+      gripper_activity_action, gripper_activity_state, gripper_mode_action, gripper_mode_state]
   
   # ░█▀▀░█▀█░█░░░▀█▀░█▀▄
   # ░█░░░█▀█░█░░░░█░░█▀▄
@@ -905,6 +916,15 @@ entries:
     modality: image
     shape: free
     aliases: [desired_goal, goal, goal_image, goal_obs, target_image]
+  # A pose or joint configuration the robot is sent towards and holds until the
+  # next target, so the stuck-sensor and noise checks do not apply.
+  task.goal_position:
+    label: Goal position (held target)
+    modality: numeric
+    kind: series
+    shape: free
+    aliases: [goal_position]
+    namespace_aliases: [goal_position]
   task.scene_caption:
     label: Scene caption / dense description
     modality: text
@@ -951,7 +971,7 @@ entries:
     label: Action / phase boundaries
     modality: structured
     shape: free
-    aliases: [keyframe_indices, phase_labels, segment_boundaries]
+    aliases: [keyframe_indices, phase_labels, segment_boundaries, subtask_annotation]
   annotation.failure_label:
     label: Failure onset & failure-mode label
     modality: structured

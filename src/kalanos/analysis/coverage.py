@@ -62,8 +62,16 @@ def row(
             Availability.ERROR,
         )
     )
+    error_reasons = Counter(
+        reason for state, reason in states if reason and state == Availability.ERROR
+    )
     return CoverageRow(
-        key=key, unit=unit, eligible=eligible, reasons=dict(reasons), **counts
+        key=key,
+        unit=unit,
+        eligible=eligible,
+        reasons=dict(reasons),
+        error_reasons=dict(error_reasons),
+        **counts,
     )
 
 
@@ -145,13 +153,16 @@ def merge_rows(rows: Iterable[CoverageRow]) -> list[CoverageRow]:
     fields = [s.value for s in Availability] + ["eligible"]
     for (key, unit), items in sorted(grouped.items()):
         reasons = Counter()
+        error_reasons = Counter()
         for item in items:
             reasons.update(item.reasons)
+            error_reasons.update(item.error_reasons)
         merged.append(
             CoverageRow(
                 key=key,
                 unit=unit,
                 reasons=dict(reasons),
+                error_reasons=dict(error_reasons),
                 **{k: sum(getattr(i, k) for i in items) for k in fields},
             )
         )
@@ -237,7 +248,9 @@ def vision_metric_coverage(streams: list[GradedStream]) -> tuple[bool, bool]:
     -------
     tuple of (bool, bool)
         `(sampled, full)`: sampled when every camera stream computed each of
-        `CORE_METRICS`, full when each of them also measured every declared frame.
+        `CORE_METRICS`, full when exposure_shift_pct also measured every
+        declared frame. A full scan reads every frame for exposure,
+        and measures blur on a share of them only.
         No camera stream is `(False, False)`: nothing was evaluated.
     """
 
@@ -249,7 +262,7 @@ def vision_metric_coverage(streams: list[GradedStream]) -> tuple[bool, bool]:
         sampled = _sampled(s)
         if sampled is None:
             return False, False
-        results += sampled
+        results.append(s.metrics["exposure_shift_pct"])
     full = all(
         r.evidence.get("n_sampled") == r.evidence.get("n_frames") for r in results
     )
@@ -352,8 +365,15 @@ def episode_coverage(
         is_camera_footage(s.kind or "", s.taxonomy_type) for s in episode.streams
     )
     sampled_vision = done("vision") and len(by_kind["vision"]) == camera_count
+    # A full scan decodes every frame and lists only its summary frames,
+    # so it counts by what it decoded.
     full_vision = sampled_vision and all(
         r.measurements.get("examined_frames") == r.measurements.get("declared_frames")
+        or (
+            r.evidence.get("sample_plan") == "full_scan_v1"
+            and r.measurements.get("decoded_frames")
+            == r.measurements.get("declared_frames")
+        )
         for r in by_kind["vision"]
     )
     metric_sampled, metric_full = vision_metric_coverage(episode.streams)

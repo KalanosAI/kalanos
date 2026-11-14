@@ -54,7 +54,7 @@ from kalanos.analysis.models.provenance import (
     RunCompletion,
     RunInfo,
 )
-from kalanos.analysis.models.report import AnalysedEpisode, Report
+from kalanos.analysis.models.report import AnalysedEpisode, DatasetWarning, Report
 from kalanos.analysis.models.schema import UnresolvedSource
 from kalanos.analysis.reporting.assemble import ReportBuilder
 from kalanos.analysis.reporting.stream import StreamedReport
@@ -192,6 +192,29 @@ def with_declared_limits(policy: Policy, info: DatasetInfo) -> Policy:
         if isinstance(value, int | float) and not isinstance(value, bool):
             filled = filled.with_limit(metric_policy.target, value)
     return filled
+
+
+def _simulated(vision: VisionSpec | None, info: DatasetInfo) -> bool:
+    """Resolve whether a dataset's camera footage is rendered by a simulator.
+
+    Parameters
+    ----------
+    vision : VisionSpec or None
+        The run's vision spec; `None` reads as the default, `auto`.
+    info : DatasetInfo
+        What the winning adapter's `describe()` declared about this candidate.
+
+    Returns
+    -------
+    bool
+        `True` when `vision.footage` says `simulated`,
+        or says `auto` and the dataset card names a simulator.
+    """
+
+    footage = (vision or VisionSpec()).footage
+    if footage == "auto":
+        return info.simulator is not None
+    return footage == "simulated"
 
 
 def _lies_under(path: UPath, claimed_root: UPath) -> bool:
@@ -350,6 +373,7 @@ def run(
     unresolved_episodes = 0
     refused_sources: list[str] = []
     inventory_notes: list[str] = []
+    dataset_warnings: list[DatasetWarning] = []
 
     for candidate in candidates:
         # Step 2: a candidate a directory adapter already claimed was
@@ -387,6 +411,7 @@ def run(
             info = DatasetInfo(adapter=selection.name, path=candidate.path)
 
         episode_policy = with_declared_limits(policy, info)
+        simulated = _simulated(vision, info)
 
         # Step 5: read the path's episodes one at a time, grading each before
         # the next is read, so only the current recording is held.
@@ -400,6 +425,11 @@ def run(
         # refusal part-way through is reconciled against it like a clean read.
         refusal: AdapterRefusal | None = None
         loaded = 0
+        # The source's episodes by where they were found, for an adapter that
+        # locates each episode's rows: listed in its metadata, held in its data.
+        located_any = False
+        in_metadata = 0
+        in_data = 0
         reader: Iterator[Episode] | None = None
         with use_tier(tier):
             try:
@@ -443,9 +473,15 @@ def run(
                     adapter=selection.name,
                     adapter_confidence=selection.confidence,
                     policy=episode_policy,
+                    simulated=simulated,
                 )
             )
-            del episode
+            check = episode.layout_check
+            if check is not None:
+                located_any = True
+                in_metadata += check.pointed_path is not None
+                in_data += bool(check.holding_paths)
+            del episode, check
         datasets.append(info)
         # A directory an adapter selected belongs to that adapter whatever
         # the read produced — episodes, none, or a refusal. Offering its
@@ -481,6 +517,24 @@ def run(
                     f"{candidate.path}: declared {info.episode_count} episodes, "
                     f"loaded {loaded} (more than declared)"
                 )
+        # The counts are only whole after a full read, and only an adapter that
+        # locates each episode's rows can tell metadata and data apart.
+        if (
+            refusal is None
+            and located_any
+            and info.episode_count is not None
+            and (info.episode_count != in_metadata or info.episode_count != in_data)
+        ):
+            dataset_warnings.append(
+                DatasetWarning(
+                    code="episode_count_mismatch",
+                    message=(
+                        f"{candidate.path}: declares {info.episode_count} episodes;"
+                        f" its episode metadata lists {in_metadata}"
+                        f" and its data holds {in_data}"
+                    ),
+                )
+            )
         if not loaded:
             continue
         logger.info("%s: analysed by %s", candidate.path, selection.name)
@@ -544,4 +598,5 @@ def run(
         run=run_info,
         inventory=inventory,
         binding_conflicts=config.conflicts if config else (),
+        dataset_warnings=dataset_warnings,
     )

@@ -19,7 +19,17 @@ import yaml
 # decorators, so the registry reflects the full built-in set below.
 import kalanos.analysis.metrics  # noqa: F401
 from kalanos.analysis.metrics.registry import registered_metrics
-from kalanos.analysis.models.policy import Band, MetricPolicy, Policy, ScoreMode
+from kalanos.analysis.models.binding import RequirementsSection
+from kalanos.analysis.models.eligibility import BlockingRoute
+from kalanos.analysis.models.policy import (
+    Band,
+    MetricOverride,
+    MetricPolicy,
+    OverrideCondition,
+    Policy,
+    ScoreMode,
+)
+from kalanos.analysis.reporting.assemble import scope_policy
 from kalanos.assets.policy import load_default_policy, load_policy
 
 
@@ -69,6 +79,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "integrity.spike_pct":                 4,
     "integrity.drift":                     1,
     "integrity.snr_db":                    2,
+    "integrity.rotation_snr_db":           2,
     "integrity.dead_taxel_pct":            3,
     "integrity.hysteresis":                2,
     "motion.mean_jerk_norm":               1,
@@ -93,14 +104,22 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "vision.max_gap_s":                    3,
     "vision.camera_sync_skew_ms":          2,
     "vision.blank_frame_pct":              5,
+    "vision.corrupt_frame_pct":            0,
     "vision.contrast_score":               2,
     "vision.dark_frame_pct":               3,
     "vision.bright_frame_pct":             3,
     "vision.camera_stream_present":        0,
+    "vision.frames_readable":              0,
     "vision.video_format_consistency":     1,
+    "vision.delivery_spec_met":            0,
     "vision.cut_count":                    4,
     "vision.dropped_chunk_count":          4,
     "vision.video_control_lag_ms":         None,
+    "vision.still_scene_pct":              None,
+    "schema.feature_mismatch_count":       0,
+    "schema.episode_file_mismatch":        0,
+    "schema.episode_not_in_metadata":      0,
+    "schema.index_range_mismatch_count":   0,
     "annotation.task_instruction_missing": 5,
 }
 # fmt: on
@@ -475,6 +494,111 @@ def test_an_extending_policy_merges_family_weights_key_by_key(tmp_path):
     }
 
 
+def test_an_extending_policy_keeps_the_scope_keys_of_a_metric_it_retunes(tmp_path):
+    """Verify a thresholds-only retune keeps route, scope flag and overrides."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {
+                    "vision.frame_count_vs_timebase": {
+                        "thresholds": {"default": {"good": 0.02, "bad": 0.1}},
+                    }
+                },
+            }
+        )
+    )
+
+    retuned = _entry(load_policy(override), "frame_count_vs_timebase")
+    base = _entry(load_default_policy(), "frame_count_vs_timebase")
+
+    assert retuned.route == BlockingRoute.CONTRACT
+    assert retuned.graded_in_every_scope
+    assert retuned.overrides == base.overrides
+    assert retuned.thresholds == {"default": Band(good=0.02, bad=0.1)}
+
+
+def test_an_extending_policy_can_clear_a_metrics_overrides(tmp_path):
+    """Verify an explicit `overrides: []` replaces the base's overrides."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"vision.frame_count_vs_timebase": {"overrides": []}},
+            }
+        )
+    )
+
+    assert _entry(load_policy(override), "frame_count_vs_timebase").overrides == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        [{"when": {"capabilities_none": ["video_quality"]}}],
+        [{"when": {"capabilities_none": []}, "weight": 0}],
+        [{"when": {"capabilities_any": ["video_quality"]}, "weight": 0}],
+        [{"when": {"capabilities_none": ["video_quality"]}, "core": False}],
+        [
+            {"when": {"capabilities_none": ["video_quality"]}, "weight": 0},
+            {"when": {"capabilities_none": ["lidar"]}, "weight": 1},
+        ],
+    ],
+    ids=[
+        "sets-nothing",
+        "empty-condition",
+        "unknown-condition",
+        "unsupported-key",
+        "two-set-weight",
+    ],
+)
+def test_a_malformed_override_fails_to_load(tmp_path, overrides):
+    """Verify an empty, unknown or colliding override fails at load."""
+
+    override = tmp_path / "policy.yaml"
+    override.write_text(
+        yaml.safe_dump(
+            {
+                "extends": "default",
+                "metrics": {"timing.drop_rate": {"overrides": overrides}},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not match the policy schema"):
+        load_policy(override)
+
+
+def test_a_scope_applies_only_the_overrides_whose_condition_it_meets():
+    """Verify an override applies only under a scope lacking its capabilities."""
+
+    policy = load_default_policy()
+    key = "timing.drop_rate"
+    policy.metrics[key] = policy.metrics[key].model_copy(
+        update={
+            "overrides": [
+                MetricOverride(
+                    when=OverrideCondition(capabilities_none=["capture_timing"]),
+                    weight=9,
+                    report_only=True,
+                )
+            ]
+        }
+    )
+
+    without = scope_policy(policy, RequirementsSection()).metrics[key]
+    with_capability = scope_policy(
+        policy, RequirementsSection(required_capabilities=["capture_timing"])
+    ).metrics[key]
+
+    assert (without.weight, without.report_only) == (9, True)
+    assert (with_capability.weight, with_capability.report_only) == (4, False)
+
+
 def test_a_metric_key_without_exactly_one_dot_fails_to_construct():
     """Verify a metrics key must split into exactly one family and one name."""
 
@@ -723,6 +847,11 @@ def test_no_asset_loader_walks_file_relative_to_itself():
         "action.joint_position_command",
         "action.gripper_command",
         "reward.frame_reward",
+        "derived.computed_feature",
+        "annotation.phase_boundary",
+        "proprio.gripper_width",
+        "task.goal_position",
+        "proprio.finger_joint_state",
     ],
 )
 def test_commands_and_rewards_are_exempt_from_flatline(taxonomy_type):
@@ -741,6 +870,44 @@ def test_frame_reward_is_exempt_from_spike():
 
     assert band.good is None
     assert band.bad is None
+
+
+@pytest.mark.parametrize(
+    "taxonomy_type", ["derived.computed_feature", "annotation.phase_boundary"]
+)
+def test_computed_features_and_labels_are_exempt_from_spike(taxonomy_type):
+    """A level or a label steps between values, which a 6σ window reads as spikes."""
+
+    band = _entry(load_default_policy(), "spike_pct").thresholds[taxonomy_type]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_computed_features_are_exempt_from_snr():
+    """A computed level steps by construction, which the ratio would count as noise."""
+
+    band = _entry(load_default_policy(), "snr_db").thresholds[
+        "derived.computed_feature"
+    ]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_goal_positions_are_exempt_from_snr():
+    """A target steps between holds, which the ratio would count as noise."""
+
+    band = _entry(load_default_policy(), "snr_db").thresholds["task.goal_position"]
+
+    assert band.good is None
+    assert band.bad is None
+
+
+def test_finger_joints_still_grade_snr():
+    thresholds = _entry(load_default_policy(), "snr_db").thresholds
+
+    assert "proprio.finger_joint_state" not in thresholds
 
 
 def test_sensors_still_grade_flatline():
@@ -763,3 +930,17 @@ def test_torque_noise_is_reported_not_graded():
     assert thresholds["proprio.joint_torque"].good is None
     assert thresholds["proprio.joint_torque"].bad is None
     assert thresholds["default"].bad == pytest.approx(15.0)
+
+
+def test_the_default_policy_leaves_the_instruction_metric_report_only():
+    """Verify the default policy marks task_instruction_missing report-only."""
+
+    assert _entry(load_default_policy(), "task_instruction_missing").report_only is True
+
+
+def test_the_language_conditioned_policy_grades_the_instruction_metric():
+    """Verify language_conditioned does not inherit the default's report_only."""
+
+    policy = load_policy(Path("language_conditioned"))
+
+    assert _entry(policy, "task_instruction_missing").report_only is False

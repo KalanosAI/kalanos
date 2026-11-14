@@ -17,7 +17,11 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis import pipeline
-from kalanos.analysis.adapters.video import close_video_files
+from kalanos.analysis.adapters.video import (
+    RemoteReads,
+    close_video_files,
+    use_remote_reads,
+)
 from kalanos.analysis.compare import compare_reports as compare
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
 from kalanos.analysis.models.binding import Bundle
@@ -77,6 +81,7 @@ def grade(
     limits: SourceLimits | None = None,
     vision_samples: int | None = None,
     full_frame_scan: bool | None = None,
+    vision_summary_ratio: float | None = None,
     mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: str | os.PathLike[str] | UPath | None = None,
     sidecar: bool = True,
@@ -108,6 +113,11 @@ def grade(
         Whether frame metrics read every frame rather than a sample.
         `None` uses `Settings.full_frame_scan`, then the bundle's `vision` section;
         the full tier always reads every frame.
+    vision_summary_ratio : float or None
+        The share of each episode's frames sharpness, contrast and exposure level
+        measure under a full frame scan, besides the sampled frames.
+        `None` uses `Settings.vision_summary_ratio`,
+        then the bundle's `vision` section.
     mapping : Mapping[str, str], Sequence[tuple[str, str]] or None
         Source fields to type for this run,
         each a `Stream.source_field` mapped to a dictionary key.
@@ -151,7 +161,8 @@ def grade(
     AdapterTie
         If two adapters bid the same top confidence on one file.
     ValueError
-        If `vision_samples` is below 1.
+        If `vision_samples` is below 1,
+        or `vision_summary_ratio` is not above 0 and at most 1.
     MappingOverrideError
         If a mapping source or the bundle file is missing or malformed,
         names a type the dictionary lacks,
@@ -178,6 +189,7 @@ def grade(
         limits=limits,
         vision_samples=vision_samples,
         full_frame_scan=full_frame_scan,
+        vision_summary_ratio=vision_summary_ratio,
         mapping=mapping,
         mapping_file=mapping_file,
         sidecar=sidecar,
@@ -199,6 +211,7 @@ def _grade(
     limits: SourceLimits | None = None,
     vision_samples: int | None = None,
     full_frame_scan: bool | None = None,
+    vision_summary_ratio: float | None = None,
     mapping: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     mapping_file: str | os.PathLike[str] | UPath | None = None,
     sidecar: bool = True,
@@ -211,7 +224,9 @@ def _grade(
 
     Parameters
     ----------
-    path, policy, dictionary, limits, vision_samples, full_frame_scan, mapping
+    path, policy, dictionary, limits, vision_samples, full_frame_scan
+        As `grade` takes them.
+    vision_summary_ratio, mapping
         As `grade` takes them.
     mapping_file, sidecar, bundle, tier, hash_source
         As `grade` takes them.
@@ -234,6 +249,11 @@ def _grade(
 
     if vision_samples is not None and vision_samples < 1:
         raise ValueError(f"vision_samples must be at least 1; got {vision_samples}")
+    if vision_summary_ratio is not None and not 0 < vision_summary_ratio <= 1:
+        raise ValueError(
+            "vision_summary_ratio must be above 0 and at most 1; "
+            f"got {vision_summary_ratio}"
+        )
 
     # Step 1: resolve what was typed into a root, and refuse an oversized remote one,
     # before the policy and dictionary load.
@@ -258,6 +278,7 @@ def _grade(
         limits=limits,
         vision_samples=vision_samples,
         full_frame_scan=full_frame_scan,
+        vision_summary_ratio=vision_summary_ratio,
     )
     enforce_limits(source, config.limits)
     for conflict in config.conflicts:
@@ -297,20 +318,25 @@ def _grade(
     # Step 4: run the pipeline. Every file ends up analysed, skipped or unresolved,
     # so an empty report means the path itself held nothing.
     vision = config.vision
+    reads = RemoteReads(
+        block_bytes=settings.remote_block_bytes,
+        readahead_blocks=settings.remote_readahead_blocks,
+    )
     try:
-        result = pipeline.run(
-            root,
-            policy=policy,
-            source=source,
-            overrides=config.overrides,
-            config=config,
-            producer=producer,
-            run_info=run_info,
-            vision_samples=vision.sample_frames,
-            full_frame_scan=vision.full_frame_scan,
-            vision=vision,
-            keep_episodes=keep_episodes,
-        )
+        with use_remote_reads(reads):
+            result = pipeline.run(
+                root,
+                policy=policy,
+                source=source,
+                overrides=config.overrides,
+                config=config,
+                producer=producer,
+                run_info=run_info,
+                vision_samples=vision.sample_frames,
+                full_frame_scan=vision.full_frame_scan,
+                vision=vision,
+                keep_episodes=keep_episodes,
+            )
     finally:
         # Video files stay open across episodes, local and remote; a later grade
         # must not read a file that changed since through a stale container.

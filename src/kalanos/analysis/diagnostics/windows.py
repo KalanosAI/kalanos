@@ -43,6 +43,13 @@ def overlap_finding(
     finding: Finding, stream: Stream, rows: Sequence[int], channels: Sequence[Channel]
 ) -> bool:
     """Whether a consequential finding touches the consumed source rows."""
+    # A finding merged across streams on one timeline names the other streams here.
+    if any(
+        (entry["stream"], entry["source_field"], entry["instance"])
+        == (stream.taxonomy_type, stream.source_field, stream.instance)
+        for entry in finding.evidence.get("shared_by", ())
+    ):
+        return _touches_rows(finding, rows)
     if finding.source_path is not None and finding.source_path != str(
         stream.source_path
     ):
@@ -65,6 +72,24 @@ def overlap_finding(
         c.name == finding.channel for c in channels
     ):
         return False
+    return _touches_rows(finding, rows)
+
+
+def _touches_rows(finding: Finding, rows: Sequence[int]) -> bool:
+    """Whether a finding's temporal support covers any of the consumed rows.
+
+    Parameters
+    ----------
+    finding : Finding
+        A finding already matched to the stream the rows belong to.
+    rows : Sequence[int]
+        The source rows a window consumes.
+
+    Returns
+    -------
+    bool
+        `True` for a whole-episode finding, or one whose intervals hold a consumed row.
+    """
     if finding.support.kind.value == "whole_episode":
         return True
     return any(

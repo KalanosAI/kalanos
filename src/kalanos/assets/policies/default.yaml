@@ -35,10 +35,14 @@ metrics:
       default:
         good: 5.0
 
-  # No bound decided; docs/METRICS.md marks it to define. Measured and shown in
-  # every report, but it grades nothing until a band is settled against real
-  # recordings.
-  timing.monotonic_violations: {weight: 4}
+  # Any repeated or backwards step is critical: the count is a whole number, so good 0.5 / bad 1 puts every violation at 0 points.
+  # Statistical route, so it requests review until a calibration manifest covers it.
+  timing.monotonic_violations:
+    weight: 4
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: good just below the worst clean camera stream, bad at the median stream blurred by a 5x5 box.
   vision.sharpness_score:
@@ -80,11 +84,17 @@ metrics:
   # Candidate: rda's review (1%) and exclusion (5%) bounds, unconfirmed against
   # real recordings. A count mismatch breaks a declared invariant with direct
   # evidence, so it blocks through the contract route without a calibration
-  # manifest; the band itself stays candidate.
+  # manifest, in every scope; the band itself stays candidate. Outside a scope
+  # that grades vision it carries weight 0, so the score does not move.
   vision.frame_count_vs_timebase:
     weight: 4
     core: true
     route: contract
+    graded_in_every_scope: true
+    overrides:
+      - when:
+          capabilities_none: [video_quality, sampled_video_quality]
+        weight: 0
     thresholds:
       default:
         good: 0.01
@@ -107,17 +117,58 @@ metrics:
 
   # A declared camera whose file is missing, unreadable or frameless breaks a
   # declared invariant with direct evidence, so it blocks through the contract
-  # route without a calibration manifest, under a scope that grades vision.
+  # route without a calibration manifest, in every scope.
   # The flag is only ever 0 or 1, so any bad bound between them grades it the same.
   # Weight 0: a pass/fail gate, not a quality measure, so it never moves the vision score.
   vision.camera_stream_present:
     weight: 0
     route: contract
+    graded_in_every_scope: true
     higher_is_better: true
     thresholds:
       default:
         good: 1.0
         bad: 0.5
+
+  # A camera segment whose packets cannot be demuxed, or whose frames fail to decode
+  # after its first, breaks a declared invariant with direct evidence,
+  # so it blocks through the contract route in every scope.
+  # Weight 0, like presence: it never moves the vision score.
+  vision.frames_readable:
+    weight: 0
+    route: contract
+    graded_in_every_scope: true
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 0.5
+
+  # A declared delivery spec is an invariant the user stated,
+  # so a miss blocks through the contract route in every scope.
+  # Weight 0: it never moves the score.
+  vision.delivery_spec_met:
+    weight: 0
+    route: contract
+    graded_in_every_scope: true
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 0.5
+
+  # Candidate: good 1%, bad 10% of examined frames, unconfirmed beyond one corrupt dataset.
+  # A corrupt frame (decoder garbage or blank) carries no image to train on,
+  # so it blocks through the contract route in every scope.
+  # Weight 0: it never moves the score.
+  vision.corrupt_frame_pct:
+    weight: 0
+    route: contract
+    graded_in_every_scope: true
+    thresholds:
+      default:
+        good: 1.0
+        bad: 10.0
 
   # Reported, never graded: no band is decided.
   vision.video_format_consistency:
@@ -136,6 +187,10 @@ metrics:
 
   # Reported, never graded: no band is decided.
   vision.video_control_lag_ms:
+    report_only: true
+
+  # Reported, never graded: a still stretch can be an idle robot or a dead scene, and the threshold is a candidate (docs/METRICS.md).
+  vision.still_scene_pct:
     report_only: true
 
   # Calibrated on pusht, cmu_stretch and aloha_static_towel: no clean camera stream froze, so any counted freeze leaves good (the shortest reads above 0.01% of any episode under 80 minutes), and bad sits at the median stream with 10% of its frames frozen.
@@ -207,7 +262,15 @@ metrics:
       # not a stuck sensor (ALOHA's grippers, holding a battery or a towel, read
       # 90-99% unchanged).
       proprio.gripper_width: {good: null, bad: null}
+      # A hand's digits hold a grasp for most of an episode, as a gripper does.
+      proprio.finger_joint_state: {good: null, bad: null}
+      # A held target, found on SO-101 skill datasets.
+      task.goal_position: {good: null, bad: null}
       action.base_velocity_command: {good: null, bad: null}
+      # Computed features and subtask labels hold one value per step or phase by construction.
+      # Found grading RoboCOIN datasets, where they sent every episode to review.
+      derived.computed_feature: {good: null, bad: null}
+      annotation.phase_boundary: {good: null, bad: null}
 
   # Candidate: default and joint-velocity bad bounds unconfirmed against real
   # recordings. Joint velocity now carries a two-sided band of its own; a
@@ -227,6 +290,9 @@ metrics:
       reward.frame_reward:
           good: null
           bad: null
+      # A computed level or a label steps between values, which a 6σ window reads as spikes.
+      derived.computed_feature: {good: null, bad: null}
+      annotation.phase_boundary: {good: null, bad: null}
 
   # Report-only by design: the documented threshold is a total change over
   # an episode, which this metric's per-minute unit cannot convert to
@@ -256,12 +322,26 @@ metrics:
       # reported, not graded. The spike check still grades a glitching gripper.
       proprio.gripper_width: {good: null, bad: null}
       action.gripper_command: {good: null, bad: null}
+      # A target steps between holds, which the ratio counts as noise.
+      task.goal_position: {good: null, bad: null}
+      # A computed level steps by construction, which this ratio counts as noise.
+      derived.computed_feature: {good: null, bad: null}
       proprio.joint_velocity:
         good: 20.0
         bad: 10.0
       proprio.joint_acceleration:
         good: 12.0
         bad: 6.0
+
+  # The same candidate band as snr_db, measured on the angle between rotations
+  # of a unit quaternion.
+  integrity.rotation_snr_db:
+    weight: 2
+    higher_is_better: true
+    thresholds:
+      default:
+        good: 30.0
+        bad: 15.0
 
   # Candidate: bad bound unconfirmed against real recordings.
   integrity.dead_taxel_pct:
@@ -360,13 +440,54 @@ metrics:
   motion.energy_proxy:
     report_only: true
 
-  # No bound decided; docs/METRICS.md marks it to define. Whether a missing
-  # instruction should cost points depends on the policy being trained, so it
-  # is measured and shown in every report and grades nothing until a band is
-  # settled against real recordings.
+  # A data file that lacks a declared feature, or stores it as another kind of value,
+  # breaks a declared invariant with direct evidence, so it blocks through the contract route.
+  # The count is a whole number, so any good bound below 1 grades it the same.
+  # Weight 0: it never moves the score.
+  schema.feature_mismatch_count:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
+  # Episode metadata that names a data file without the episode's rows contradicts
+  # the data with direct evidence, so it blocks through the contract route. Weight 0.
+  schema.episode_file_mismatch:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
+  # Rows in the data with no row in the episode metadata are read by a trainer though
+  # no metadata describes them, so they block through the contract route. Weight 0.
+  schema.episode_not_in_metadata:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
+  # An episode index range that disagrees with the data's `index` column contradicts
+  # the data with direct evidence, so it blocks through the contract route. Weight 0.
+  schema.index_range_mismatch_count:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
+  # Report-only: a missing instruction breaks a language-conditioned model but does not matter for behaviour cloning, and this policy cannot tell which is being trained.
+  # The report lists the affected episodes in a dataset warning; language_conditioned blocks them.
   annotation.task_instruction_missing:
     weight: 5
     core: true
+    report_only: true
 
 # Weights are relative and renormalise over what graded: 1 is supporting evidence, 3 a standard core check, 5 or 6 a defect that directly corrupts training.
 family_weights:

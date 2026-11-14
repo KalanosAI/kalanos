@@ -9,6 +9,7 @@ chunk rollover at a small `chunks_size`, and a camera-less tree.
 # Built-in
 import json
 import shutil
+from pathlib import Path
 
 # External
 import polars as pl
@@ -19,8 +20,12 @@ from upath import UPath
 from kalanos.analysis.adapters import video
 from kalanos.analysis.adapters.lerobot.common import split_of
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
+from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import Clock, Kind, TimestampDtype
+from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.provenance import ExecutionTier
+from kalanos.api import grade
 from kalanos.testing import check_adapter
 
 # Local
@@ -226,3 +231,87 @@ def test_list_typed_index_columns_are_refused(tmp_path):
         AdapterRefusal, match=r"'frame_index' is stored as List\(Int64\)"
     ):
         list(LeRobotV2Adapter().episodes(UPath(root)))
+
+
+def test_language_features_are_skipped_and_the_rest_reads(tmp_path):
+    """Verify language features are dropped and every numeric feature still reads."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    for feature in ("language_persistent", "language_events"):
+        info["features"][feature] = {"dtype": "language", "shape": [1], "names": None}
+    info_path.write_text(json.dumps(info))
+    for data_path in (root / "data").rglob("*.parquet"):
+        frame = pl.read_parquet(data_path)
+        frame.with_columns(
+            pl.Series(
+                "language_persistent",
+                [[{"role": "user", "content": "hang the keys"}]] * frame.height,
+                dtype=pl.List(pl.Struct({"role": pl.String, "content": pl.String})),
+            ),
+            pl.Series("language_events", [[]] * frame.height, dtype=pl.List(pl.Null)),
+        ).write_parquet(data_path)
+
+    plain = _episodes(LEROBOT_V2_1_FIXTURE)
+    episodes = _episodes(UPath(root))
+
+    assert len(episodes) == len(plain)
+    for episode, expected in zip(episodes, plain, strict=True):
+        assert {s.source_field for s in episode.streams} == {
+            s.source_field for s in expected.streams
+        }
+
+
+@pytest.mark.parametrize("fixture", [LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE])
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_every_fixture_episode_agrees_with_its_declared_features(fixture, tier):
+    """Verify each episode carries a schema check of its own data file, all clean."""
+
+    with use_tier(tier):
+        episodes = _episodes(fixture)
+
+    files = sorted(str(p) for p in (fixture / "data").rglob("*.parquet"))
+    assert len(episodes) == len(files)
+    for episode, data_file in zip(episodes, files, strict=True):
+        assert episode.schema_check is not None
+        assert episode.schema_check.mismatches == []
+        assert str(episode.schema_check.source_path) == data_file
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_a_declared_feature_with_no_column_blocks_every_episode(tmp_path, tier):
+    """Verify a missing declared column blocks each episode, naming column and file."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.effort"] = {
+        "dtype": "float32",
+        "shape": [6],
+        "names": None,
+    }
+    info_path.write_text(json.dumps(info))
+
+    report = grade(UPath(root), tier=tier)
+
+    assert len(report.episodes) == 2
+    assert all(
+        e.metrics["feature_mismatch_count"].value == 1.0 for e in report.episodes
+    )
+    findings = [
+        f for f in report.findings if f.metric_id == "schema.feature_mismatch_count"
+    ]
+    assert sorted(Path(f.evidence["path"]).name for f in findings) == [
+        "episode_000000.parquet",
+        "episode_000001.parquet",
+    ]
+    for finding in findings:
+        assert finding.consequence == Consequence.BLOCK
+        assert finding.evidence["mismatches"][0]["column"] == "observation.effort"
+    assert (
+        report.eligibility_counts is not None
+        and report.eligibility_counts.pass_count == 0
+    )

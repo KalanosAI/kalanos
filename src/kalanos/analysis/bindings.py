@@ -11,6 +11,7 @@ with both values recorded on the channel.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -64,6 +65,11 @@ _PROPERTIES = (
     "noise_reference",
     "noise_floor",
 )
+# The last name tokens of a unit quaternion's four components. Names alone decide:
+# inference sees no payload, so unit length is checked by the metric that reads it.
+_QUATERNION_PARTS = ("qx", "qy", "qz", "qw")
+_HAND_DIGITS = frozenset({"thumb", "index", "middle", "ring", "pinky", "little"})
+_FINGER_JOINT = "proprio.finger_joint_state"
 _TYPES = {
     "proprio.joint_position": (ActuatorKind.JOINT, Quantity.POSITION),
     "proprio.joint_velocity": (ActuatorKind.JOINT, Quantity.VELOCITY),
@@ -86,8 +92,60 @@ def _known(value: object) -> bool:
     return value is not None and value != "unknown"
 
 
+def _quaternion_names(stream: Stream) -> frozenset[str]:
+    """Find the four channels of a stream that name a quaternion's components.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream whose channels are read.
+
+    Returns
+    -------
+    frozenset[str]
+        The names of the channels whose declared name ends in `qx`, `qy`, `qz`
+        and `qw`, when exactly one channel ends in each; empty otherwise.
+        Channels that already carry a binding are not counted, so a group
+        is inferred whole or not at all.
+    """
+
+    found: dict[str, list[str]] = {part: [] for part in _QUATERNION_PARTS}
+    for channel in stream.channels:
+        if channel.binding is not None:
+            continue
+        name = (channel.declared_name or channel.name).lower()
+        last = re.split(r"[._ ]", name)[-1]
+        if last in found:
+            found[last].append(channel.name)
+    if any(len(names) != 1 for names in found.values()):
+        return frozenset()
+    return frozenset(names[0] for names in found.values())
+
+
+def _name_tokens(name: str) -> frozenset[str]:
+    """Split a channel name into lowercase word tokens.
+
+    Parameters
+    ----------
+    name : str
+        The channel name, in snake_case, dotted or camelCase spelling.
+
+    Returns
+    -------
+    frozenset[str]
+        The tokens: `kLeftHandThumbAux` gives `k`, `left`, `hand`, `thumb` and `aux`;
+        `finger_joint.pos` gives `finger`, `joint` and `pos`.
+    """
+
+    parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)
+    return frozenset(part.lower() for part in parts)
+
+
 def _inferred(
-    stream: Stream, channel: Channel, dictionary: Dictionary
+    stream: Stream,
+    channel: Channel,
+    dictionary: Dictionary,
+    quaternion: frozenset[str],
 ) -> ChannelBinding:
     """Interpret names in one place and explicitly label the result inference."""
 
@@ -97,7 +155,16 @@ def _inferred(
     if taxonomy.startswith("unmapped."):
         taxonomy = role.taxonomy_type or taxonomy
     actuator, quantity = _TYPES.get(taxonomy, (ActuatorKind.UNKNOWN, Quantity.UNKNOWN))
-    if "gripper" in (channel.declared_name or channel.name).lower():
+    name = channel.declared_name or channel.name
+    tokens = _name_tokens(name)
+    # A hand token plus a digit token keeps `panda_hand` and `left_hand_pos_x` out.
+    digit = bool(tokens & _HAND_DIGITS)
+    hand_digit = "hand" in tokens and digit
+    if hand_digit and taxonomy in ("unmapped.observation.state", "unmapped.state"):
+        taxonomy = _FINGER_JOINT
+    # A named digit (`index_finger_joint_0`) is the angle of one finger.
+    finger_gripper = "finger" in tokens and not digit
+    if not hand_digit and ("gripper" in name.lower() or finger_gripper):
         actuator = ActuatorKind.GRIPPER
         if taxonomy in ("unmapped.observation.state", "unmapped.state"):
             taxonomy, quantity = "proprio.gripper_width", Quantity.POSITION
@@ -111,6 +178,13 @@ def _inferred(
         if taxonomy.startswith("action.")
         else CommandSemantics.NONE
     )
+    representation = (
+        Representation.CONTINUOUS
+        if quantity != Quantity.UNKNOWN
+        else Representation.UNKNOWN
+    )
+    if channel.name in quaternion:
+        representation = Representation.QUATERNION
     binding = ChannelBinding(
         feature=stream.source_field or channel.name,
         index=channel.source_index,
@@ -119,11 +193,7 @@ def _inferred(
         actuator=actuator,
         quantity=quantity,
         command=command,
-        representation=(
-            Representation.CONTINUOUS
-            if quantity != Quantity.UNKNOWN
-            else Representation.UNKNOWN
-        ),
+        representation=representation,
         origin=BindingOrigin.INFERRED,
         status=(
             ValidationStatus.UNRESOLVED
@@ -284,10 +354,11 @@ def resolve_stream(
         and any(r.taxonomy_type for r in named_roles)
         and any(r.taxonomy_type is None for r in named_roles)
     )
+    quaternion = _quaternion_names(stream)
     for position, channel in enumerate(stream.channels):
         if channel.source_index is None and len(stream.channels) > 1:
             channel = channel.model_copy(update={"source_index": position})
-        base = channel.binding or _inferred(stream, channel, dictionary)
+        base = channel.binding or _inferred(stream, channel, dictionary, quaternion)
         binding = base.model_copy(deep=True)
         binding.source_identity = source
         specific = (

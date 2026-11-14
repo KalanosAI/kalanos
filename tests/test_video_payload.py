@@ -6,23 +6,31 @@
 
 # Built-in
 import random
+import threading
+import time
+import warnings
 from fractions import Fraction
 from itertools import islice
 
 # External
+import fsspec
 import polars as pl
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
+from fsspec.spec import AbstractBufferedFile
 from upath import UPath
 
 # Internal
 import kalanos
 from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.readahead import ReadaheadCache
 from kalanos.analysis.adapters.video import (
     DecodeFailed,
     DecodeLimitReached,
     DecoderUnavailable,
+    RemoteReads,
     VideoPayload,
+    use_remote_reads,
 )
 from kalanos.analysis.metrics import registry
 from kalanos.analysis.models.domain import Clock, Kind, Stream, TimestampDtype
@@ -57,18 +65,87 @@ READS = [
 READ_IDS = ["packet_times", "gray_windows"]
 
 
-# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
-# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
-# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+# ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
+# ░█░░░█░░░█▀█░▀▀█░▀▀█░█▀▀░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
 
 
-def _windows(payload: VideoPayload, windows, size: int) -> list:
-    """Group what `gray_windows` yields into one list of frames per window."""
+class _BufferedMemoryFile(AbstractBufferedFile):
+    """A read-only file over a memory store, read through an fsspec cache."""
 
-    grouped: list[list] = [[] for _ in windows]
-    for position, frame, _native, _pts in payload.gray_windows(windows, size):
-        grouped[position].append(frame)
-    return grouped
+    def _fetch_range(self, start: int, end: int) -> bytes:
+        """Return bytes `start` to `end` of the stored file.
+
+        Parameters
+        ----------
+        start, end : int
+            The byte range.
+
+        Returns
+        -------
+        bytes
+            The range.
+        """
+
+        return self.fs.cat_file(self.path, start, end)
+
+
+class _BufferedMemoryFileSystem(MemoryFileSystem):
+    """An in-memory filesystem whose reads go through a real block cache.
+
+    `MemoryFileSystem` returns a file that ignores `block_size` and `cache_type`,
+    so a remote path on `memory://` never reaches a cache.
+    """
+
+    protocol = "bufmem"
+    store: dict = {}
+    pseudo_dirs = [""]
+
+    def _open(
+        self,
+        path,
+        mode="rb",
+        block_size=None,
+        autocommit=True,
+        cache_options=None,
+        **kwargs,
+    ):
+        """Open `path` for reading as a buffered file, or as `MemoryFileSystem` does.
+
+        Parameters
+        ----------
+        path : str
+            The file.
+        mode : str
+            `rb` reads through a cache; any other mode is `MemoryFileSystem`'s.
+        block_size : int or None
+            The cache's block size.
+        autocommit : bool
+            Passed to the file.
+        cache_options : dict or None
+            Passed to the file's cache.
+        **kwargs
+            Passed to the file, `cache_type` among them.
+
+        Returns
+        -------
+        Any
+            The open file.
+        """
+
+        if mode != "rb":
+            return super()._open(
+                path, mode, block_size, autocommit, cache_options, **kwargs
+            )
+        return _BufferedMemoryFile(
+            self,
+            path,
+            mode=mode,
+            block_size=block_size or "default",
+            autocommit=autocommit,
+            cache_options=cache_options,
+            **kwargs,
+        )
 
 
 class _Container:
@@ -110,6 +187,33 @@ class _Container:
 
         self.closed = True
         self._container.close()
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _windows(payload: VideoPayload, windows, size: int) -> list:
+    """Group what `gray_windows` yields into one list of frames per window."""
+
+    grouped: list[list] = [[] for _ in windows]
+    for position, frame, _native, _pts in payload.gray_windows(windows, size):
+        grouped[position].append(frame)
+    return grouped
+
+
+def _readahead_threads() -> list[threading.Thread]:
+    """Return the readahead threads still alive after up to 2 s of waiting."""
+
+    deadline = time.monotonic() + 2
+    while True:
+        alive = [
+            t for t in threading.enumerate() if t.name.startswith("kalanos-readahead")
+        ]
+        if not alive or time.monotonic() > deadline:
+            return alive
+        time.sleep(0.01)
 
 
 def _record_opens(monkeypatch) -> list[_Container]:
@@ -231,6 +335,21 @@ def remote_video():
     """Copy the fixture mp4 into memory, closing cached remote handles afterwards."""
 
     remote = UPath("memory://videos/file-000.mp4")
+    remote.write_bytes(LEROBOT_VIDEO.read_bytes())
+    yield remote
+    video.close_video_files()
+    remote.unlink()
+
+
+@pytest.fixture
+def buffered_remote_video():
+    """Copy the fixture mp4 onto `bufmem://`, closing the pool afterwards."""
+
+    fsspec.register_implementation("bufmem", _BufferedMemoryFileSystem, clobber=True)
+    # UPath warns that it falls back to its generic class for an unknown protocol.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "UPath 'bufmem' filesystem", UserWarning)
+        remote = UPath("bufmem://videos/file-000.mp4")
     remote.write_bytes(LEROBOT_VIDEO.read_bytes())
     yield remote
     video.close_video_files()
@@ -678,22 +797,99 @@ def test_the_pool_keeps_at_most_four_files(monkeypatch, tmp_path):
     assert [c.closed for c in opened] == [True, False, False, False, False]
 
 
-def test_closing_video_files_closes_local_and_remote(monkeypatch, remote_video):
-    """Verify closing the pool closes local and remote containers and file objects."""
+def test_closing_video_files_closes_local_and_remote(
+    monkeypatch, remote_video, buffered_remote_video
+):
+    """Verify closing the pool closes local and remote containers and file objects.
+
+    A file read through the readahead cache leaves no fetching thread behind.
+    """
 
     opened = _record_opens(monkeypatch)
-    for path in (LEROBOT_VIDEO, remote_video):
+    for path in (LEROBOT_VIDEO, remote_video, buffered_remote_video):
         VideoPayload(path=path, frame_count=8, start_s=0.0, end_s=8 / 30).header()
     # A MemoryFile ignores close(), so record the call instead.
     closed = []
     handle = video._OPEN_FILES[str(remote_video)].handle
     monkeypatch.setattr(handle, "close", lambda: closed.append(handle))
+    buffered = video._OPEN_FILES[str(buffered_remote_video)].handle
+    assert buffered is not None
 
     video.close_video_files()
 
     assert not video._OPEN_FILES
-    assert [c.closed for c in opened] == [True, True]
+    assert [c.closed for c in opened] == [True, True, True]
     assert closed == [handle]
+    assert buffered.closed
+    assert _readahead_threads() == []
+
+
+def test_closing_a_remote_file_closes_its_cache_itself(
+    monkeypatch, buffered_remote_video
+):
+    """Verify the readahead cache is closed even by a file whose close skips it.
+
+    fsspec releases before 2026.7 drop the cache on close without closing it.
+    """
+
+    VideoPayload(
+        path=buffered_remote_video, frame_count=8, start_s=0.0, end_s=8 / 30
+    ).header()
+    handle = video._OPEN_FILES[str(buffered_remote_video)].handle
+    assert handle is not None
+    cache = handle.cache
+    monkeypatch.setattr(handle, "close", lambda: None)
+
+    video.close_video_files()
+
+    assert cache.held_blocks == 0
+    assert _readahead_threads() == []
+
+
+def test_a_buffered_remote_read_matches_a_local_one(buffered_remote_video):
+    """Verify every read of two segments over a block cache matches the local read.
+
+    Blocks far smaller than the file make each read span and join several blocks.
+    """
+
+    segments = [(0.0, 8 / 30, 8), (8 / 30, 14 / 30, 6)]
+
+    def reads(path: UPath) -> list:
+        results = []
+        for start_s, end_s, frame_count in segments:
+            payload = VideoPayload(
+                path=path, frame_count=frame_count, start_s=start_s, end_s=end_s
+            )
+            windows = _windows(payload, [(0, 2), (frame_count - 2, frame_count)], 16)
+            results.append(
+                (
+                    payload.header(),
+                    payload.packet_times(),
+                    [[frame.tobytes() for frame in window] for window in windows],
+                )
+            )
+        return results
+
+    with use_remote_reads(RemoteReads(block_bytes=256, readahead_blocks=2)):
+        remote = reads(buffered_remote_video)
+    local = reads(LEROBOT_VIDEO)
+
+    assert remote == local
+
+
+def test_a_remote_open_uses_the_readahead_settings(buffered_remote_video):
+    """Verify a remote file opens with the block size and readahead in context."""
+
+    with use_remote_reads(RemoteReads(block_bytes=65536, readahead_blocks=2)):
+        VideoPayload(
+            path=buffered_remote_video, frame_count=8, start_s=0.0, end_s=8 / 30
+        ).header()
+
+    handle = video._OPEN_FILES[str(buffered_remote_video)].handle
+    assert handle is not None
+    assert handle.blocksize == 65536
+    assert isinstance(handle.cache, ReadaheadCache)
+    assert handle.cache.readahead == 2
 
 
 def test_a_grade_leaves_no_video_file_open(monkeypatch):
@@ -764,6 +960,66 @@ def test_a_read_inside_another_read_opens_its_own_container(monkeypatch):
     assert len(opened) == 2
     assert list(video._OPEN_FILES) == [str(LEROBOT_VIDEO)]
     assert [c.closed for c in opened] == [True, False]
+
+
+def _write_flagged_video(path: UPath, **flags) -> None:
+    """Encode 4 frames of 64x64, with the rotation or interlacing `flags` ask for."""
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream(
+        "libx264",
+        rate=30,
+        options=(
+            {"flags": "+ildct+ilme", "x264-params": "interlaced=1:tff=1"}
+            if flags.get("interlaced")
+            else {}
+        ),
+    )
+    stream.width = stream.height = 64
+    stream.pix_fmt = "yuv420p"
+    if "rotation" in flags:
+        stream.set_display_rotation(flags["rotation"])
+    for _ in range(4):
+        pixels = numpy.zeros((64, 64, 3), dtype=numpy.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def _payload(path: UPath) -> VideoPayload:
+    """A payload over the 4-frame file at `path`."""
+
+    return VideoPayload(path=path, frame_count=4, start_s=0.0, end_s=4 / 30)
+
+
+def test_the_header_reads_the_first_frames_rotation(tmp_path):
+    """Verify a display rotation of 90 reads as 90.0, and a file without one as 0.0."""
+
+    rotated = UPath(tmp_path) / "rotated.mp4"
+    _write_flagged_video(rotated, rotation=90)
+
+    assert _payload(rotated).header().rotation_deg == 90.0
+    assert VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30
+    ).header().rotation_deg == pytest.approx(0.0)
+
+
+def test_the_header_reads_whether_the_first_frame_is_interlaced(tmp_path):
+    """Verify an interlaced encode reads True, and the progressive fixture False."""
+
+    interlaced = UPath(tmp_path) / "interlaced.mp4"
+    _write_flagged_video(interlaced, interlaced=True)
+
+    assert _payload(interlaced).header().interlaced is True
+    progressive = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30
+    ).header()
+    assert (progressive.rotation_deg, progressive.interlaced) == (0.0, False)
 
 
 def test_the_header_names_the_codec_rather_than_its_decoder(tmp_path):

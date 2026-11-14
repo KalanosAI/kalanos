@@ -11,11 +11,14 @@ optional decoder.
 
 # Built-in
 import logging
+import struct
 import threading
 from collections import OrderedDict
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from math import atan2, degrees, hypot
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -23,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from upath import UPath
 
 # Internal
+from kalanos.analysis.adapters.readahead import ReadaheadCache
 from kalanos.analysis.entry_points import MissingDependency
 from kalanos.analysis.optional import load_numpy
 
@@ -57,14 +61,19 @@ logger = logging.getLogger(__name__)
 # keyed on their path, which assumes a file does not change during a run.
 # A container has one read position, so a read checks it out of the pool
 # and puts it back when done; no two reads ever share one.
-# Each remote handle's block cache holds at most 32 blocks (fsspec's default)
-# of this size.
-_REMOTE_BLOCK_SIZE = 1 << 20
+# Each remote handle's readahead cache holds a bounded number of blocks,
+# so read memory is capped by that bound times this many idle files
+# plus the file being read, which is out of the pool while it is read.
 _MAX_OPEN_FILES = 4
 # Idle files only, least recently used first.
 _OPEN_FILES: "OrderedDict[str, _VideoFile]" = OrderedDict()
 # Guards `_OPEN_FILES` alone, never held during a read.
 _OPEN_LOCK = threading.Lock()
+# Set for a run by `use_remote_reads`, so this module needs no access to settings.
+# Unset, a remote file is read with `RemoteReads()`'s defaults.
+_REMOTE_READS: "ContextVar[RemoteReads | None]" = ContextVar(
+    "kalanos_remote_reads", default=None
+)
 
 # FFmpeg's names for its colour codes, as libavutil/pixdesc.c gives them.
 # Unspecified and reserved codes are left out, so they read as unstated.
@@ -338,6 +347,12 @@ class ContainerHeader:
         The transfer characteristic, as FFmpeg names it (`bt709`).
     color_space : str or None
         The colour space, as FFmpeg names it (`bt709`).
+    rotation_deg : float or None
+        The display rotation the first frame carries, in degrees counterclockwise
+        as PyAV's `VideoFrame.rotation` reads it, 0.0 when the frame carries none.
+        `None` when no frame decodes.
+    interlaced : bool or None
+        Whether the first frame is interlaced, `None` when no frame decodes.
     camera_make : str or None
         The camera maker a container tag names.
     camera_model : str or None
@@ -359,6 +374,8 @@ class ContainerHeader:
     color_primaries: str | None = None
     color_transfer: str | None = None
     color_space: str | None = None
+    rotation_deg: float | None = None
+    interlaced: bool | None = None
     camera_make: str | None = None
     camera_model: str | None = None
     encoder: str | None = None
@@ -385,13 +402,34 @@ class _VideoFile:
     header: ContainerHeader | None
 
     def close(self) -> None:
-        """Close the container, then the file object it reads."""
+        """Close the container, then the file object it reads and its cache."""
 
         try:
             self.container.close()
         finally:
             if self.handle is not None:
+                # fsspec before 2026.7 drops the cache on close without closing it,
+                # which would leave its fetching threads alive.
+                cache = getattr(self.handle, "cache", None)
+                if isinstance(cache, ReadaheadCache):
+                    cache.close()
                 self.handle.close()
+
+
+@dataclass(frozen=True)
+class RemoteReads:
+    """How a remote video file is fetched.
+
+    Attributes
+    ----------
+    block_bytes : int
+        The size of each range request.
+    readahead_blocks : int
+        How many blocks are fetched ahead of a sequential read; `0` turns it off.
+    """
+
+    block_bytes: int = 4 * 1024 * 1024
+    readahead_blocks: int = 5
 
 
 @dataclass(frozen=True)
@@ -670,14 +708,14 @@ class VideoPayload:
     def header(self) -> ContainerHeader:
         """Read the format the container states for its first video stream.
 
-        Decodes nothing.
+        Decodes the file's first frame, for its rotation and interlacing.
 
         Returns
         -------
         ContainerHeader
             The stream's frame size, rate, pixel format, codec, bitrate,
-            length and colour, and the camera and encoder its tags name,
-            all for the whole file.
+            length and colour, the first frame's rotation and interlacing,
+            and the camera and encoder its tags name, all for the whole file.
 
         Raises
         ------
@@ -857,6 +895,27 @@ def _tag(container: Any, stream: Any, keys: Sequence[str]) -> str | None:
     return None
 
 
+@contextmanager
+def use_remote_reads(reads: RemoteReads) -> Iterator[None]:
+    """Fetch remote video files opened in the body as `reads` says.
+
+    Parameters
+    ----------
+    reads : RemoteReads
+        The block size and readahead for the run; restored on exit, even on error.
+
+    Yields
+    ------
+    None
+    """
+
+    token = _REMOTE_READS.set(reads)
+    try:
+        yield
+    finally:
+        _REMOTE_READS.reset(token)
+
+
 def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
     """Open `path` as a PyAV container, local or remote, and read its header.
 
@@ -878,7 +937,13 @@ def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
         container = av.open(str(path))
     else:
         # PyAV cannot resolve an fsspec URL such as hf://, so it reads a file object.
-        handle = path.open("rb", block_size=_REMOTE_BLOCK_SIZE, cache_type="blockcache")
+        reads = _REMOTE_READS.get() or RemoteReads()
+        handle = path.open(
+            "rb",
+            block_size=reads.block_bytes,
+            cache_type=ReadaheadCache.name,
+            cache_options={"readahead": reads.readahead_blocks},
+        )
         try:
             container = av.open(handle)
         except BaseException:
@@ -906,7 +971,8 @@ def _read_header(container: Any) -> ContainerHeader:
     -------
     ContainerHeader
         The stream's frame size, rate, pixel format, codec, bitrate,
-        length and colour, and the camera and encoder its tags name.
+        length and colour, the first frame's rotation and interlacing,
+        and the camera and encoder its tags name.
     """
 
     stream = container.streams.video[0]
@@ -918,6 +984,8 @@ def _read_header(container: Any) -> ContainerHeader:
     bit_rate = codec.bit_rate or stream.bit_rate
     duration = stream.duration
     time_base = stream.time_base
+    # Every later read seeks before it decodes, so decoding a frame here shifts none.
+    frame = _first_frame(container)
     return ContainerHeader(
         width=int(codec.width),
         height=int(codec.height),
@@ -935,10 +1003,67 @@ def _read_header(container: Any) -> ContainerHeader:
         color_primaries=_color_name(codec, "color_primaries", _COLOR_PRIMARIES),
         color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),
         color_space=_color_name(codec, "colorspace", _COLOR_SPACES),
+        rotation_deg=_display_rotation(frame) if frame is not None else None,
+        interlaced=bool(frame.interlaced_frame) if frame is not None else None,
         camera_make=_tag(container, stream, _MAKE_TAGS),
         camera_model=_tag(container, stream, _MODEL_TAGS),
         encoder=_tag(container, stream, _ENCODER_TAGS),
     )
+
+
+def _first_frame(container: Any) -> Any | None:
+    """Decode the first frame of a container's first video stream.
+
+    Parameters
+    ----------
+    container : Any
+        A PyAV container with at least one video stream.
+
+    Returns
+    -------
+    Any or None
+        The frame, `None` when the stream holds none or FFmpeg cannot decode it.
+    """
+
+    assert av is not None
+
+    # Only FFmpeg's own errors read as "no frame": a remote failure surfaces as
+    # OSError and must still raise, as it does for the rest of the header.
+    try:
+        return next(container.decode(container.streams.video[0]), None)
+    except av.error.FFmpegError:
+        return None
+
+
+def _display_rotation(frame: Any) -> float:
+    """Read the display rotation a decoded frame carries.
+
+    Parameters
+    ----------
+    frame : Any
+        A decoded PyAV video frame.
+
+    Returns
+    -------
+    float
+        The rotation in degrees counterclockwise, 0.0 when the frame carries none.
+    """
+
+    # The matrix is parsed from its bytes because `VideoFrame.rotation` is missing
+    # before PyAV 14.2, and `side_data` is gone from the stream after PyAV 13.
+    for entry in frame.side_data:
+        if "DISPLAYMATRIX" in str(entry.type):
+            matrix = struct.unpack("<9i", bytes(entry)[:36])
+            break
+    else:
+        return 0.0
+    x_scale = hypot(matrix[0], matrix[3])
+    y_scale = hypot(matrix[1], matrix[4])
+    if not x_scale or not y_scale:
+        return 0.0
+    angle = -degrees(atan2(matrix[1] / y_scale, matrix[0] / x_scale))
+    # Adding 0.0 turns a rounded -0.0 into 0.0.
+    return round(angle, 2) + 0.0
 
 
 def _check_out(path: UPath) -> _VideoFile | None:

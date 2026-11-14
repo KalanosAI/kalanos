@@ -4,6 +4,8 @@ One episode spans a data parquet and one mp4 per camera;
 one parquet chunk holds many episodes, split by `episode_index`.
 `meta/info.json` declares the frame rate and the robot type,
 and `meta/episodes/**/*.parquet` maps each episode to the files that hold it.
+An episode whose rows are in the data with no row in `meta/episodes` is yielded
+after the others, with no streams, so the report can block it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -13,6 +15,7 @@ and `meta/episodes/**/*.parquet` maps each episode to the files that hold it.
 # Built-in
 import itertools
 from collections.abc import Iterator
+from pathlib import PurePosixPath
 from typing import Any
 
 # External
@@ -25,6 +28,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     LeRobotAdapter,
     check_path_template,
     check_scalar_index,
+    check_schema,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -38,6 +42,11 @@ from kalanos.analysis.adapters.lerobot.common import (
     timestamp_dtype_of,
     with_episode_clock,
 )
+from kalanos.analysis.adapters.lerobot.layout import (
+    aggregate_episode_rows,
+    layout_check,
+    read_episode_rows,
+)
 from kalanos.analysis.adapters.registry import adapter
 from kalanos.analysis.adapters.video import VideoPayload
 
@@ -49,7 +58,9 @@ from kalanos.analysis.models.domain import (
     Clock,
     Episode,
     Kind,
+    LayoutCheck,
     MappingSource,
+    SchemaCheck,
     Stream,
     TimestampDtype,
 )
@@ -80,8 +91,9 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     pl.DataFrame
         Every episode's row, one per episode, sorted by `episode_index`
         when the index has that column; the caller checks that it does.
-        Only `episode_index`, `tasks` and the `data/*` and `videos/*` columns
-        are read; any other column has to be added here before a caller reads it.
+        Only `episode_index`, `tasks`, `dataset_from_index`, `dataset_to_index`,
+        `length` and the `data/*` and `videos/*` columns are read; any other
+        column has to be added here before a caller reads it.
 
     Raises
     ------
@@ -105,7 +117,14 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
             columns = [
                 name
                 for name in names
-                if name in ("episode_index", "tasks")
+                if name
+                in (
+                    "episode_index",
+                    "tasks",
+                    "dataset_from_index",
+                    "dataset_to_index",
+                    "length",
+                )
                 or name.startswith(("data/", "videos/"))
             ]
             with parquet_path.open("rb") as handle:
@@ -121,6 +140,27 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     if "episode_index" not in index.columns:
         return index
     return index.sort("episode_index")
+
+
+def _data_files(path: UPath, info: dict[str, Any]) -> list[UPath]:
+    """List every data parquet under the dataset's data root, sorted.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+    info : dict
+        The parsed `info.json`;
+        the first part of its `data_path` template names the data root.
+
+    Returns
+    -------
+    list[UPath]
+        Every `*.parquet` under the data root, at any depth, sorted.
+    """
+
+    data_root = path / PurePosixPath(info["data_path"]).parts[0]
+    return sorted(data_root.rglob("*.parquet"))
 
 
 def _video_stream(
@@ -241,7 +281,8 @@ class LeRobotV3Adapter(LeRobotAdapter):
         Returns
         -------
         DatasetInfo
-            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared.
+            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared,
+            and the `simulator` the dataset card's tags name.
 
         Raises
         ------
@@ -252,7 +293,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
         return describe_from_info(self.name, path, read_info(path))
 
     def episodes(self, path: UPath, sample: int | None = None) -> Iterator[Episode]:
-        """Yield one Episode per row of the episode index, lazily.
+        """Yield one Episode per row of the episode index, then the data-only ones.
 
         Parameters
         ----------
@@ -260,12 +301,18 @@ class LeRobotV3Adapter(LeRobotAdapter):
             The dataset root.
         sample : int or None
             When given, stop after this many episodes.
+            A sampled read yields no data-only episode,
+            since it cannot see the whole inventory.
 
         Yields
         ------
         Episode
             One recording, its streams drawn from the data parquet chunk
             its row names and, for each declared camera, its own mp4.
+            When `sample` is `None`, then one Episode per `episode_index`
+            found in the data and absent from the episode index, in index order:
+            no streams, `tasks` `None`, and a `layout_check` whose `pointed_path`
+            is `None` and whose `holding_paths` are the data files holding its rows.
 
         Raises
         ------
@@ -329,7 +376,16 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # So only the current chunk is ever needed, and a one-entry cache is enough.
         cached_path: UPath | None = None
         cached_frame: pl.DataFrame | None = None
-        cached_schema: list[str] = []
+        cached_schema: dict[str, pl.DataType] = {}
+        cached_check: SchemaCheck | None = None
+        # Where every episode's rows are, across all data files. Built on the first
+        # episode missing from the file its metadata names, then reused.
+        located: tuple[list[UPath], pl.DataFrame] | None = None
+        # The data files read so far and the episodes each holds, collected from the
+        # frames read anyway, so the inventory check after the loop only has to scan
+        # the files no metadata row names.
+        read_paths: set[UPath] = set()
+        held: dict[int, list[UPath]] = {}
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -349,7 +405,8 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         # the file. The schema still says which columns exist.
                         parquet_schema = pl.read_parquet_schema(handle)
                     check_scalar_index(path, parquet_schema)
-                    cached_schema = list(parquet_schema)
+                    cached_schema = dict(parquet_schema)
+                    cached_check = check_schema(info, cached_schema, data_path)
                     with data_path.open("rb") as handle:
                         cached_frame = storage_columns(
                             pl.read_parquet(
@@ -360,6 +417,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                                     c
                                     for c in (
                                         "episode_index",
+                                        "index",
                                         TIME_COLUMN,
                                         "frame_index",
                                     )
@@ -368,12 +426,34 @@ class LeRobotV3Adapter(LeRobotAdapter):
                             )
                         )
                     cached_path = data_path
+                    if sample is None and data_path not in read_paths:
+                        read_paths.add(data_path)
+                        for idx in cached_frame["episode_index"].unique().to_list():
+                            held.setdefault(idx, []).append(data_path)
                 assert cached_frame is not None
                 frame = cached_frame
 
                 episode_frame = frame.filter(
                     pl.col("episode_index") == row["episode_index"]
                 )
+                with_index = "index" in cached_schema
+                if episode_frame.height:
+                    source_paths = [data_path]
+                    holding = aggregate_episode_rows(
+                        episode_frame, with_index=with_index
+                    )
+                else:
+                    if located is None:
+                        all_paths = _data_files(path, info)
+                        located = (
+                            all_paths,
+                            read_episode_rows(all_paths, with_index=with_index),
+                        )
+                    source_paths, all_rows = located
+                    holding = all_rows.filter(
+                        pl.col("episode_index") == row["episode_index"]
+                    )
+                episode_layout = layout_check(row, data_path, holding, source_paths)
                 timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                 clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -437,4 +517,47 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 if task_map is None
                 else task_map.get(row["episode_index"], []),
                 split=split_of(info, row["episode_index"]),
+                schema_check=cached_check,
+                layout_check=episode_layout,
+            )
+
+        if sample is not None:
+            return
+        try:
+            if located is not None:
+                # The miss scan already read every data file.
+                located_paths, located_rows = located
+                held = {}
+                for source, idx in located_rows.select(
+                    "source", "episode_index"
+                ).iter_rows():
+                    held.setdefault(idx, []).append(located_paths[source])
+            else:
+                orphans = [p for p in _data_files(path, info) if p not in read_paths]
+                if orphans:
+                    orphan_rows = read_episode_rows(orphans, with_index=False)
+                    for source, idx in orphan_rows.select(
+                        "source", "episode_index"
+                    ).iter_rows():
+                        held.setdefault(idx, []).append(orphans[source])
+            metadata = set(episode_index["episode_index"].to_list())
+        except AdapterRefusal:
+            raise
+        except Exception as exc:
+            raise AdapterRefusal(
+                path, f"could not reconcile the episode inventory: {exc}"
+            ) from exc
+
+        for idx in sorted(held.keys() - metadata):
+            yield Episode(
+                id=f"episode_{idx:06d}",
+                streams=[],
+                # Its instructions are unknown, and an empty list would read as
+                # an episode recorded without one.
+                tasks=None,
+                split=split_of(info, idx),
+                layout_check=LayoutCheck(
+                    pointed_path=None,
+                    holding_paths=sorted(set(held[idx]), key=str),
+                ),
             )

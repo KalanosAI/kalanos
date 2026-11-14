@@ -3,9 +3,10 @@
 Every vision metric judges one camera stream inside one episode,
 so a camera exposed one way throughout is its own norm,
 and an episode blurrier or darker than the same camera elsewhere,
-or repeating another episode's footage, goes unnoticed.
+or repeating another episode's footage,
+or footage stored under another camera, goes unnoticed.
 This pass reads each camera's per-episode results after grading,
-describes the camera, and flags the episodes unlike it or repeating another's footage.
+describes the camera, and flags the episodes unlike it or repeating other footage.
 Its findings request review or are reported; they never move a score.
 `FootageVariation` gathers each camera's pooled frames during grading,
 to say how much its footage changes between episodes.
@@ -16,28 +17,43 @@ to say how much its footage changes between episodes.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import itertools
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 # Internal
 from kalanos.analysis.coverage import state_of
-from kalanos.analysis.metrics.vision import _SHIFT_FLOOR, is_camera_footage
+from kalanos.analysis.localization import support_for
+from kalanos.analysis.metrics.vision import (
+    _RELATIVE_FLOOR,
+    _SHIFT_FLOOR,
+    _VARIATION_SIZE,
+    is_camera_footage,
+)
 from kalanos.analysis.models.coverage import Availability
 from kalanos.analysis.models.eligibility import Consequence
-from kalanos.analysis.models.metrics import Family, Level, MetricResult
+from kalanos.analysis.models.metrics import (
+    Family,
+    Level,
+    MetricResult,
+    MetricStatus,
+)
+from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import content_digest
 from kalanos.analysis.models.report import (
     CameraSummary,
+    FootageStream,
     GradedEpisode,
     GradedStream,
     Variation,
     round_nrmse,
 )
-from kalanos.analysis.models.scoring import Finding, Severity
+from kalanos.analysis.models.scoring import Finding, FindingLocation, Severity
 from kalanos.analysis.models.summaries import CameraSample
 from kalanos.analysis.optional import load_numpy
+from kalanos.analysis.scoring.score import finding_for_result
 
 
 if TYPE_CHECKING:
@@ -62,6 +78,42 @@ _BLUR_GAP = 0.5
 _TRAIT_SHARE = 0.5
 # Raw Laplacian variance of a flat frame is 0, which has no logarithm.
 _LOG_FLOOR = 1e-6
+# Candidate: a frame is also corrupt when its noise statistic is this many times
+# its camera's median across the dataset, and at least `_RELATIVE_FLOOR`.
+# Garbage on a simulated camera read at least 32.8 times that median,
+# and the clean frames of the calibration datasets at most 4.8 times it.
+_RELATIVE_FACTOR = 10.0
+# Candidate: an episode is a swap when its score against the pair is at most this.
+# On aloha (6 camera pairs) and liftplace (1 pair), injected runs of 1 to 5 episodes
+# scored at most 0.78, and clean episodes at least 1.20.
+_SWAP_SCORE = 0.8
+# Candidate: a pair is compared only when its median score is at least this.
+# Real pairs had medians of 2.38 to 4.59; emulated stereo pairs of static views
+# 1.05 to 1.90, which this gate leaves out.
+_SWAP_SEPARATION = 2.0
+# Candidate: consecutive flagged episodes needed to report a swap.
+_SWAP_RUN = 3
+# Candidate: a split of a camera's episodes is a viewpoint change when the distance
+# between its two median pictures reaches this multiple of the typical distance
+# of an episode to its own side's median.
+# Clean fixed cameras scored at most 1.21 on aloha, pusht, cmu_stretch and liftplace;
+# a 16 px vertical shift scored 3.15 on liftplace agentview
+# and a 16 px shift 1.64 on pusht.
+_VIEWPOINT_SCORE = 1.5
+# A pooled pixel is still in an episode
+# when its SD over the sampled frames is below this.
+_STILL_PIXEL_SD = 0.02
+# Candidate: a camera is not judged when the median share of still pixels
+# over its episodes is below this, as its picture mostly changes within an episode.
+# Aloha wrist cameras read 0.02 and 0.00, fixed cameras 0.47 to 0.87.
+_STILL_SHARE = 0.4
+# A simulator can render a camera's episodes identically,
+# and a zero within-side distance would turn any difference into a change.
+_VIEWPOINT_FLOOR = 1e-3
+# Up to this many episodes with a picture every split is scored;
+# above it, a coarse pass and then a fine pass around the best split,
+# which bounds the median computations on very large datasets.
+_VIEWPOINT_SPLITS = 200
 
 # TODO: an absolute blur floor is not set;
 # placing one needs data from more than one dataset.
@@ -118,12 +170,21 @@ class _Running:
 class FootageVariation:
     """How much each camera's footage changes between episodes, gathered while grading.
 
-    It keeps no episode's frames: per camera and vector length,
-    only the running mean and sum of squared deviations of each column.
+    Per camera and vector length it keeps the running mean and sum of squared deviations
+    of each column, and per episode the mean and the median pooled frame
+    and one still share, 2 KiB per camera per episode.
+    It keeps no episode's individual frames.
     """
 
     _seen: set[tuple[str, str]] = field(default_factory=set, init=False)
     _groups: "dict[str, dict[int, _Running]]" = field(default_factory=dict, init=False)
+    _signatures: "dict[str, dict[str, np.ndarray]]" = field(
+        default_factory=dict, init=False
+    )
+    _backgrounds: "dict[str, dict[str, np.ndarray]]" = field(
+        default_factory=dict, init=False
+    )
+    _still: "dict[str, dict[str, float]]" = field(default_factory=dict, init=False)
 
     def add(self, episode_id: str, camera: str, vector: "np.ndarray | None") -> None:
         """Add one episode's pooled frames of one camera.
@@ -150,6 +211,19 @@ class FootageVariation:
         numpy = load_numpy()
         assert numpy is not None
 
+        block = _VARIATION_SIZE**2
+        if len(vector) % block == 0:
+            frames = vector.reshape(-1, block).astype(numpy.float64)
+            self._signatures.setdefault(camera, {})[episode_id] = frames.mean(
+                axis=0
+            ).astype(numpy.float32)
+            self._backgrounds.setdefault(camera, {})[episode_id] = numpy.median(
+                frames, axis=0
+            ).astype(numpy.float32)
+            self._still.setdefault(camera, {})[episode_id] = float(
+                (frames.std(axis=0) < _STILL_PIXEL_SD).mean()
+            )
+
         groups = self._groups.setdefault(camera, {})
         if len(vector) not in groups:
             groups[len(vector)] = _Running(
@@ -158,6 +232,67 @@ class FootageVariation:
                 m2=numpy.zeros(len(vector), dtype=numpy.float64),
             )
         groups[len(vector)].add(vector.astype(numpy.float64))
+
+    def appearance(self, camera: str) -> "dict[str, np.ndarray]":
+        """Each episode's mean pooled frame of one camera.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            The mean of the episode's sampled frames,
+            one float32 value per pooled pixel, by episode id in the order added.
+            Empty for an unknown camera.
+            An episode whose read missed a frame has none.
+        """
+
+        return dict(self._signatures.get(camera, {}))
+
+    def background(self, camera: str) -> "dict[str, np.ndarray]":
+        """Each episode's median pooled frame of one camera.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            The per-pixel median of the episode's sampled frames,
+            one float32 value per pooled pixel, by episode id in the order added.
+            Empty for an unknown camera.
+            An episode whose read missed a frame has none.
+        """
+
+        return dict(self._backgrounds.get(camera, {}))
+
+    def still_share(self, camera: str) -> dict[str, float]:
+        """Each episode's share of pooled pixels that hold still across its frames.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, float]
+            The share of pooled pixels whose SD over the sampled frames
+            is below `_STILL_PIXEL_SD`, by episode id in the order added.
+            Empty for an unknown camera.
+        """
+
+        return dict(self._still.get(camera, {}))
+
+    def cameras(self) -> list[str]:
+        """The cameras with at least one episode signature, in first-seen order."""
+
+        return [camera for camera, found in self._signatures.items() if found]
 
     def result(self, camera: str) -> Variation:
         """The camera's visual variation, over its largest group of episodes.
@@ -190,6 +325,44 @@ class FootageVariation:
             )
         mean_square = 2 * float(best.m2.sum()) / ((best.n - 1) * len(best.mean))
         return Variation(value=round_nrmse(math.sqrt(mean_square)), episodes=best.n)
+
+
+@dataclass(frozen=True)
+class CameraSwap:
+    """Two cameras that hold each other's footage over runs of episodes.
+
+    Attributes
+    ----------
+    cameras : tuple[str, str]
+        The two camera keys.
+    episodes : list[str]
+        The flagged episodes of every reported run of the pair, in report order.
+    """
+
+    cameras: tuple[str, str]
+    episodes: list[str]
+
+
+@dataclass(frozen=True)
+class ViewpointChange:
+    """A camera whose view changes between two groups of consecutive episodes.
+
+    Attributes
+    ----------
+    camera : str
+        The camera key.
+    before : list[str]
+        The episodes with a picture before the change, in report order.
+    after : list[str]
+        The episodes with a picture after the change, in report order.
+    score : float
+        The split's score, `_split_score`.
+    """
+
+    camera: str
+    before: list[str]
+    after: list[str]
+    score: float
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -239,6 +412,9 @@ def _sample(episode_id: str, stream: GradedStream) -> CameraSample:
     sharpness = _computed(stream.metrics.get("sharpness_score"))
     level = _computed(stream.metrics.get("exposure_level"))
     variance = sharpness.evidence.get("laplacian_var") if sharpness else None
+    corrupt = _computed(stream.metrics.get("corrupt_frame_pct"))
+    evidence = corrupt.evidence if corrupt else {}
+    median = evidence.get("median_score")
     return CameraSample(
         episode_id=episode_id,
         camera=camera_key(stream),
@@ -251,6 +427,15 @@ def _sample(episode_id: str, stream: GradedStream) -> CameraSample:
         dark_share=level.evidence.get("dark_share") if level else None,
         bright_share=level.evidence.get("bright_share") if level else None,
         luma=_luma(stream),
+        corrupt_share=corrupt.value if corrupt else None,
+        corrupt_bad=tuple(int(i) for i in evidence.get("bad_indices", ())),
+        corrupt_median=float(median) if median is not None else None,
+        corrupt_candidates=tuple(
+            (int(index), float(score))
+            for index, score in evidence.get("candidates", ())
+        ),
+        n_sampled=evidence.get("n_sampled"),
+        n_frames=evidence.get("n_frames"),
     )
 
 
@@ -277,6 +462,33 @@ def camera_samples(episode: GradedEpisode) -> list[CameraSample]:
         if key not in samples:
             samples[key] = _sample(episode.id, stream)
     return list(samples.values())
+
+
+def group_identical_footage(
+    samples: Iterable[CameraSample],
+) -> list[list[CameraSample]]:
+    """Group the samples whose sampled frames hash identically.
+
+    Camera keys and episodes play no part in the grouping,
+    so a caller decides which groups matter to it.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        The samples to group; those without a `luma` sequence are skipped.
+
+    Returns
+    -------
+    list[list[CameraSample]]
+        The groups of two or more samples sharing one `luma` sequence,
+        in order of first appearance, each with its members in input order.
+    """
+
+    by_luma: dict[tuple[str, ...], list[CameraSample]] = {}
+    for sample in samples:
+        if sample.luma is not None:
+            by_luma.setdefault(sample.luma, []).append(sample)
+    return [group for group in by_luma.values() if len(group) >= 2]
 
 
 def _median(values: list[float]) -> float:
@@ -313,7 +525,7 @@ def _finding(
     ),
 ) -> Finding:
     """An episode-scoped finding that `sample` is unlike its camera,
-    or repeating another episode's footage."""
+    or repeats other footage."""
 
     return Finding(
         id=content_digest(
@@ -339,6 +551,111 @@ def _finding(
         route=None,
         calibration=dict(_UNCALIBRATED),
     )
+
+
+def regrade_corrupt_footage(
+    findings: list[Finding],
+    samples: Iterable[CameraSample],
+    *,
+    policy_for: Callable[[str], Policy],
+) -> list[Finding]:
+    """Judge each camera's noisy-looking frames against the camera's own footage.
+
+    `corrupt_frame_pct` calls a frame noise by an absolute bound,
+    which a camera whose clean frames have crisp edges can sit close to.
+    The camera's own footage sets the bar here instead:
+    a frame is also corrupt when its noise statistic is at least
+    `_RELATIVE_FACTOR` times the camera's median over the dataset,
+    and at least `_RELATIVE_FLOOR`.
+    A stream the rule adds frames to is graded again on the combined share,
+    and its finding replaces the one the episode raised, if any,
+    so the stream keeps one finding.
+
+    A camera that is corrupt in most of its episodes sets its own median,
+    so only the absolute rule catches its garbage.
+    The rule reads the first stream of each camera in an episode,
+    as `camera_samples` keeps it; the other streams keep their episode's finding.
+
+    Parameters
+    ----------
+    findings : list[Finding]
+        Every finding of the run, left unchanged.
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`.
+    policy_for : Callable[[str], Policy]
+        The policy an episode is graded against, by episode id.
+
+    Returns
+    -------
+    list[Finding]
+        A copy of `findings` with each regraded stream's finding replaced.
+    """
+
+    cameras: dict[str, dict[str, CameraSample]] = {}
+    for sample in samples:
+        if sample.corrupt_median is not None:
+            cameras.setdefault(sample.camera, {}).setdefault(sample.episode_id, sample)
+
+    result = list(findings)
+    for members in cameras.values():
+        if len(members) < _MIN_EPISODES:
+            continue
+        medians = [s.corrupt_median for s in members.values()]
+        median = _median([m for m in medians if m is not None])
+        threshold = max(_RELATIVE_FLOOR, _RELATIVE_FACTOR * median)
+        for sample in members.values():
+            bad = set(sample.corrupt_bad)
+            added = {i for i, score in sample.corrupt_candidates if score >= threshold}
+            added -= bad
+            if not added or not sample.n_sampled or sample.n_frames is None:
+                continue
+            combined = sorted(bad | added)
+            graded = MetricResult(
+                value=100 * len(combined) / sample.n_sampled,
+                unit="%",
+                status=MetricStatus.REPORT_ONLY,
+                evidence={
+                    "n_sampled": sample.n_sampled,
+                    "n_frames": sample.n_frames,
+                    "bad_indices": combined,
+                    "relative_indices": sorted(added),
+                    "episode_share": sample.corrupt_share,
+                    "camera_median": median,
+                    "relative_threshold": threshold,
+                    "n_episodes": len(members),
+                },
+                support=support_for(
+                    list(range(sample.n_frames)), [(i, i + 1) for i in combined]
+                ),
+            )
+            location = FindingLocation(
+                episode_id=sample.episode_id,
+                source_field=sample.source_field,
+                source_path=sample.source_path,
+                stream=sample.taxonomy_type,
+                instance=sample.instance,
+            )
+            finding = finding_for_result(
+                graded,
+                metric_name="corrupt_frame_pct",
+                taxonomy_type=sample.taxonomy_type,
+                policy=policy_for(sample.episode_id),
+                location=location,
+            )
+            if finding is None:
+                continue
+            result = [
+                f
+                for f in result
+                if not (
+                    f.episode_id == sample.episode_id
+                    and f.metric_id == "vision.corrupt_frame_pct"
+                    and (f.stream, f.source_field, f.instance)
+                    == (location.stream, location.source_field, location.instance)
+                )
+            ]
+            result.append(finding)
+    return result
 
 
 def compare_cameras(
@@ -371,7 +688,7 @@ def compare_cameras(
     -------
     tuple of (list of CameraSummary, list of Finding)
         One summary per camera,
-        and one finding per episode unlike its camera or repeating another's footage.
+        and one finding per episode unlike its camera or repeating other footage.
     """
 
     # Step 1: group every camera stream by the camera it belongs to,
@@ -460,14 +777,10 @@ def compare_cameras(
         # A match says the footage repeats, not that the whole episode was copied:
         # a video linked to the wrong episode matches,
         # and so does a camera replaying its output.
-        by_luma: dict[tuple[str, ...], list[CameraSample]] = {}
-        for sample in members:
-            if sample.luma is not None:
-                by_luma.setdefault(sample.luma, []).append(sample)
         repeated_footage: list[list[str]] = []
-        for luma, group in by_luma.items():
-            if len(group) < 2:
-                continue
+        for group in group_identical_footage(members):
+            luma = group[0].luma
+            assert luma is not None
             ids = [s.episode_id for s in group]
             repeated_footage.append(ids)
             for sample in group:
@@ -511,3 +824,360 @@ def compare_cameras(
             )
         )
     return summaries, findings
+
+
+def find_shared_footage(
+    samples: Iterable[CameraSample],
+    episode_ids: Sequence[str],
+    *,
+    grades_vision: bool,
+) -> tuple[list[list[FootageStream]], list[Finding]]:
+    """Find the footage that sits under two or more camera keys.
+
+    Footage repeated under one key alone is `compare_cameras`'s.
+    A group that also repeats under its own keys lists every stream,
+    and its members keep their `vision.repeated_footage_vs_camera` findings.
+    A finding's `value` counts the group's streams under other camera keys,
+    and `Report.shared_footage` lists them.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`, in episode order,
+        so each camera appears once per episode.
+    episode_ids : Sequence[str]
+        Every graded episode's id, in `Report.episodes` order,
+        whose positions the groups' episode indices are.
+    grades_vision : bool
+        Whether the scope grades the vision family:
+        the findings then request review, and are only reported otherwise.
+
+    Returns
+    -------
+    tuple of (list of list of FootageStream, list of Finding)
+        Each group of streams whose sampled frames hash identically
+        and that span two or more camera keys, in order of its earliest stream,
+        and one finding per stream in a group.
+    """
+
+    order = {episode_id: index for index, episode_id in enumerate(episode_ids)}
+    groups: list[list[FootageStream]] = []
+    findings: list[Finding] = []
+    for group in group_identical_footage(samples):
+        if len({s.camera for s in group}) < 2:
+            continue
+        groups.append(
+            [FootageStream(episode=order[s.episode_id], camera=s.camera) for s in group]
+        )
+        for sample in group:
+            assert sample.luma is not None
+            findings.append(
+                _finding(
+                    sample,
+                    sample.camera,
+                    metric_id="vision.repeated_footage_across_cameras",
+                    value=float(sum(o.camera != sample.camera for o in group)),
+                    unit="streams",
+                    evidence={"n_frames": len(sample.luma)},
+                    grades_vision=grades_vision,
+                    evidence_strength="deterministic",
+                )
+            )
+    return groups, findings
+
+
+def _swap_scores(a: "np.ndarray", b: "np.ndarray") -> "np.ndarray":
+    """How much each aligned episode looks like its own camera rather than the other.
+
+    A score at or below 1 reads closer to the other camera's usual picture.
+    Each camera's usual picture is its per-pixel median over the episodes.
+    The medians are taken twice: the second time from the episodes
+    the first pass found unswapped, with the swapped ones exchanged back.
+    One pass lets a long swapped run pull the median toward the other camera.
+
+    Parameters
+    ----------
+    a, b : numpy.ndarray
+        Signatures of the two cameras, one row per shared episode.
+
+    Returns
+    -------
+    numpy.ndarray
+        The second pass's score of each row,
+        the larger of its two cameras' distance ratios.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    a = a.astype(numpy.float64)
+    b = b.astype(numpy.float64)
+
+    def rms(x: "np.ndarray", ref: "np.ndarray") -> "np.ndarray":
+        return numpy.maximum(numpy.sqrt(((x - ref) ** 2).mean(axis=1)), 1e-9)
+
+    def score(ref_a: "np.ndarray", ref_b: "np.ndarray") -> "np.ndarray":
+        return numpy.maximum(
+            rms(a, ref_b) / rms(a, ref_a), rms(b, ref_a) / rms(b, ref_b)
+        )
+
+    first = score(numpy.median(a, axis=0), numpy.median(b, axis=0))
+    swapped = first < 1
+    return score(
+        numpy.median(numpy.where(swapped[:, None], b, a), axis=0),
+        numpy.median(numpy.where(swapped[:, None], a, b), axis=0),
+    )
+
+
+def find_camera_swaps(
+    samples: Iterable[CameraSample],
+    footage: FootageVariation,
+    episode_ids: Sequence[str],
+) -> tuple[list[CameraSwap], list[Finding]]:
+    """Find cameras that hold each other's footage over a run of episodes.
+
+    For each pair of cameras, the episodes both have a signature for
+    are scored by `_swap_scores`.
+    A pair is compared only with at least `_MIN_EPISODES` such episodes
+    and a median score of at least `_SWAP_SEPARATION`,
+    which leaves out cameras that look alike in most episodes, such as a stereo pair.
+    An episode scoring at most `_SWAP_SCORE` is flagged,
+    and `_SWAP_RUN` or more consecutive flagged episodes,
+    in `episode_ids` order, are reported.
+    An episode missing a signature for either camera ends a run.
+
+    The thresholds are candidates, not calibrated.
+    A swap covering more than about a quarter of the pair's episodes
+    can pull the median pictures toward the other camera and be missed.
+    The findings are report-only, one per swapped camera stream in each episode.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`.
+    footage : FootageVariation
+        The signatures gathered while grading.
+    episode_ids : Sequence[str]
+        The episode ids in report order.
+
+    Returns
+    -------
+    tuple[list[CameraSwap], list[Finding]]
+        One `CameraSwap` per pair with a reported run,
+        and a `vision.swapped_vs_camera` finding for each of its two streams
+        in each flagged episode.
+    """
+
+    # Signatures are kept only when numpy is installed, so a base install stops here.
+    if not footage.cameras():
+        return [], []
+    numpy = load_numpy()
+    assert numpy is not None
+
+    by_key: dict[tuple[str, str], CameraSample] = {}
+    for sample in samples:
+        by_key.setdefault((sample.episode_id, sample.camera), sample)
+
+    swaps: list[CameraSwap] = []
+    findings: list[Finding] = []
+    emitted: set[tuple[str, str]] = set()
+    for first, second in itertools.combinations(footage.cameras(), 2):
+        sig_a = footage.appearance(first)
+        sig_b = footage.appearance(second)
+        shared = [e for e in episode_ids if e in sig_a and e in sig_b]
+        if len(shared) < _MIN_EPISODES:
+            continue
+        scores = _swap_scores(
+            numpy.stack([sig_a[e] for e in shared]),
+            numpy.stack([sig_b[e] for e in shared]),
+        )
+        pair_median = float(numpy.median(scores))
+        if pair_median < _SWAP_SEPARATION:
+            continue
+        score_of = dict(zip(shared, (float(x) for x in scores), strict=True))
+
+        runs: list[list[str]] = []
+        current: list[str] = []
+        for episode_id in episode_ids:
+            if score_of.get(episode_id, math.inf) <= _SWAP_SCORE:
+                current.append(episode_id)
+                continue
+            if len(current) >= _SWAP_RUN:
+                runs.append(current)
+            current = []
+        if len(current) >= _SWAP_RUN:
+            runs.append(current)
+        if not runs:
+            continue
+
+        for run in runs:
+            for episode_id in run:
+                for key, other in ((first, second), (second, first)):
+                    sample = by_key.get((episode_id, key))
+                    # A camera in two swapped pairs keeps one finding per episode.
+                    if sample is None or (episode_id, key) in emitted:
+                        continue
+                    emitted.add((episode_id, key))
+                    finding = _finding(
+                        sample,
+                        key,
+                        metric_id="vision.swapped_vs_camera",
+                        value=score_of[episode_id],
+                        unit="ratio",
+                        evidence={
+                            "swapped_with": other,
+                            "run": [run[0], run[-1]],
+                            "run_length": len(run),
+                            "pair_median": pair_median,
+                            "threshold": _SWAP_SCORE,
+                            "separation": _SWAP_SEPARATION,
+                        },
+                        grades_vision=False,
+                        evidence_strength="statistical",
+                    )
+                    findings.append(finding)
+        swaps.append(
+            CameraSwap(cameras=(first, second), episodes=[e for r in runs for e in r])
+        )
+    return swaps, findings
+
+
+def _split_score(before: "np.ndarray", after: "np.ndarray") -> float:
+    """How far apart two groups of episodes' pictures are, against their own spread.
+
+    Parameters
+    ----------
+    before : numpy.ndarray
+        The first group's median pictures, one row per episode.
+    after : numpy.ndarray
+        The second group's median pictures, one row per episode.
+
+    Returns
+    -------
+    float
+        The RMS distance between the groups' per-pixel medians, divided by
+        the median over all episodes of the RMS distance to the own group's median,
+        floored at `_VIEWPOINT_FLOOR`.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    med_before = numpy.median(before, axis=0)
+    med_after = numpy.median(after, axis=0)
+    gap = math.sqrt(float(numpy.mean((med_before - med_after) ** 2)))
+    within = numpy.concatenate(
+        [
+            numpy.sqrt(numpy.mean((before - med_before) ** 2, axis=1)),
+            numpy.sqrt(numpy.mean((after - med_after) ** 2, axis=1)),
+        ]
+    )
+    return gap / max(float(numpy.median(within)), _VIEWPOINT_FLOOR)
+
+
+def _best_split(matrix: "np.ndarray") -> "tuple[int, float]":
+    """The split of a camera's episodes that fits two groups best, and its score.
+
+    The split is the one with the least summed squared distance of each episode
+    to its own group's mean.
+    The medians behind `_split_score` hardly move for an episode on the wrong side,
+    so they cannot place the boundary to the episode.
+
+    Parameters
+    ----------
+    matrix : numpy.ndarray
+        The episodes' median pictures in report order, one row per episode,
+        with at least `2 * _MIN_EPISODES` rows.
+
+    Returns
+    -------
+    tuple[int, float]
+        The number of episodes in the first group and its `_split_score`,
+        the first split on a tie.
+        Above `_VIEWPOINT_SPLITS` episodes, every `n // _VIEWPOINT_SPLITS`-th split
+        is fitted first, then every split within one such step of the best.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n = len(matrix)
+    costs: dict[int, float] = {}
+
+    def cost_at(k: int) -> float:
+        if k not in costs:
+            before, after = matrix[:k], matrix[k:]
+            costs[k] = float(
+                ((before - before.mean(axis=0)) ** 2).sum()
+                + ((after - after.mean(axis=0)) ** 2).sum()
+            )
+        return costs[k]
+
+    low, high = _MIN_EPISODES, n - _MIN_EPISODES
+    step = max(n // _VIEWPOINT_SPLITS, 1)
+    best = min(range(low, high + 1, step), key=lambda k: (cost_at(k), k))
+    if step > 1:
+        near = range(max(low, best - step), min(high, best + step) + 1)
+        best = min(near, key=lambda k: (cost_at(k), k))
+    return best, _split_score(matrix[:best], matrix[best:])
+
+
+def find_viewpoint_changes(
+    footage: FootageVariation, episode_ids: Sequence[str]
+) -> list[ViewpointChange]:
+    """Find cameras whose view changes between two groups of consecutive episodes.
+
+    A camera is judged over the episodes in `episode_ids` order that have a picture,
+    and only with at least `2 * _MIN_EPISODES` of them
+    and a median still share of at least `_STILL_SHARE`,
+    which leaves out a camera whose picture mostly changes within an episode.
+    The split with at least `_MIN_EPISODES` episodes on both sides that fits two groups
+    best is chosen by `_best_split`, and reported when its `_split_score`
+    is `_VIEWPOINT_SCORE` or more, one change per camera.
+
+    The thresholds are candidates, not calibrated.
+    The score cannot tell a moved camera from a lasting change of scene or lighting,
+    and it misses changes on a camera whose scene varies a lot between episodes.
+
+    Parameters
+    ----------
+    footage : FootageVariation
+        The pictures gathered while grading.
+    episode_ids : Sequence[str]
+        The episode ids in report order.
+
+    Returns
+    -------
+    list[ViewpointChange]
+        One change per camera whose best split reaches the score.
+    """
+
+    # Pictures are kept only when numpy is installed, so a base install stops here.
+    if not footage.cameras():
+        return []
+    numpy = load_numpy()
+    assert numpy is not None
+
+    changes: list[ViewpointChange] = []
+    for camera in footage.cameras():
+        pictures = footage.background(camera)
+        still = footage.still_share(camera)
+        ids = [e for e in episode_ids if e in pictures]
+        n = len(ids)
+        if n < 2 * _MIN_EPISODES:
+            continue
+        if float(numpy.median([still[e] for e in ids])) < _STILL_SHARE:
+            continue
+
+        matrix = numpy.stack([pictures[e] for e in ids]).astype(numpy.float64)
+        best, score = _best_split(matrix)
+        if score >= _VIEWPOINT_SCORE:
+            changes.append(
+                ViewpointChange(
+                    camera=camera,
+                    before=ids[:best],
+                    after=ids[best:],
+                    score=round(score, 2),
+                )
+            )
+    return changes

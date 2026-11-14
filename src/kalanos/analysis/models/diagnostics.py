@@ -10,7 +10,7 @@ from collections import Counter
 from typing import Annotated, Any, Literal
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Internal
 from kalanos.analysis.models.coverage import Availability
@@ -125,23 +125,63 @@ class MotionSpec(StrictModel):
         return self
 
 
+class DeliverySpec(StrictModel):
+    """The least footage a user accepts from each camera stream.
+
+    Every field is optional, and an empty spec checks nothing.
+    `codecs` are FFmpeg codec names, such as `h264`, `hevc` and `av1`,
+    compared in lowercase.
+    """
+
+    min_width: int | None = Field(default=None, ge=1)
+    min_height: int | None = Field(default=None, ge=1)
+    min_fps: float | None = Field(default=None, gt=0)
+    min_duration_s: float | None = Field(default=None, gt=0)
+    codecs: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("codecs")
+    @classmethod
+    def normalized_codecs(cls, value: list[str] | None) -> list[str] | None:
+        """Lowercase and strip each codec name, rejecting blank ones."""
+
+        if value is None:
+            return None
+        names = [name.strip().lower() for name in value]
+        if not all(names):
+            raise ValueError("codecs must not hold a blank name")
+        return names
+
+    def declared(self) -> bool:
+        """Whether any field is set."""
+
+        return any(value is not None for value in self.model_dump().values())
+
+
 class VisionSpec(StrictModel):
     """How camera footage is read.
 
     Sample size, full scan, decode caps, previews and exposure levels.
+    Under a full scan, `summary_ratio` is the share of each episode's frames
+    sharpness, contrast and exposure level measure, besides the sampled frames.
     The vision diagnostic previews its blurriest sampled frame as one WebP image
     unless `preview_frames` is 0; any other value gives that one image.
     `preview_size` is the image's longest side, in pixels, at most.
+    `footage` says whether the cameras' footage is rendered by a simulator;
+    `auto` reads it from the dataset card.
+    `delivery` is the least footage each camera stream may offer.
     """
 
     sample_frames: int = Field(default=10, ge=1, le=10000)
     full_frame_scan: bool = False
+    summary_ratio: float = Field(default=0.1, gt=0, le=1)
     max_decode_frames: int = Field(default=20000, ge=2, le=1000000)
     max_pixels: int = Field(default=2097152, ge=64)
     preview_frames: int = Field(default=8, ge=0, le=32)
     preview_size: int = Field(default=96, ge=16, le=256)
     dark_level: int = Field(default=5, ge=0, le=255)
     bright_level: int = Field(default=250, ge=0, le=255)
+    footage: Literal["auto", "real", "simulated"] = "auto"
+    delivery: DeliverySpec = Field(default_factory=DeliverySpec)
 
     @model_validator(mode="after")
     def ordered_levels(self) -> "VisionSpec":

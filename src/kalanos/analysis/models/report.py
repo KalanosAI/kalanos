@@ -84,7 +84,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "8.0.0"
+CURRENT_SCHEMA_VERSION = "8.1.0"
 
 # Significant digits a stored near-duplicate distance keeps.
 # The near limit, 0.02, is exact at 4 digits,
@@ -129,6 +129,8 @@ class AnalysedEpisode(BaseModel):
     policy : Policy
         The policy to grade it against: the run's own policy,
         or a copy with a per-deployment limit `pipeline.run` filled in.
+    simulated : bool
+        Whether the episode's camera footage is rendered by a simulator.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -137,6 +139,7 @@ class AnalysedEpisode(BaseModel):
     adapter: str
     adapter_confidence: float
     policy: Policy
+    simulated: bool = False
 
 
 class GradedChannel(BaseModel):
@@ -225,7 +228,9 @@ class CameraFrames(BaseModel):
     Attributes
     ----------
     requested_rows : list of int
-        The rows the sample asked for.
+        The rows the sample asked for;
+        under a full scan, the summary frames, `VisionSpec.summary_ratio`
+        of the stream's frames plus the ones a sample would take.
     missing_rows : list of int
         Requested rows the read did not measure.
     frames : list of CameraFrame
@@ -237,7 +242,8 @@ class CameraFrames(BaseModel):
     identical_adjacent_pairs : list of list of int
         `[row, row + 1]` for each compared pair with no difference at all.
     sample_plan : str
-        `evenly_spaced_v1` for a sample, `full_scan_v1` for every frame.
+        `evenly_spaced_v1` for a sample;
+        `full_scan_v1` when every frame was decoded, its rows the summary frames.
     parameters : dict
         The `VisionSpec` the read ran under.
     availability : Availability
@@ -296,6 +302,11 @@ class VideoFormat(BaseModel):
         The transfer characteristic, as FFmpeg names it (`bt709`). Container only.
     color_space : str or None
         The colour space, as FFmpeg names it (`bt709`). Container only.
+    rotation_deg : float or None
+        The display rotation the first frame carries, in degrees counterclockwise,
+        0.0 when it carries none. Container only.
+    interlaced : bool or None
+        Whether the first frame is interlaced. Container only.
     channels : int or None
         How many channels each frame holds. Declared only.
     is_depth_map : bool or None
@@ -323,6 +334,8 @@ class VideoFormat(BaseModel):
     color_primaries: str | None = None
     color_transfer: str | None = None
     color_space: str | None = None
+    rotation_deg: float | None = None
+    interlaced: bool | None = None
     channels: int | None = None
     is_depth_map: bool | None = None
     has_audio: bool | None = None
@@ -599,6 +612,21 @@ class CameraSummary(BaseModel):
     visual_variation: Variation | None = None
 
 
+class FootageStream(BaseModel):
+    """One camera stream of one episode, named by its position in `Report.episodes`.
+
+    Attributes
+    ----------
+    episode : int
+        An index into `Report.episodes`.
+    camera : str
+        The camera key, as `CameraSummary.camera`.
+    """
+
+    episode: int
+    camera: str
+
+
 class NearPairs(BaseModel):
     """The listed pairs of episodes within the near-duplicate limit.
 
@@ -738,17 +766,53 @@ class DatasetWarning(BaseModel):
 
     Attributes
     ----------
-    code : {"near_duplicates_saturated"}
-        What the warning is about.
+    code : str
+        What the warning is about, one of the codes below.
         `near_duplicates_saturated`: the near tier is saturated
         (see `NearDuplicateSummary.saturated`),
         so no episode carries a near-duplicate finding;
         the counts are in `Report.near_duplicates`.
+        `task_instruction_missing`: some episodes have no task instruction
+        and the policy does not grade that;
+        the message gives the count and the episode ids.
+        `corrupt_footage`: some episodes are blocked because a camera stream
+        is blank or decoder noise in enough of its frames;
+        the message gives the count and the episodes as runs of consecutive numbers.
+        `camera_swap`: two cameras hold each other's footage over runs
+        of at least 3 episodes;
+        the message names both cameras and the episodes as runs of consecutive numbers.
+        `camera_viewpoint_change`: a camera's view changes between two groups of
+        consecutive episodes; the message names the camera, the episode the change
+        follows, and the episodes on each side as runs of consecutive numbers.
+        `episode_count_mismatch`: a source declares an episode count
+        that disagrees with its episode metadata or its data;
+        the message gives the counts.
+        `low_bitrate`, `high_bitrate`: video files whose bitrate is far below
+        or far above the median of the same camera's other files;
+        the message names each camera, file and bitrate, up to 10 files.
+        `rotation`: video files that carry rotation metadata;
+        the message names each camera, file and angle, up to 10 files.
+        `hdr_transfer`: video files that use an HDR transfer function;
+        the message names each camera, file and transfer, up to 10 files.
+        `interlaced`: video files whose first frame is interlaced;
+        the message names each camera and file, up to 10 files.
     message : str
         The warning, stated for a reader.
     """
 
-    code: Literal["near_duplicates_saturated"]
+    code: Literal[
+        "near_duplicates_saturated",
+        "task_instruction_missing",
+        "corrupt_footage",
+        "camera_swap",
+        "camera_viewpoint_change",
+        "episode_count_mismatch",
+        "low_bitrate",
+        "high_bitrate",
+        "rotation",
+        "hdr_transfer",
+        "interlaced",
+    ]
     message: str
 
 
@@ -908,6 +972,13 @@ class Report(BaseModel):
         `near_duplicates.pairs_listed` then falls short of `pairs_near`.
         A report written before this encoding listed one object per pair,
         and is converted on load.
+    shared_footage : list[list[FootageStream]]
+        Each group of camera streams whose sampled frames hash identically
+        and that sit under two or more camera keys,
+        each group's streams in episode order,
+        the groups ordered by their first stream.
+        A `vision.repeated_footage_across_cameras` finding's `value` counts
+        the group's streams under other camera keys.
     near_duplicates : NearDuplicateSummary or None
         How many pairs the near-duplicate search found, and whether that many
         leaves the near tier uninformative for this dataset.
@@ -967,6 +1038,7 @@ class Report(BaseModel):
     binding_conflicts: list[BindingConflict] = Field(default_factory=list)
     cameras: list[CameraSummary] = Field(default_factory=list)
     duplicates: DuplicateEpisodes = Field(default_factory=DuplicateEpisodes)
+    shared_footage: list[list[FootageStream]] = Field(default_factory=list)
     near_duplicates: NearDuplicateSummary | None = None
     motion_variation: Variation | None = None
     dataset_warnings: list[DatasetWarning] = Field(default_factory=list)
@@ -1144,7 +1216,7 @@ def check_agreement(
     Every episode carries an eligibility; its compatibility `train_ready`
     mirrors it exactly; the gate's failing list is exactly the blocked
     episodes; the counts partition the episodes plus the failed ones;
-    and every index in `duplicates` names an episode.
+    and every index in `duplicates` and `shared_footage` names an episode.
 
     Parameters
     ----------
@@ -1170,9 +1242,12 @@ def check_agreement(
         *(k for group in report.duplicates.exact for k in group),
         *near.episode,
         *(k for partners in near.partners for k in partners),
+        *(stream.episode for group in report.shared_footage for stream in group),
     ]
     if any(not 0 <= k < len(episode_ids) for k in indices):
-        raise ValueError("duplicates names an episode index outside episodes")
+        raise ValueError(
+            "duplicates or shared_footage names an episode index outside episodes"
+        )
     if report.coverage is not None:
         from kalanos.analysis.coverage import report_coverage
 

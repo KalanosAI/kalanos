@@ -36,6 +36,10 @@ class CoverageRow(BaseModel):
     not_required: int = Field(default=0, ge=0)
     eligible: int = Field(default=0, ge=0)
     reasons: dict[str, int] = Field(default_factory=dict)
+    # The reasons of errored subjects alone,
+    # which become the episode's operational errors.
+    # The report records only `reasons`, so this stays in memory.
+    error_reasons: dict[str, int] = Field(default_factory=dict, exclude=True)
 
     @model_validator(mode="after")
     def reconciles(self) -> "CoverageRow":

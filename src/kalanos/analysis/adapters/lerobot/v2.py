@@ -27,6 +27,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     LeRobotAdapter,
     check_path_template,
     check_scalar_index,
+    check_schema,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -232,7 +233,8 @@ class LeRobotV2Adapter(LeRobotAdapter):
         Returns
         -------
         DatasetInfo
-            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared.
+            `episode_count`, `nominal_rate_hz` and `robot_type`, as declared,
+            and the `simulator` the dataset card's tags name.
 
         Raises
         ------
@@ -302,7 +304,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                 with data_path.open("rb") as handle:
                     parquet_schema = pl.read_parquet_schema(handle)
                 check_scalar_index(path, parquet_schema)
-                schema = list(parquet_schema)
+                schema_check = check_schema(info, parquet_schema, data_path)
                 with data_path.open("rb") as handle:
                     # Metadata tier: index and clock columns only; the
                     # numeric feature vectors never leave the file.
@@ -314,7 +316,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                             else [
                                 c
                                 for c in ("episode_index", TIME_COLUMN, "frame_index")
-                                if c in schema
+                                if c in parquet_schema
                             ],
                         )
                     )
@@ -340,7 +342,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                     if materialise
                     else declared_series_streams(
                         plan,
-                        schema,
+                        parquet_schema,
                         timestamps,
                         data_path,
                         clock=clock,
@@ -381,4 +383,5 @@ class LeRobotV2Adapter(LeRobotAdapter):
                 streams=streams,
                 tasks=None if task_map is None else task_map.get(episode_index, []),
                 split=split_of(info, episode_index),
+                schema_check=schema_check,
             )

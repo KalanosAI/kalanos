@@ -280,7 +280,7 @@ def test_the_default_dictionary_loads_from_the_wheel(installed_kalanos):
             "-c",
             "from kalanos.assets.dictionary import load_default_dictionary\n"
             "dictionary = load_default_dictionary()\n"
-            "assert len(dictionary.entries) == 202\n"
+            "assert len(dictionary.entries) == 204\n"
             "print('ok')",
         ],
         cwd=installed_kalanos.working_directory,

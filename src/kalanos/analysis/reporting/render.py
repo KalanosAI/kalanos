@@ -166,13 +166,18 @@ def _stream_finding_counts(
     dict[tuple[str, str, str or None], int]
         How many findings each stream carries. A finding raised above stream
         level is not counted here; `_episode_finding_counts` already counts it.
+        A finding merged across streams on one timeline also counts for each
+        stream listed under its `shared_by`.
     """
 
-    return Counter(
-        (finding.episode_id, finding.stream, finding.instance)
-        for finding in findings
-        if finding.stream is not None
-    )
+    counts: Counter[tuple[str, str, str | None]] = Counter()
+    for finding in findings:
+        if finding.stream is None:
+            continue
+        counts[(finding.episode_id, finding.stream, finding.instance)] += 1
+        for entry in finding.evidence.get("shared_by", ()):
+            counts[(finding.episode_id, entry["stream"], entry["instance"])] += 1
+    return counts
 
 
 def _stream_json(report: Report, *, compact: bool) -> str:

@@ -17,7 +17,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.models.binding import Bundle
-from kalanos.analysis.models.diagnostics import VisionSpec
+from kalanos.analysis.models.diagnostics import DeliverySpec, VisionSpec
 from kalanos.analysis.models.eligibility import SufficiencyStatus
 from kalanos.analysis.models.errors import ConfigurationError, MappingOverrideError
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
@@ -215,6 +215,37 @@ def test_vision_settings_follow_cli_then_environment_then_bundle():
     assert resolve(unset, tier=ExecutionTier.FULL).full_frame_scan
 
 
+def test_the_summary_ratio_follows_cli_then_environment_then_bundle():
+    """The summary ratio resolves like the sample count, 0.1 when nothing sets it."""
+
+    def resolve(bundle, settings, ratio=None):
+        return resolve_vision(
+            bundle,
+            settings,
+            samples=None,
+            full_frame_scan=None,
+            summary_ratio=ratio,
+            tier=ExecutionTier.STANDARD,
+        ).summary_ratio
+
+    bundle = VisionSpec(summary_ratio=0.3)
+    unset = Settings(vision_summary_ratio=None)
+    environment = Settings(vision_summary_ratio=0.2)
+
+    assert resolve(VisionSpec(), unset) == 0.1
+    assert resolve(bundle, unset) == 0.3
+    assert resolve(bundle, environment) == 0.2
+    assert resolve(bundle, environment, ratio=0.5) == 0.5
+
+
+@pytest.mark.parametrize("ratio", [0, 1.5])
+def test_a_summary_ratio_outside_zero_to_one_is_refused(ratio):
+    """A ratio of 0 measures nothing, and one above 1 more frames than exist."""
+
+    with pytest.raises(ValidationError):
+        VisionSpec(summary_ratio=ratio)
+
+
 def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
     """Only a changed vision section enters the execution digest."""
 
@@ -235,6 +266,49 @@ def test_a_default_vision_section_keeps_the_execution_identity(tmp_path):
         }
     )
     assert changed.execution_id.digest != default.execution_id.digest
+
+
+def test_a_delivery_spec_changes_the_execution_identity(tmp_path):
+    """Declaring a delivery spec is a different run to compare."""
+
+    def configuration(bundle):
+        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
+
+    default = configuration(Bundle())
+    declared = configuration(
+        Bundle(vision=VisionSpec(delivery=DeliverySpec(min_width=640)))
+    )
+    assert default.execution_id is not None and declared.execution_id is not None
+
+    assert declared.execution_id.digest != default.execution_id.digest
+
+
+def test_delivery_spec_validation():
+    """The spec rejects unknown keys and blank codecs, and lowercases the rest."""
+
+    with pytest.raises(ValidationError):
+        DeliverySpec(min_dpi=3)  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        DeliverySpec(codecs=[])
+    with pytest.raises(ValidationError):
+        DeliverySpec(codecs=[" "])
+    assert DeliverySpec(codecs=[" H264 ", "AV1"]).codecs == ["h264", "av1"]
+    assert not DeliverySpec().declared()
+    bundle = Bundle.model_validate({"vision": {"delivery": {"min_fps": 30}}})
+    assert bundle.vision.delivery.min_fps == 30
+
+
+def test_a_declared_footage_changes_the_execution_identity(tmp_path):
+    """Declaring the footage simulated is a different run to compare."""
+
+    def configuration(bundle):
+        return prepare_configuration(UPath(tmp_path), bundle=bundle)[2]
+
+    default = configuration(Bundle())
+    declared = configuration(Bundle(vision=VisionSpec(footage="simulated")))
+    assert default.execution_id is not None and declared.execution_id is not None
+
+    assert declared.execution_id.digest != default.execution_id.digest
 
 
 @pytest.mark.parametrize("override", [{"full_frame_scan": True}, {"vision_samples": 3}])

@@ -25,10 +25,23 @@ from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.metrics.annotation import task_instruction_missing
 from kalanos.analysis.models.domain import Episode
+from kalanos.analysis.models.eligibility import Consequence, EligibilityStatus
 from kalanos.analysis.models.metrics import EpisodeContext, MetricStatus
+from kalanos.assets.policy import load_policy
 
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
 
 _FIXTURES = Path(__file__).parent / "fixtures"
+
+_PARTLY_ANNOTATED = [None, None, "open the drawer", "close the drawer"]
+
+
+# ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
+# ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
+# ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
 def _flag(tasks):
@@ -37,6 +50,43 @@ def _flag(tasks):
     return task_instruction_missing(
         EpisodeContext(episode=Episode(id="e", tasks=tasks))
     )
+
+
+def _write_hdf5(path, tasks):
+    """Write one demo group per entry of `tasks`, setting its `task` attr if given."""
+
+    with h5py.File(str(path), "w") as store:
+        data = store.create_group("data")
+        for index, task in enumerate(tasks):
+            group = data.create_group(f"demo_{index}")
+            group.create_dataset("actions", data=np.zeros((5, 2)))
+            if task is not None:
+                group.attrs["task"] = task
+
+
+def _grade_hdf5(tmp_path, tasks, **kwargs):
+    """Grade an HDF5 file with one demo group per entry of `tasks`."""
+
+    from kalanos.api import grade  # local: keeps these tests import-light
+
+    path = tmp_path / "demos.hdf5"
+    _write_hdf5(path, tasks)
+    return grade(path, **kwargs)
+
+
+def _instruction_warnings(report):
+    """The report's `task_instruction_missing` dataset warnings."""
+
+    return [w for w in report.dataset_warnings if w.code == "task_instruction_missing"]
+
+
+def _missing_and_present(report):
+    """The ids of episodes flagged as missing an instruction, and of the rest."""
+
+    flags = {e.id: e.metrics["task_instruction_missing"].value for e in report.episodes}
+    missing = sorted(i for i, flag in flags.items() if flag == 1.0)
+    present = sorted(i for i, flag in flags.items() if flag == 0.0)
+    return missing, present
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -145,18 +195,6 @@ def test_a_lerobot_v3_dataset_with_no_instructions_reads_as_none(tmp_path):
     assert [episode.tasks for episode in episodes] == [None, None]
 
 
-def _write_hdf5(path, tasks):
-    """Write one demo group per entry of `tasks`, setting its `task` attr if given."""
-
-    with h5py.File(str(path), "w") as store:
-        data = store.create_group("data")
-        for index, task in enumerate(tasks):
-            group = data.create_group(f"demo_{index}")
-            group.create_dataset("actions", data=np.zeros((5, 2)))
-            if task is not None:
-                group.attrs["task"] = task
-
-
 def test_hdf5_reads_the_task_attribute_and_flags_the_gap(tmp_path):
     """An episode group without the attribute reads as `[]` when others have one."""
 
@@ -212,3 +250,131 @@ def test_the_report_carries_each_episodes_instructions(tmp_path):
     flags = [e.metrics["task_instruction_missing"].value for e in by_id.values()]
     assert sorted(flag for flag in flags if flag is not None) == [0.0, 1.0]
     assert report.score.score is not None
+
+
+def test_missing_instructions_are_coverage_only_by_default(tmp_path):
+    """The default policy measures the gap, and grades, finds and blocks nothing."""
+
+    report = _grade_hdf5(tmp_path, _PARTLY_ANNOTATED)
+
+    missing, present = _missing_and_present(report)
+    assert len(missing) == 2
+    assert len(present) == 2
+    for episode in report.episodes:
+        result = episode.metrics["task_instruction_missing"]
+        assert result.status is MetricStatus.REPORT_ONLY
+        assert result.evidence["ungraded_reason"] == "report_only by policy design"
+    assert not any(
+        f.metric_id == "annotation.task_instruction_missing" for f in report.findings
+    )
+    for episode in report.episodes:
+        assert episode.eligibility is not None
+        assert not any(
+            "task_instruction_missing" in reason.id
+            or "task_instruction_missing" in reason.detail
+            for reason in episode.eligibility.reasons
+        )
+    assert not any("task_instruction_missing" in key for key in report.score.metrics)
+    assert report.coverage is not None
+    [row] = [
+        r
+        for r in report.coverage.metrics
+        if r.key == "annotation.task_instruction_missing"
+    ]
+    assert (row.computed, row.eligible) == (4, 4)
+
+
+def test_missing_instructions_raise_one_deterministic_warning(tmp_path):
+    """The warning counts the gap against the episodes checked and names them."""
+
+    report = _grade_hdf5(tmp_path, _PARTLY_ANNOTATED)
+    again = _grade_hdf5(tmp_path, _PARTLY_ANNOTATED)
+
+    missing, present = _missing_and_present(report)
+    [warning] = _instruction_warnings(report)
+    assert warning.message.startswith(
+        "2 of 4 episodes checked carry no task instruction"
+    )
+    assert warning.message.endswith(f": {missing[0]}, {missing[1]}")
+    assert not any(episode_id in warning.message for episode_id in present)
+    assert [w.message for w in _instruction_warnings(again)] == [warning.message]
+
+
+def test_complete_instructions_raise_no_warning(tmp_path):
+    """Every episode carries one: nothing is missing, so no warning and no finding."""
+
+    report = _grade_hdf5(tmp_path, ["a", "b", "c"])
+
+    assert {e.metrics["task_instruction_missing"].value for e in report.episodes} == {
+        0.0
+    }
+    assert _instruction_warnings(report) == []
+    assert not any(
+        f.metric_id == "annotation.task_instruction_missing" for f in report.findings
+    )
+
+
+def test_a_dataset_without_instructions_raises_no_warning(tmp_path):
+    """A dataset never annotated with language is not missing anything."""
+
+    report = _grade_hdf5(tmp_path, [None, None])
+
+    for episode in report.episodes:
+        status = episode.metrics["task_instruction_missing"].status
+        assert status is MetricStatus.NOT_APPLICABLE
+    assert _instruction_warnings(report) == []
+
+
+def test_a_grading_policy_blocks_exactly_the_measured_episodes(tmp_path):
+    """Under language_conditioned, findings match the measurement; no warning."""
+
+    report = _grade_hdf5(
+        tmp_path, _PARTLY_ANNOTATED, policy=load_policy(Path("language_conditioned"))
+    )
+
+    missing, present = _missing_and_present(report)
+    findings = [
+        f
+        for f in report.findings
+        if f.metric_id == "annotation.task_instruction_missing"
+    ]
+    assert sorted(f.episode_id for f in findings) == missing
+    assert len(missing) == 2
+    by_id = {e.id: e for e in report.episodes}
+    for finding in findings:
+        assert finding.consequence is Consequence.BLOCK
+        assert (
+            finding.value
+            == by_id[finding.episode_id].metrics["task_instruction_missing"].value
+        )
+    assert not any(f.episode_id in present for f in findings)
+    assert _instruction_warnings(report) == []
+
+
+def test_unknown_episodes_keep_the_measurement_and_the_warning(tmp_path):
+    """An unsatisfiable scope leaves every episode unknown, the gap still reported."""
+
+    default = _grade_hdf5(tmp_path, _PARTLY_ANNOTATED)
+    report = _grade_hdf5(
+        tmp_path, _PARTLY_ANNOTATED, bundle=Path("vision-imitation-v1")
+    )
+
+    for episode in report.episodes:
+        assert episode.eligibility is not None
+        assert episode.eligibility.status is EligibilityStatus.UNKNOWN
+    assert _missing_and_present(report) == _missing_and_present(default)
+    assert [w.message for w in _instruction_warnings(report)] == [
+        w.message for w in _instruction_warnings(default)
+    ]
+
+
+def test_the_warning_names_ten_episodes_and_counts_the_rest(tmp_path):
+    """Past ten missing episodes, the warning counts the rest instead of naming them."""
+
+    report = _grade_hdf5(tmp_path, [None] * 12 + ["wipe the table"])
+
+    missing, _present = _missing_and_present(report)
+    [warning] = _instruction_warnings(report)
+    assert warning.message.startswith("12 of 13 episodes checked")
+    assert warning.message.endswith(f": {', '.join(missing[:10])}, and 2 more")
+    assert not any(episode_id in warning.message for episode_id in missing[10:])

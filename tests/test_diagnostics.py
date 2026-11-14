@@ -26,6 +26,7 @@ from typer.testing import CliRunner
 from upath import UPath
 
 # Internal
+from kalanos.analysis import coverage
 from kalanos.analysis.diagnostics.common import Unavailable
 from kalanos.analysis.diagnostics.dataset import cohort, cohort_of, stored_cohort_input
 from kalanos.analysis.diagnostics.runner import execute
@@ -424,6 +425,27 @@ def test_sampled_video_does_not_certify_every_frame_or_block_static_scene():
     assert sampled.eligibility_counts.unknown == 0
 
 
+def test_a_full_scan_decoding_every_frame_satisfies_video_quality(monkeypatch):
+    """A full scan lists only its summary frames, and still counts as a full read."""
+
+    # Only the vision diagnostic may grant the capability here.
+    monkeypatch.setattr(
+        coverage, "vision_metric_coverage", lambda streams: (True, False)
+    )
+    r = audit(
+        [episode(signal(), camera(count=200))],
+        DiagnosticPlan(vision=True),
+        RequirementsSection(required_capabilities=["video_quality"]),
+        vision=VisionSpec(sample_frames=2, full_frame_scan=True),
+    )
+
+    vr = camera_read(r)
+    assert vr.measurements["examined_frames"] < vr.measurements["declared_frames"]
+    assert vr.measurements["decoded_frames"] == 200
+    assert r.eligibility_counts is not None
+    assert r.eligibility_counts.unknown == 0
+
+
 def test_full_visual_evaluation_satisfies_required_capability():
     r = audit(
         [episode(signal(), camera())],
@@ -676,7 +698,7 @@ def test_video_decoder_failure_preserves_already_examined_frames(monkeypatch):
 
     monkeypatch.setattr(SyntheticFrames, "gray_windows", broken)
     r = camera_read(audit([episode(camera())], DiagnosticPlan(vision=True)))
-    assert r.availability.value == "error"
+    assert r.availability.value == "unavailable"
     assert r.measurements["examined_frames"] == 1
     assert r.evidence["frames"][0]["source_row"] == 0
 
@@ -1079,6 +1101,26 @@ def test_broad_findings_still_propagate(episode_wide):
         windows(two_channels(), window_spec(), [f]).measurements["counts"]["review"]
         == 7
     )
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_finding_shared_by_the_consumed_stream_marks_its_windows(shared):
+    """Verify a finding kept on another stream reaches the streams under `shared_by`."""
+    entry = {
+        "stream": "proprio.joint_position",
+        "source_field": "state",
+        "instance": None,
+    }
+    f = finding(
+        source_path="other.parquet",
+        source_field="different",
+        stream="unmapped.different",
+        source_index=None,
+        channel=None,
+        evidence={"shared_by": [entry]} if shared else {},
+    )
+    counts = windows(two_channels(), window_spec(), [f]).measurements["counts"]
+    assert counts["review" if shared else "pass"] == 7
 
 
 def test_selected_channel_intervals_only_mark_overlapping_windows():

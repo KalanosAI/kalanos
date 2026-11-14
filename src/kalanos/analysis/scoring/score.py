@@ -53,6 +53,10 @@ from kalanos.analysis.models.summaries import EpisodeSummary, MetricSubject
 # is a compatibility field that report assembly fills from the episode's
 # eligibility; scoring leaves it `None` at every level.
 
+# Smooth/residual ratios. Critical stays a review even under a contract label,
+# and calibration never promotes one whose noise was not measured above a reference.
+SMOOTH_RESIDUAL_METRICS = frozenset({"integrity.snr_db", "integrity.rotation_snr_db"})
+
 # A metric that lands exactly on the bad bound scores 0 points,
 # which this module treats as a failure for `fail_penalty` purposes.
 _FAILING_POINTS = 0.0
@@ -272,7 +276,7 @@ def consequence_for(
         return consequence, None
     route = metric_policy.route or BlockingRoute.STATISTICAL
     # A smooth/residual ratio is statistical even if a policy labels it contract.
-    if route == BlockingRoute.STATISTICAL or key == "integrity.snr_db":
+    if route == BlockingRoute.STATISTICAL or key in SMOOTH_RESIDUAL_METRICS:
         return Consequence.REVIEW, None
     return Consequence.BLOCK, route
 
@@ -448,6 +452,10 @@ def _resolve(
         return _stay_report_only(
             "residual is within the validated reference; "
             "the ratio cannot establish a noise defect"
+        )
+    if result.evidence.get("footage") == "simulated":
+        return _stay_report_only(
+            "simulated footage repeats its frames exactly when the scene is still"
         )
 
     # Step 3: no policy entry, permanently report-only, or graded with
@@ -626,6 +634,60 @@ def _apply_fail_penalty(score: float, failing: int, *, policy: Policy) -> float:
     if policy.fail_penalty_cap is not None:
         penalty = min(penalty, policy.fail_penalty_cap)
     return max(0.0, score - penalty)
+
+
+def finding_for_result(
+    result: MetricResult,
+    *,
+    metric_name: str,
+    taxonomy_type: str,
+    policy: Policy,
+    location: FindingLocation,
+) -> Finding | None:
+    """Grade one metric result against the policy and build its finding, if any.
+
+    It does what `score_metrics` does for each metric of a node,
+    for a result computed outside the node's own grading.
+
+    Parameters
+    ----------
+    result : MetricResult
+        The metric's result, as the metric produced it.
+    metric_name : str
+        The metric's own bare name.
+    taxonomy_type : str
+        The stream's taxonomy type, for a type-keyed threshold lookup.
+    policy : Policy
+        The loaded grading policy.
+    location : FindingLocation
+        Where the stream sits in the graded tree.
+
+    Returns
+    -------
+    Finding or None
+        The finding, or `None` when the result does not grade
+        or grades without a defect.
+    """
+
+    regraded, points = _resolve(
+        result, metric_name=metric_name, taxonomy_type=taxonomy_type, policy=policy
+    )
+    if points is None:
+        return None
+    entry = policy.entry_for(metric_name)
+    if entry is None:
+        return None
+    family, metric_policy = entry
+    return _finding_for(
+        regraded,
+        metric_name=metric_name,
+        family=family,
+        points=points,
+        location=location,
+        metric_policy=metric_policy,
+        policy=policy,
+        key=f"{family}.{metric_name}",
+    )
 
 
 def score_metrics(

@@ -12,6 +12,7 @@ and hands each level exactly what the stage below expects.
 
 # Built-in
 import logging
+import re
 import zlib
 from collections import deque
 from collections.abc import Iterable, Sequence
@@ -36,6 +37,7 @@ from kalanos.analysis.metrics.registry import (
     run_episode_metrics,
     run_stream_metrics,
 )
+from kalanos.analysis.metrics.timing import ONE_FINDING_PER_CLOCK
 from kalanos.analysis.metrics.vision import (
     camera_format,
     camera_frames,
@@ -55,7 +57,7 @@ from kalanos.analysis.models.diagnostics import DiagnosticResult, VisionSpec
 from kalanos.analysis.models.dictionary import Dictionary
 from kalanos.analysis.models.discovery import SkippedSource, SourceInfo
 from kalanos.analysis.models.domain import UNMAPPED_TAXONOMY_PREFIX, Episode, Stream
-from kalanos.analysis.models.eligibility import EligibilityStatus
+from kalanos.analysis.models.eligibility import Consequence, EligibilityStatus
 from kalanos.analysis.models.mapping import MappingOverride
 from kalanos.analysis.models.metrics import (
     DEFAULT_VISION_SAMPLES,
@@ -63,6 +65,7 @@ from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
     Level,
+    MetricStatus,
     StreamContext,
 )
 from kalanos.analysis.models.policy import Policy
@@ -76,6 +79,7 @@ from kalanos.analysis.models.provenance import (
 from kalanos.analysis.models.report import (
     AgreementRow,
     AnalysedEpisode,
+    DatasetWarning,
     GradedChannel,
     GradedEpisode,
     GradedStream,
@@ -90,10 +94,20 @@ from kalanos.analysis.models.summaries import EpisodeSummary
 from kalanos.analysis.reporting.card.sections import CardRow
 from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.scoring.cameras import (
+    CameraSwap,
     FootageVariation,
+    ViewpointChange,
     camera_key,
     camera_samples,
     compare_cameras,
+    find_camera_swaps,
+    find_shared_footage,
+    find_viewpoint_changes,
+    regrade_corrupt_footage,
+)
+from kalanos.analysis.scoring.container_hints import (
+    container_hints,
+    container_samples,
 )
 from kalanos.analysis.scoring.duplicates import (
     PayloadFingerprint,
@@ -133,6 +147,12 @@ logger = logging.getLogger(__name__)
 # A ledger outweighs the episode's compressed JSON, so a run keeps few of them.
 _LEDGERS_HELD = 64
 
+# Episode ids the task-instruction warning lists before it counts the rest.
+_INSTRUCTION_IDS_SHOWN = 10
+
+# Runs of episode numbers the corrupt-footage warning lists before it counts the rest.
+_CORRUPT_RUNS_SHOWN = 20
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
@@ -153,6 +173,7 @@ def grade_stream(
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[StreamKey, PayloadFingerprint] | None = None,
     footage: FootageVariation | None = None,
+    simulated: bool = False,
 ) -> tuple[GradedStream, list[Finding]]:
     """Grade a Stream's own metrics and every channel within it, then roll both up.
 
@@ -185,6 +206,8 @@ def grade_stream(
     footage : FootageVariation or None
         When given and the stream is camera footage,
         receives its pooled sampled frames, for the camera's visual variation.
+    simulated : bool
+        Whether the footage is rendered by a simulator.
 
     Returns
     -------
@@ -216,6 +239,7 @@ def grade_stream(
         full_frame_scan=full_frame_scan,
         reads_payloads=tier != ExecutionTier.METADATA,
         vision=vision or VisionSpec(),
+        simulated=simulated,
     )
     stream_results = run_stream_metrics(stream_ctx)
     stream_metrics, own_score, stream_findings = score_metrics(
@@ -364,6 +388,7 @@ def grade_episode(
     tier: ExecutionTier = ExecutionTier.STANDARD,
     fingerprints: dict[str, dict[StreamKey, PayloadFingerprint]] | None = None,
     footage: FootageVariation | None = None,
+    simulated: bool = False,
 ) -> tuple[GradedEpisode, list[Finding]]:
     """Grade every stream and channel in one Episode, and roll it up.
 
@@ -391,6 +416,8 @@ def grade_episode(
     footage : FootageVariation or None
         When given, receives the pooled sampled frames of each camera stream,
         for the cameras' visual variation.
+    simulated : bool
+        Whether the episode's camera footage is rendered by a simulator.
 
     Returns
     -------
@@ -422,9 +449,11 @@ def grade_episode(
             tier=tier,
             fingerprints=stream_prints,
             footage=footage,
+            simulated=simulated,
         )
         graded_streams.append(graded_stream)
         findings.extend(stream_findings)
+    findings = _merge_shared_timelines(findings, episode.streams)
 
     # Step 2: grade the episode's own metrics — the ones that compare streams within it,
     # rather than reading any one of them alone.
@@ -479,22 +508,30 @@ def grades_vision(requirements: RequirementsSection) -> bool:
 
 
 def scope_policy(policy: Policy, requirements: RequirementsSection) -> Policy:
-    """Make the vision metrics report-only unless the scope requires a video capability.
+    """Apply this scope's metric overrides; report-only vision outside a video scope.
 
+    An override whose condition the scope meets replaces the keys it sets.
     A scope that asks for neither sampled nor full video quality,
-    numeric-core among them, must not let a camera decide or score an episode,
+    numeric-core among them, must not let image quality decide or score an episode,
     so its vision results are measured and shown but never graded.
+    A vision metric marked `graded_in_every_scope` still grades there,
+    and keeps whatever `report_only` the policy and its overrides give it.
     """
 
-    if grades_vision(requirements):
-        return policy
+    vision_graded = grades_vision(requirements)
     prefix = f"{Family.VISION.value}."
-    metrics = {
-        key: entry.model_copy(update={"report_only": True})
-        if key.startswith(prefix)
-        else entry
-        for key, entry in policy.metrics.items()
-    }
+    metrics = {}
+    for key, entry in policy.metrics.items():
+        for override in entry.overrides:
+            if override.when.holds(requirements.required_capabilities):
+                entry = entry.model_copy(update=override.changes())
+        if (
+            not vision_graded
+            and key.startswith(prefix)
+            and not entry.graded_in_every_scope
+        ):
+            entry = entry.model_copy(update={"report_only": True})
+        metrics[key] = entry
     return policy.model_copy(update={"metrics": metrics})
 
 
@@ -550,8 +587,18 @@ def summarize(
         The episode's summary.
     """
 
+    instruction = episode.metrics.get("task_instruction_missing")
+    ungraded_instruction_missing = (
+        instruction.value == 1.0
+        if instruction is not None and instruction.status is MetricStatus.REPORT_ONLY
+        else None
+    )
     errors = [
-        {"episode_id": episode.id, "metric": row.key, "reason": "; ".join(row.reasons)}
+        {
+            "episode_id": episode.id,
+            "metric": row.key,
+            "reason": "; ".join(row.error_reasons),
+        }
         for row in (episode.coverage.metrics if episode.coverage else [])
         if row.error
     ]
@@ -562,6 +609,7 @@ def summarize(
         score=episode.score,
         requirement_reasons=requirement_reasons(episode, requirements),
         camera_samples=camera_samples(episode),
+        container_samples=container_samples(episode),
         gate_counts=gate_counts(episode),
         metric_subjects=metric_subjects(episode),
         operational_errors=errors,
@@ -570,7 +618,268 @@ def summarize(
             for stream in episode.streams
             if stream.taxonomy_type.startswith(f"{UNMAPPED_TAXONOMY_PREFIX}.")
         ),
+        ungraded_instruction_missing=ungraded_instruction_missing,
     )
+
+
+def _task_instruction_warning(
+    summaries: Sequence[EpisodeSummary],
+) -> DatasetWarning | None:
+    """The warning listing episodes without a task instruction, when nothing grades it.
+
+    Parameters
+    ----------
+    summaries : Sequence[EpisodeSummary]
+        Every graded episode's summary.
+
+    Returns
+    -------
+    DatasetWarning or None
+        The warning, with the count
+        and up to `_INSTRUCTION_IDS_SHOWN` sorted episode ids.
+        `None` when every checked episode has an instruction.
+    """
+
+    checked = [s for s in summaries if s.ungraded_instruction_missing is not None]
+    missing = sorted(s.id for s in checked if s.ungraded_instruction_missing)
+    if not missing:
+        return None
+    named = ", ".join(missing[:_INSTRUCTION_IDS_SHOWN])
+    rest = len(missing) - _INSTRUCTION_IDS_SHOWN
+    if rest > 0:
+        named += f", and {rest} more"
+    return DatasetWarning(
+        code="task_instruction_missing",
+        message=(
+            f"{len(missing)} of {len(checked)} episodes checked carry no task"
+            f" instruction, and the policy does not grade it: {named}"
+        ),
+    )
+
+
+def _episode_runs(ids: Sequence[str]) -> list[str]:
+    """Group episode ids into runs of consecutive episode numbers.
+
+    Parameters
+    ----------
+    ids : Sequence[str]
+        Episode ids, such as `episode_000282`.
+
+    Returns
+    -------
+    list of str
+        The ids that end in a number, sorted and grouped into runs
+        written `"282-299"`, or `"473"` for a run of one,
+        then the ids without one, each on its own and sorted.
+    """
+
+    numbered: list[int] = []
+    others: list[str] = []
+    for episode_id in ids:
+        match = re.search(r"(\d+)$", episode_id)
+        if match is None:
+            others.append(episode_id)
+        else:
+            numbered.append(int(match.group(1)))
+
+    runs: list[str] = []
+    numbers = sorted(set(numbered))
+    start = 0
+    for k, number in enumerate(numbers):
+        if k + 1 < len(numbers) and numbers[k + 1] == number + 1:
+            continue
+        first = numbers[start]
+        runs.append(str(first) if first == number else f"{first}-{number}")
+        start = k + 1
+    return runs + sorted(set(others))
+
+
+def _corrupt_footage_warning(
+    findings: Sequence[Finding], n_episodes: int
+) -> DatasetWarning | None:
+    """The warning listing episodes blocked for corrupt camera footage.
+
+    Parameters
+    ----------
+    findings : Sequence[Finding]
+        Every finding of the run.
+    n_episodes : int
+        How many episodes were graded.
+
+    Returns
+    -------
+    DatasetWarning or None
+        The warning, with the count and up to `_CORRUPT_RUNS_SHOWN` runs of
+        episode numbers. `None` when no episode is blocked for it.
+    """
+
+    blocked = {
+        f.episode_id
+        for f in findings
+        if f.metric_id == "vision.corrupt_frame_pct"
+        and f.consequence == Consequence.BLOCK
+    }
+    if not blocked:
+        return None
+    runs = _episode_runs(sorted(blocked))
+    named = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+    rest = len(runs) - _CORRUPT_RUNS_SHOWN
+    if rest > 0:
+        named += f", and {rest} more runs"
+    noun = "run" if len(runs) == 1 else "runs"
+    return DatasetWarning(
+        code="corrupt_footage",
+        message=(
+            f"{len(blocked)} of {n_episodes} episodes are blocked for corrupt"
+            f" camera footage, in {len(runs)} {noun}: {named}"
+        ),
+    )
+
+
+def _camera_swap_warnings(
+    swaps: Sequence[CameraSwap], n_episodes: int
+) -> list[DatasetWarning]:
+    """The warnings naming each camera pair that holds each other's footage.
+
+    Parameters
+    ----------
+    swaps : Sequence[CameraSwap]
+        The swaps `find_camera_swaps` reported.
+    n_episodes : int
+        How many episodes were graded.
+
+    Returns
+    -------
+    list[DatasetWarning]
+        One warning per swap, with the count and up to `_CORRUPT_RUNS_SHOWN` runs
+        of episode numbers.
+    """
+
+    warnings: list[DatasetWarning] = []
+    for swap in swaps:
+        runs = _episode_runs(swap.episodes)
+        named = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+        rest = len(runs) - _CORRUPT_RUNS_SHOWN
+        if rest > 0:
+            named += f", and {rest} more runs"
+        noun = "run" if len(runs) == 1 else "runs"
+        first, second = swap.cameras
+        warnings.append(
+            DatasetWarning(
+                code="camera_swap",
+                message=(
+                    f"{first} and {second} hold each other's footage in"
+                    f" {len(swap.episodes)} of {n_episodes} episodes,"
+                    f" in {len(runs)} {noun}: {named}"
+                ),
+            )
+        )
+    return warnings
+
+
+def _viewpoint_change_warnings(
+    changes: Sequence[ViewpointChange],
+) -> list[DatasetWarning]:
+    """The warnings naming each camera whose view changes between episodes.
+
+    Parameters
+    ----------
+    changes : Sequence[ViewpointChange]
+        The changes `find_viewpoint_changes` reported.
+
+    Returns
+    -------
+    list[DatasetWarning]
+        One warning per change, with the episodes on each side
+        as up to `_CORRUPT_RUNS_SHOWN` runs of episode numbers.
+    """
+
+    def named(ids: Sequence[str]) -> str:
+        runs = _episode_runs(ids)
+        text = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+        rest = len(runs) - _CORRUPT_RUNS_SHOWN
+        if rest > 0:
+            text += f", and {rest} more runs"
+        return text
+
+    return [
+        DatasetWarning(
+            code="camera_viewpoint_change",
+            message=(
+                f"the view of {change.camera} changes after episode"
+                f" {_episode_runs([change.before[-1]])[0]}"
+                f" (score {change.score:.2f}):"
+                f" episodes {named(change.before)} against {named(change.after)}"
+            ),
+        )
+        for change in changes
+    ]
+
+
+def _merge_shared_timelines(
+    findings: list[Finding], streams: Sequence[Stream]
+) -> list[Finding]:
+    """Keep one finding for streams that share one timeline, for the metrics listed.
+
+    Two findings merge when their metric is in `ONE_FINDING_PER_CLOCK`,
+    their streams carry the same clock `domain` and `source_field`,
+    and they report the same value with the same evidence.
+    The first one stays where it was and lists the others under `shared_by`.
+
+    Parameters
+    ----------
+    findings : list[Finding]
+        One episode's stream findings, in the order they were raised.
+    streams : Sequence[Stream]
+        The episode's streams, for their clocks.
+
+    Returns
+    -------
+    list[Finding]
+        `findings` in the same order, without the merged ones.
+    """
+
+    timelines: dict[tuple[str, str | None, str | None], tuple[str, str]] = {}
+    for stream in streams:
+        clock = stream.clock_info
+        if clock is None or clock.domain is None or clock.source_field is None:
+            continue
+        location = (stream.taxonomy_type, stream.source_field, stream.instance)
+        timelines[location] = (clock.domain, clock.source_field)
+
+    kept: list[Finding] = []
+    shared: dict[tuple[Any, ...], tuple[int, list[dict[str, str | None]]]] = {}
+    for finding in findings:
+        timeline = None
+        # The family prefix comes from the policy, so match on the metric's own name.
+        metric_name = finding.metric_id.partition(".")[2]
+        if metric_name in ONE_FINDING_PER_CLOCK and finding.stream is not None:
+            timeline = timelines.get(
+                (finding.stream, finding.source_field, finding.instance)
+            )
+        if timeline is None:
+            kept.append(finding)
+            continue
+        key = (timeline, finding.value, to_json(finding.evidence))
+        if key not in shared:
+            shared[key] = (len(kept), [])
+            kept.append(finding)
+            continue
+        shared[key][1].append(
+            {
+                "stream": finding.stream,
+                "source_field": finding.source_field,
+                "instance": finding.instance,
+            }
+        )
+
+    for position, shared_by in shared.values():
+        if shared_by:
+            first = kept[position]
+            kept[position] = first.model_copy(
+                update={"evidence": {**first.evidence, "shared_by": shared_by}}
+            )
+    return kept
 
 
 def _merged(ledgers: list[Coverage | None]) -> list[Coverage | None]:
@@ -703,7 +1012,7 @@ class ReportBuilder:
         ----------
         item : AnalysedEpisode
             The canonical episode, the adapter that read it,
-            and the policy to grade it against.
+            the policy to grade it against, and whether its footage is simulated.
 
         Raises
         ------
@@ -729,6 +1038,7 @@ class ReportBuilder:
             tier=self._tier,
             fingerprints=self._fingerprints,
             footage=self._footage,
+            simulated=item.simulated,
         )
         self._findings.extend(episode_findings)
         results: list[DiagnosticResult] = []
@@ -782,6 +1092,7 @@ class ReportBuilder:
         run: RunInfo | None = None,
         inventory: Inventory | None = None,
         binding_conflicts: Sequence[BindingConflict] = (),
+        dataset_warnings: Sequence[DatasetWarning] = (),
     ) -> Report | StreamedReport:
         """Run the dataset-level steps over every added episode and assemble the Report.
 
@@ -812,6 +1123,9 @@ class ReportBuilder:
             is the whole inventory.
         binding_conflicts : Sequence[BindingConflict]
             Mapping disagreements the resolver recorded.
+        dataset_warnings : Sequence[DatasetWarning]
+            Warnings the caller found about the sources it read,
+            listed after the ones computed from the graded episodes.
 
         Returns
         -------
@@ -846,6 +1160,13 @@ class ReportBuilder:
         producer = producer.model_copy(
             update={"metrics": detector_versions(), "adapters": adapters}
         )
+        findings = regrade_corrupt_footage(
+            findings,
+            (sample for summary in summaries for sample in summary.camera_samples),
+            policy_for=lambda episode_id: scope_policy(
+                policies[episode_id], requirements
+            ),
+        )
         findings = apply_calibration(findings, policies, run, scope, producer)
         diagnostic_results = self._diagnostic_results
         diagnostics = None
@@ -863,19 +1184,46 @@ class ReportBuilder:
             findings.extend(
                 review_findings([r for rs in diagnostic_results.values() for r in rs])
             )
+        camera_sample_list = [
+            sample for summary in summaries for sample in summary.camera_samples
+        ]
+        vision_graded = grades_vision(requirements)
         cameras, camera_findings = compare_cameras(
-            (sample for summary in summaries for sample in summary.camera_samples),
-            grades_vision=grades_vision(requirements),
-            footage=footage,
+            camera_sample_list, grades_vision=vision_graded, footage=footage
         )
         findings.extend(camera_findings)
+        shared_footage, shared_findings = find_shared_footage(
+            camera_sample_list,
+            [s.id for s in summaries],
+            grades_vision=vision_graded,
+        )
+        findings.extend(shared_findings)
+        swaps, swap_findings = find_camera_swaps(
+            camera_sample_list,
+            footage,
+            [s.id for s in summaries],
+        )
+        findings.extend(swap_findings)
+        viewpoint_changes = find_viewpoint_changes(footage, [s.id for s in summaries])
         duplicates, duplicate_findings, near_duplicates, motion_variation = (
             find_duplicate_episodes([s.id for s in summaries], fingerprints)
         )
         findings.extend(duplicate_findings)
         dataset_warnings = [
             w
-            for w in (near_duplicate_warning(near_duplicates, n_episodes),)
+            for w in (
+                near_duplicate_warning(near_duplicates, n_episodes),
+                _task_instruction_warning(summaries),
+                _corrupt_footage_warning(findings, n_episodes),
+                *_camera_swap_warnings(swaps, n_episodes),
+                *_viewpoint_change_warnings(viewpoint_changes),
+                *container_hints(
+                    sample
+                    for summary in summaries
+                    for sample in summary.container_samples
+                ),
+                *dataset_warnings,
+            )
             if w is not None
         ]
         decisions = decide_all(
@@ -979,6 +1327,7 @@ class ReportBuilder:
             binding_conflicts=list(binding_conflicts),
             cameras=cameras,
             duplicates=duplicates,
+            shared_footage=shared_footage,
             near_duplicates=near_duplicates,
             motion_variation=motion_variation,
             dataset_warnings=dataset_warnings,

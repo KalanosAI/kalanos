@@ -9,10 +9,12 @@ import csv
 import json
 import math
 import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 # External
+import polars as pl
 import pytest
 from typer.testing import CliRunner
 from upath import UPath
@@ -26,6 +28,7 @@ from kalanos.analysis.models.discovery import SkipReason
 from kalanos.analysis.models.metrics import MetricResult, MetricStatus
 from kalanos.analysis.models.report import Report
 from kalanos.analysis.models.schema import RefusalCode
+from kalanos.analysis.models.scoring import Finding
 from kalanos.analysis.scoring.cameras import _TOO_FEW_FOOTAGE
 from kalanos.cli import app
 from kalanos.core.settings import get_settings
@@ -39,6 +42,7 @@ from helpers import (
     LEROBOT_V2_0_FIXTURE,
     LEROBOT_V2_1_FIXTURE,
     NO_TIMESERIES_FIXTURE,
+    write_arm,
 )
 
 
@@ -110,6 +114,50 @@ def _csv_ids() -> set[str]:
 
     with CSV_FIXTURE.open() as handle:
         return {row["id"] for row in csv.DictReader(handle)}
+
+
+def _repeated_arm(tmp_path: Path) -> Path:
+    """Write four jittered arm episodes, the second with three repeated timestamps.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        The folder to write the recording into.
+
+    Returns
+    -------
+    Path
+        The HDF5 recording.
+    """
+
+    pytest.importorskip("h5py")
+    path = tmp_path / "arm.hdf5"
+    write_arm(path, 4, glitched=set(), jittered={0, 1, 2, 3}, repeated={1})
+    return path
+
+
+def _order_findings(report: Report, episode_id: str) -> list[Finding]:
+    """Return the `timing.monotonic_violations` findings of one episode.
+
+    Parameters
+    ----------
+    report : Report
+        The graded report.
+    episode_id : str
+        The episode whose findings to keep.
+
+    Returns
+    -------
+    list of Finding
+        The episode's timestamp-order findings, in report order.
+    """
+
+    return [
+        finding
+        for finding in report.findings
+        if finding.metric_id == "timing.monotonic_violations"
+        and finding.episode_id == episode_id
+    ]
 
 
 # ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
@@ -515,3 +563,105 @@ def test_the_lerobot_v2_1_fixture_grades_end_to_end():
         for stream in episode.streams:
             reason = stream.metrics["effective_hz"].evidence.get("ungraded_reason", "")
             assert "declared under limits" not in reason
+
+
+def test_repeated_timestamps_request_review_with_their_rows(tmp_path):
+    """Verify repeated timestamps raise one review finding that matches the measurement.
+
+    The finding carries the same count and rows the stream metric measured,
+    and a second run gives the same finding.
+    """
+
+    path = _repeated_arm(tmp_path)
+    report = _grade(path)
+
+    episode = next(e for e in report.episodes if e.id.endswith("_1"))
+    assert episode.eligibility is not None
+    assert episode.eligibility.status == "review"
+    [finding] = _order_findings(report, episode.id)
+    assert finding.value == 3
+    assert finding.evidence["n_repeated"] == 3
+    assert finding.evidence["sample_indices"] == [50, 51, 120]
+    assert finding.consequence == "review"
+    [measured] = [
+        stream.metrics["monotonic_violations"]
+        for stream in episode.streams
+        if stream.taxonomy_type == finding.stream
+    ]
+    assert finding.value == measured.value == len(finding.evidence["sample_indices"])
+    assert _order_findings(_grade(path), episode.id) == [finding]
+
+
+def test_ordered_timestamps_raise_no_order_finding(tmp_path):
+    """Verify episodes whose timestamps always move forward raise no order finding."""
+
+    report = _grade(_repeated_arm(tmp_path))
+
+    for episode in report.episodes:
+        if episode.id.endswith("_1"):
+            continue
+        for stream in episode.streams:
+            assert stream.metrics["monotonic_violations"].value == 0
+        assert _order_findings(report, episode.id) == []
+        assert episode.eligibility is not None
+        assert not any(
+            reason.id.endswith("timing.monotonic_violations")
+            for reason in episode.eligibility.reasons
+        )
+
+
+def test_a_scope_missing_evidence_keeps_the_order_finding(tmp_path):
+    """Verify an episode left unknown by its scope still carries its order finding.
+
+    `vision-imitation-v1` requires video quality, which a camera-less recording
+    cannot supply, so every episode is unknown.
+    The measured violation still reaches the report and the episode's reasons.
+    """
+
+    report = _grade(_repeated_arm(tmp_path), "--profile", "vision-imitation-v1")
+
+    assert all(e.eligibility is not None for e in report.episodes)
+    statuses = {e.eligibility.status for e in report.episodes if e.eligibility}
+    assert statuses == {"unknown"}
+    episode = next(e for e in report.episodes if e.id.endswith("_1"))
+    assert episode.eligibility is not None
+    assert any(
+        reason.kind == "finding" and reason.id.endswith("timing.monotonic_violations")
+        for reason in episode.eligibility.reasons
+    )
+    assert len(_order_findings(report, episode.id)) == 1
+
+
+def test_streams_on_one_timestamp_column_raise_one_order_finding(tmp_path):
+    """Verify streams on one timestamp column raise one order finding per episode.
+
+    Episode 0's third row repeats the second row's timestamp.
+    Every stream of the episode reads that column, so each measures the same violation.
+    The report keeps one finding and lists the other streams under `shared_by`.
+    """
+
+    root = tmp_path / "lerobot"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    data = root / "data" / "chunk-000" / "file-000.parquet"
+    frame = pl.read_parquet(data)
+    first_episode = (frame["episode_index"] == 0).arg_true()
+    stamps = frame["timestamp"].to_list()
+    stamps[first_episode[2]] = stamps[first_episode[1]]
+    frame.with_columns(
+        pl.Series("timestamp", stamps, dtype=frame["timestamp"].dtype)
+    ).write_parquet(data)
+
+    report = _grade(root)
+
+    episode = next(e for e in report.episodes if e.id.endswith("episode_000000"))
+    repeated = [
+        stream
+        for stream in episode.streams
+        if (result := stream.metrics.get("monotonic_violations")) is not None
+        and result.value == 1
+    ]
+    assert len(repeated) >= 2
+    [finding] = _order_findings(report, episode.id)
+    assert {entry["stream"] for entry in finding.evidence["shared_by"]} == {
+        stream.taxonomy_type for stream in repeated
+    } - {finding.stream}

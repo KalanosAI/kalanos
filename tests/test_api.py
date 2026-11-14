@@ -18,9 +18,12 @@ import yaml
 
 # Internal
 import kalanos
+from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.video import RemoteReads
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
 from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION
 from kalanos.assets.policy import load_default_policy, load_policy
+from kalanos.core.settings import get_settings
 
 # Local
 from helpers import FIXTURES_DIR
@@ -130,6 +133,27 @@ def test_grade_returns_a_report_for_a_fixture_dataset():
     assert report.episodes
 
 
+def test_grade_passes_the_remote_read_settings(monkeypatch):
+    """Verify the remote block size and readahead reach the files a grade opens."""
+
+    monkeypatch.setenv("KALANOS_REMOTE_BLOCK_BYTES", "131072")
+    monkeypatch.setenv("KALANOS_REMOTE_READAHEAD_BLOCKS", "2")
+    get_settings.cache_clear()
+    seen = []
+    original = video._open_file
+
+    def recording(av, path):
+        seen.append(video._REMOTE_READS.get())
+        return original(av, path)
+
+    monkeypatch.setattr(video, "_open_file", recording)
+
+    kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny")
+
+    assert seen
+    assert set(seen) == {RemoteReads(block_bytes=131072, readahead_blocks=2)}
+
+
 def test_grade_accepts_a_plain_string():
     """Verify a string path is parsed as a UPath rather than rejected."""
 
@@ -150,6 +174,14 @@ def test_grade_refuses_a_sample_count_below_one(tmp_path):
 
     with pytest.raises(ValueError, match="vision_samples"):
         kalanos.grade(tmp_path / "missing", vision_samples=0)
+
+
+@pytest.mark.parametrize("ratio", [0, 1.5])
+def test_grade_refuses_a_summary_ratio_outside_zero_to_one(tmp_path, ratio):
+    """Verify a summary ratio of 0, or above 1, is refused before the path is read."""
+
+    with pytest.raises(ValueError, match="vision_summary_ratio"):
+        kalanos.grade(tmp_path / "missing", vision_summary_ratio=ratio)
 
 
 def test_grade_refuses_an_empty_folder(tmp_path):
@@ -192,7 +224,7 @@ def test_the_full_tier_reads_every_camera_frame():
 
     for episode in report.episodes:
         camera = next(s for s in episode.streams if s.kind == "video")
-        evidence = camera.metrics["sharpness_score"].evidence
+        evidence = camera.metrics["exposure_shift_pct"].evidence
         assert evidence["n_sampled"] == evidence["n_frames"]
 
 
@@ -225,6 +257,19 @@ def test_a_duplicate_index_outside_the_episodes_is_refused():
 
     payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
     payload["duplicates"] = {"exact": [[0, len(payload["episodes"])]]}
+
+    with pytest.raises(ValueError, match="outside episodes"):
+        kalanos.Report.model_validate(payload)
+
+
+def test_a_shared_footage_index_outside_the_episodes_is_refused():
+    """Verify `shared_footage` can only name episodes the report holds."""
+
+    payload = kalanos.grade(FIXTURES_DIR / "lerobot_v3_tiny").model_dump(mode="json")
+    n = len(payload["episodes"])
+    payload["shared_footage"] = [
+        [{"episode": 0, "camera": "a"}, {"episode": n, "camera": "b"}]
+    ]
 
     with pytest.raises(ValueError, match="outside episodes"):
         kalanos.Report.model_validate(payload)

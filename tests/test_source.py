@@ -14,11 +14,14 @@ from types import SimpleNamespace
 
 # External
 import httpx
+import huggingface_hub
 import pytest
 from huggingface_hub.errors import GatedRepoError
+from upath import UPath
 
 # Internal
 from kalanos.analysis.discovery.source import enforce_limits, resolve_source
+from kalanos.analysis.hosts import direct_location
 from kalanos.analysis.models.discovery import SourceInfo, SourceLimits
 from kalanos.analysis.models.errors import SourceTooLarge, SourceUnavailable
 
@@ -166,3 +169,30 @@ def test_a_missing_hf_extra_names_the_extra(monkeypatch):
 
     with pytest.raises(SourceUnavailable, match=r"kalanos\[hf\]"):
         resolve_source("hf://datasets/o/n")
+
+
+def test_a_local_file_is_read_directly_from_its_path(tmp_path):
+    """Verify a local file's direct location is its plain path, with no options."""
+
+    path = UPath(tmp_path) / "data" / "file-000.parquet"
+
+    assert direct_location(path) == (str(tmp_path / "data" / "file-000.parquet"), None)
+
+
+def test_a_hugging_face_file_is_read_directly_with_the_saved_token(monkeypatch):
+    """Verify a Hugging Face file gives its URI, and the token when one is saved."""
+
+    path = UPath("hf://datasets/org/repo@abc123") / "data" / "file-000.parquet"
+    uri = "hf://datasets/org/repo@abc123/data/file-000.parquet"
+
+    monkeypatch.setattr(huggingface_hub, "get_token", lambda: "hf_secret")
+    assert direct_location(path) == (uri, {"token": "hf_secret"})
+
+    monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
+    assert direct_location(path) == (uri, None)
+
+
+def test_a_path_no_host_claims_has_no_direct_location():
+    """Verify a protocol no host knows is left to its fsspec handle."""
+
+    assert direct_location(UPath("memory://x.parquet")) is None
