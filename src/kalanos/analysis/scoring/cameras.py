@@ -879,6 +879,9 @@ def find_camera_swaps(
         in each flagged episode.
     """
 
+    # Signatures are kept only when numpy is installed, so a base install stops here.
+    if not footage.cameras():
+        return [], []
     numpy = load_numpy()
     assert numpy is not None
 

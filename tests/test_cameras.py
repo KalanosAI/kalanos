@@ -899,6 +899,16 @@ def test_footage_keeps_each_episodes_mean_frame():
     assert footage.cameras() == [CAMERA]
 
 
+def test_without_numpy_no_swap_is_looked_for(monkeypatch):
+    """A base install keeps no signatures, so the pass reports nothing."""
+
+    from kalanos.analysis.scoring import cameras
+
+    monkeypatch.setattr(cameras, "load_numpy", lambda: None)
+
+    assert find_camera_swaps([], FootageVariation(), ["episode_0"]) == ([], [])
+
+
 def test_a_swapped_run_is_reported():
     """Cameras exchanged in three consecutive episodes are named with that run."""
 
