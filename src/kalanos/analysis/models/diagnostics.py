@@ -10,7 +10,7 @@ from collections import Counter
 from typing import Annotated, Any, Literal
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Internal
 from kalanos.analysis.models.coverage import Availability
@@ -125,6 +125,38 @@ class MotionSpec(StrictModel):
         return self
 
 
+class DeliverySpec(StrictModel):
+    """The least footage a user accepts from each camera stream.
+
+    Every field is optional, and an empty spec checks nothing.
+    `codecs` are FFmpeg codec names, such as `h264`, `hevc` and `av1`,
+    compared in lowercase.
+    """
+
+    min_width: int | None = Field(default=None, ge=1)
+    min_height: int | None = Field(default=None, ge=1)
+    min_fps: float | None = Field(default=None, gt=0)
+    min_duration_s: float | None = Field(default=None, gt=0)
+    codecs: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("codecs")
+    @classmethod
+    def normalized_codecs(cls, value: list[str] | None) -> list[str] | None:
+        """Lowercase and strip each codec name, rejecting blank ones."""
+
+        if value is None:
+            return None
+        names = [name.strip().lower() for name in value]
+        if not all(names):
+            raise ValueError("codecs must not hold a blank name")
+        return names
+
+    def declared(self) -> bool:
+        """Whether any field is set."""
+
+        return any(value is not None for value in self.model_dump().values())
+
+
 class VisionSpec(StrictModel):
     """How camera footage is read.
 
@@ -136,6 +168,7 @@ class VisionSpec(StrictModel):
     `preview_size` is the image's longest side, in pixels, at most.
     `footage` says whether the cameras' footage is rendered by a simulator;
     `auto` reads it from the dataset card.
+    `delivery` is the least footage each camera stream may offer.
     """
 
     sample_frames: int = Field(default=10, ge=1, le=10000)
@@ -148,6 +181,7 @@ class VisionSpec(StrictModel):
     dark_level: int = Field(default=5, ge=0, le=255)
     bright_level: int = Field(default=250, ge=0, le=255)
     footage: Literal["auto", "real", "simulated"] = "auto"
+    delivery: DeliverySpec = Field(default_factory=DeliverySpec)
 
     @model_validator(mode="after")
     def ordered_levels(self) -> "VisionSpec":
