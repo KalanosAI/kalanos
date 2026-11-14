@@ -93,6 +93,27 @@ _SWAP_SCORE = 0.8
 _SWAP_SEPARATION = 2.0
 # Candidate: consecutive flagged episodes needed to report a swap.
 _SWAP_RUN = 3
+# Candidate: a split of a camera's episodes is a viewpoint change when the distance
+# between its two median pictures reaches this multiple of the typical distance
+# of an episode to its own side's median.
+# Clean fixed cameras scored at most 1.21 on aloha, pusht, cmu_stretch and liftplace;
+# a 16 px vertical shift scored 3.15 on liftplace agentview
+# and a 16 px shift 1.64 on pusht.
+_VIEWPOINT_SCORE = 1.5
+# A pooled pixel is still in an episode
+# when its SD over the sampled frames is below this.
+_STILL_PIXEL_SD = 0.02
+# Candidate: a camera is not judged when the median share of still pixels
+# over its episodes is below this, as its picture mostly changes within an episode.
+# Aloha wrist cameras read 0.02 and 0.00, fixed cameras 0.47 to 0.87.
+_STILL_SHARE = 0.4
+# A simulator can render a camera's episodes identically,
+# and a zero within-side distance would turn any difference into a change.
+_VIEWPOINT_FLOOR = 1e-3
+# Up to this many episodes with a picture every split is scored;
+# above it, a coarse pass and then a fine pass around the best split,
+# which bounds the median computations on very large datasets.
+_VIEWPOINT_SPLITS = 200
 
 # TODO: an absolute blur floor is not set;
 # placing one needs data from more than one dataset.
@@ -150,8 +171,8 @@ class FootageVariation:
     """How much each camera's footage changes between episodes, gathered while grading.
 
     Per camera and vector length it keeps the running mean and sum of squared deviations
-    of each column, and per episode one mean pooled frame,
-    256 float32 values (1 KiB) per camera per episode.
+    of each column, and per episode the mean and the median pooled frame
+    and one still share, 2 KiB per camera per episode.
     It keeps no episode's individual frames.
     """
 
@@ -160,6 +181,10 @@ class FootageVariation:
     _signatures: "dict[str, dict[str, np.ndarray]]" = field(
         default_factory=dict, init=False
     )
+    _backgrounds: "dict[str, dict[str, np.ndarray]]" = field(
+        default_factory=dict, init=False
+    )
+    _still: "dict[str, dict[str, float]]" = field(default_factory=dict, init=False)
 
     def add(self, episode_id: str, camera: str, vector: "np.ndarray | None") -> None:
         """Add one episode's pooled frames of one camera.
@@ -188,10 +213,15 @@ class FootageVariation:
 
         block = _VARIATION_SIZE**2
         if len(vector) % block == 0:
-            self._signatures.setdefault(camera, {})[episode_id] = (
-                vector.reshape(-1, block)
-                .mean(axis=0, dtype=numpy.float64)
-                .astype(numpy.float32)
+            frames = vector.reshape(-1, block).astype(numpy.float64)
+            self._signatures.setdefault(camera, {})[episode_id] = frames.mean(
+                axis=0
+            ).astype(numpy.float32)
+            self._backgrounds.setdefault(camera, {})[episode_id] = numpy.median(
+                frames, axis=0
+            ).astype(numpy.float32)
+            self._still.setdefault(camera, {})[episode_id] = float(
+                (frames.std(axis=0) < _STILL_PIXEL_SD).mean()
             )
 
         groups = self._groups.setdefault(camera, {})
@@ -221,6 +251,43 @@ class FootageVariation:
         """
 
         return dict(self._signatures.get(camera, {}))
+
+    def background(self, camera: str) -> "dict[str, np.ndarray]":
+        """Each episode's median pooled frame of one camera.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            The per-pixel median of the episode's sampled frames,
+            one float32 value per pooled pixel, by episode id in the order added.
+            Empty for an unknown camera.
+            An episode whose read missed a frame has none.
+        """
+
+        return dict(self._backgrounds.get(camera, {}))
+
+    def still_share(self, camera: str) -> dict[str, float]:
+        """Each episode's share of pooled pixels that hold still across its frames.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, float]
+            The share of pooled pixels whose SD over the sampled frames
+            is below `_STILL_PIXEL_SD`, by episode id in the order added.
+            Empty for an unknown camera.
+        """
+
+        return dict(self._still.get(camera, {}))
 
     def cameras(self) -> list[str]:
         """The cameras with at least one episode signature, in first-seen order."""
@@ -274,6 +341,28 @@ class CameraSwap:
 
     cameras: tuple[str, str]
     episodes: list[str]
+
+
+@dataclass(frozen=True)
+class ViewpointChange:
+    """A camera whose view changes between two groups of consecutive episodes.
+
+    Attributes
+    ----------
+    camera : str
+        The camera key.
+    before : list[str]
+        The episodes with a picture before the change, in report order.
+    after : list[str]
+        The episodes with a picture after the change, in report order.
+    score : float
+        The split's score, `_split_score`.
+    """
+
+    camera: str
+    before: list[str]
+    after: list[str]
+    score: float
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -951,3 +1040,144 @@ def find_camera_swaps(
             CameraSwap(cameras=(first, second), episodes=[e for r in runs for e in r])
         )
     return swaps, findings
+
+
+def _split_score(before: "np.ndarray", after: "np.ndarray") -> float:
+    """How far apart two groups of episodes' pictures are, against their own spread.
+
+    Parameters
+    ----------
+    before : numpy.ndarray
+        The first group's median pictures, one row per episode.
+    after : numpy.ndarray
+        The second group's median pictures, one row per episode.
+
+    Returns
+    -------
+    float
+        The RMS distance between the groups' per-pixel medians, divided by
+        the median over all episodes of the RMS distance to the own group's median,
+        floored at `_VIEWPOINT_FLOOR`.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    med_before = numpy.median(before, axis=0)
+    med_after = numpy.median(after, axis=0)
+    gap = math.sqrt(float(numpy.mean((med_before - med_after) ** 2)))
+    within = numpy.concatenate(
+        [
+            numpy.sqrt(numpy.mean((before - med_before) ** 2, axis=1)),
+            numpy.sqrt(numpy.mean((after - med_after) ** 2, axis=1)),
+        ]
+    )
+    return gap / max(float(numpy.median(within)), _VIEWPOINT_FLOOR)
+
+
+def _best_split(matrix: "np.ndarray") -> "tuple[int, float]":
+    """The split of a camera's episodes that fits two groups best, and its score.
+
+    The split is the one with the least summed squared distance of each episode
+    to its own group's mean.
+    The medians behind `_split_score` hardly move for an episode on the wrong side,
+    so they cannot place the boundary to the episode.
+
+    Parameters
+    ----------
+    matrix : numpy.ndarray
+        The episodes' median pictures in report order, one row per episode,
+        with at least `2 * _MIN_EPISODES` rows.
+
+    Returns
+    -------
+    tuple[int, float]
+        The number of episodes in the first group and its `_split_score`,
+        the first split on a tie.
+        Above `_VIEWPOINT_SPLITS` episodes, every `n // _VIEWPOINT_SPLITS`-th split
+        is fitted first, then every split within one such step of the best.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    n = len(matrix)
+    costs: dict[int, float] = {}
+
+    def cost_at(k: int) -> float:
+        if k not in costs:
+            before, after = matrix[:k], matrix[k:]
+            costs[k] = float(
+                ((before - before.mean(axis=0)) ** 2).sum()
+                + ((after - after.mean(axis=0)) ** 2).sum()
+            )
+        return costs[k]
+
+    low, high = _MIN_EPISODES, n - _MIN_EPISODES
+    step = max(n // _VIEWPOINT_SPLITS, 1)
+    best = min(range(low, high + 1, step), key=lambda k: (cost_at(k), k))
+    if step > 1:
+        near = range(max(low, best - step), min(high, best + step) + 1)
+        best = min(near, key=lambda k: (cost_at(k), k))
+    return best, _split_score(matrix[:best], matrix[best:])
+
+
+def find_viewpoint_changes(
+    footage: FootageVariation, episode_ids: Sequence[str]
+) -> list[ViewpointChange]:
+    """Find cameras whose view changes between two groups of consecutive episodes.
+
+    A camera is judged over the episodes in `episode_ids` order that have a picture,
+    and only with at least `2 * _MIN_EPISODES` of them
+    and a median still share of at least `_STILL_SHARE`,
+    which leaves out a camera whose picture mostly changes within an episode.
+    The split with at least `_MIN_EPISODES` episodes on both sides that fits two groups
+    best is chosen by `_best_split`, and reported when its `_split_score`
+    is `_VIEWPOINT_SCORE` or more, one change per camera.
+
+    The thresholds are candidates, not calibrated.
+    The score cannot tell a moved camera from a lasting change of scene or lighting,
+    and it misses changes on a camera whose scene varies a lot between episodes.
+
+    Parameters
+    ----------
+    footage : FootageVariation
+        The pictures gathered while grading.
+    episode_ids : Sequence[str]
+        The episode ids in report order.
+
+    Returns
+    -------
+    list[ViewpointChange]
+        One change per camera whose best split reaches the score.
+    """
+
+    # Pictures are kept only when numpy is installed, so a base install stops here.
+    if not footage.cameras():
+        return []
+    numpy = load_numpy()
+    assert numpy is not None
+
+    changes: list[ViewpointChange] = []
+    for camera in footage.cameras():
+        pictures = footage.background(camera)
+        still = footage.still_share(camera)
+        ids = [e for e in episode_ids if e in pictures]
+        n = len(ids)
+        if n < 2 * _MIN_EPISODES:
+            continue
+        if float(numpy.median([still[e] for e in ids])) < _STILL_SHARE:
+            continue
+
+        matrix = numpy.stack([pictures[e] for e in ids]).astype(numpy.float64)
+        best, score = _best_split(matrix)
+        if score >= _VIEWPOINT_SCORE:
+            changes.append(
+                ViewpointChange(
+                    camera=camera,
+                    before=ids[:best],
+                    after=ids[best:],
+                    score=round(score, 2),
+                )
+            )
+    return changes

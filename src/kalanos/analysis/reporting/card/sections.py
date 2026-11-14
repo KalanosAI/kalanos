@@ -766,6 +766,7 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         One row per capability with eligible subjects, in model order,
         an `instructions` row for each `task_instruction_missing` dataset warning,
         a `camera swap` row for each `camera_swap` dataset warning,
+        a `viewpoint change` row for each `camera_viewpoint_change` dataset warning,
         an `episode count` row for each `episode_count_mismatch` dataset warning,
         a row for each container hint warning, labelled by its kind,
         a `mapping` row when any stream type went unmapped, then an `inventory` row.
@@ -809,6 +810,11 @@ def coverage(report: Report, ctx: CardContext) -> list[Text]:
         ("camera swap", Text(warning.message, style=theme.style("warn")))
         for warning in report.dataset_warnings
         if warning.code == "camera_swap"
+    )
+    pairs.extend(
+        ("viewpoint change", Text(warning.message, style=theme.style("warn")))
+        for warning in report.dataset_warnings
+        if warning.code == "camera_viewpoint_change"
     )
     pairs.extend(
         ("episode count", Text(warning.message, style=theme.style("warn")))

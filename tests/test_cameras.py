@@ -40,6 +40,7 @@ from kalanos.analysis.scoring.cameras import (
     compare_cameras,
     find_camera_swaps,
     find_shared_footage,
+    find_viewpoint_changes,
 )
 from kalanos.assets.policy import load_default_policy
 
@@ -907,6 +908,141 @@ def test_without_numpy_no_swap_is_looked_for(monkeypatch):
     monkeypatch.setattr(cameras, "load_numpy", lambda: None)
 
     assert find_camera_swaps([], FootageVariation(), ["episode_0"]) == ([], [])
+
+
+def test_footage_keeps_each_episodes_median_frame_and_still_share():
+    """`background` holds the per-column median, `still_share` the steady columns."""
+
+    rng = numpy.random.default_rng(3)
+    base = rng.random(256, dtype=numpy.float32)
+    frames = numpy.stack([base, base + 0.001, base + 0.5 * (numpy.arange(256) < 64)])
+    footage = FootageVariation()
+    footage.add("a", CAMERA, frames.astype(numpy.float32).reshape(-1))
+    footage.add("b", CAMERA, None)
+
+    assert list(footage.background(CAMERA)) == ["a"]
+    assert numpy.allclose(
+        footage.background(CAMERA)["a"], numpy.median(frames, axis=0), atol=1e-6
+    )
+    assert footage.still_share(CAMERA) == {"a": pytest.approx(0.75)}
+    assert footage.background("unknown") == {}
+    assert footage.still_share("unknown") == {}
+
+
+def test_without_numpy_no_viewpoint_change_is_looked_for(monkeypatch):
+    """A base install keeps no pictures, so the pass reports nothing."""
+
+    from kalanos.analysis.scoring import cameras
+
+    monkeypatch.setattr(cameras, "load_numpy", lambda: None)
+
+    assert find_viewpoint_changes(FootageVariation(), ["episode_0"]) == []
+
+
+def _viewpoint_world(
+    count: int,
+    change_at: int,
+    *,
+    moving: bool = False,
+    missing: frozenset[int] = frozenset(),
+) -> tuple[FootageVariation, list[str]]:
+    """One camera over `count` episodes whose picture shifts down from `change_at`.
+
+    The camera is a smooth 16x16 picture plus a fixed texture,
+    seen through 3 frames of noise well under the still-pixel SD.
+    With `moving`, every frame is a fresh random picture.
+    The camera has no vector in the `missing` episodes.
+    """
+
+    rng = numpy.random.default_rng(42)
+    ramp = numpy.linspace(0.2, 0.8, 16)
+    picture = numpy.outer(ramp, ramp[::-1]) + 0.1 * rng.random((16, 16))
+    footage = FootageVariation()
+    ids = [f"episode_{n}" for n in range(count)]
+    for number, episode_id in enumerate(ids):
+        if number in missing:
+            footage.add(episode_id, CAMERA, None)
+            continue
+        view = numpy.roll(picture, 4, axis=0) if number >= change_at else picture
+        if moving:
+            frames = rng.random((3, 256))
+        else:
+            frames = view.reshape(1, 256) + rng.normal(0, 0.005, (3, 256))
+        footage.add(episode_id, CAMERA, frames.astype(numpy.float32).reshape(-1))
+    return footage, ids
+
+
+def test_a_fixed_camera_moved_partway_is_reported():
+    """A camera whose picture shifts after episode 6 is named with both sides."""
+
+    footage, ids = _viewpoint_world(14, 7)
+
+    [change] = find_viewpoint_changes(footage, ids)
+
+    assert change.camera == CAMERA
+    assert change.before == ids[:7]
+    assert change.after == ids[7:]
+    assert change.score >= 1.5
+
+
+def test_a_moving_camera_is_not_judged():
+    """A camera whose picture changes within each episode is left out."""
+
+    footage, ids = _viewpoint_world(14, 7, moving=True)
+
+    assert find_viewpoint_changes(footage, ids) == []
+
+
+def test_identical_renders_on_each_side_still_give_a_finite_change():
+    """A simulator camera with no spread inside a side is floored, not divided by."""
+
+    footage = FootageVariation()
+    ids = [f"episode_{n}" for n in range(10)]
+    for number, episode_id in enumerate(ids):
+        level = 0.2 if number < 5 else 0.6
+        footage.add(episode_id, CAMERA, numpy.full(3 * 256, level, dtype=numpy.float32))
+
+    [change] = find_viewpoint_changes(footage, ids)
+
+    assert change.before == ids[:5]
+    assert math.isfinite(change.score)
+
+
+def test_a_steady_camera_raises_nothing():
+    """A camera that never moves has no change."""
+
+    footage, ids = _viewpoint_world(14, 99)
+
+    assert find_viewpoint_changes(footage, ids) == []
+
+
+def test_a_camera_needs_five_episodes_each_side():
+    """A change after episode 4 of 9 has too few episodes to compare."""
+
+    footage, ids = _viewpoint_world(9, 5)
+
+    assert find_viewpoint_changes(footage, ids) == []
+
+
+def test_an_episode_without_a_picture_is_skipped():
+    """The episode with no vector is on neither side."""
+
+    footage, ids = _viewpoint_world(14, 7, missing=frozenset({3}))
+
+    [change] = find_viewpoint_changes(footage, ids)
+
+    assert "episode_3" not in change.before
+    assert change.after == ids[7:]
+
+
+def test_a_large_camera_is_split_coarse_then_fine():
+    """With 450 episodes the coarse pass skips even splits; the fine pass finds 300."""
+
+    footage, ids = _viewpoint_world(450, 300)
+
+    [change] = find_viewpoint_changes(footage, ids)
+
+    assert change.after[0] == "episode_300"
 
 
 def test_a_swapped_run_is_reported():

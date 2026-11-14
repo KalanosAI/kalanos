@@ -781,6 +781,9 @@ class DatasetWarning(BaseModel):
         `camera_swap`: two cameras hold each other's footage over runs
         of at least 3 episodes;
         the message names both cameras and the episodes as runs of consecutive numbers.
+        `camera_viewpoint_change`: a camera's view changes between two groups of
+        consecutive episodes; the message names the camera, the episode the change
+        follows, and the episodes on each side as runs of consecutive numbers.
         `episode_count_mismatch`: a source declares an episode count
         that disagrees with its episode metadata or its data;
         the message gives the counts.
@@ -802,6 +805,7 @@ class DatasetWarning(BaseModel):
         "task_instruction_missing",
         "corrupt_footage",
         "camera_swap",
+        "camera_viewpoint_change",
         "episode_count_mismatch",
         "low_bitrate",
         "high_bitrate",
