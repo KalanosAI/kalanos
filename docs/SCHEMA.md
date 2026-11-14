@@ -20,10 +20,11 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | `episodes[].metrics["episode_not_in_metadata"]` | `MetricResult` | 1 when the episode has rows in the data and no row in the episode metadata, else 0, with the files holding its rows as evidence. Such an episode is listed in `episodes` with no streams. `not_applicable` where the format names no data file per episode. |
 | `datasets[].simulator` | `str` or `null` | The simulator a LeRobot dataset card's tags name, lower-cased; `null` when it names none or the dataset has no card. |
 | `streams[].metrics["frozen_frame_pct"].evidence["footage"]` | `"simulated"` | Present only on simulated footage, where the result stays `report_only` with an `ungraded_reason` and raises no finding. |
+| `streams[].metrics["still_scene_pct"]` | `MetricResult` | The share of a camera stream's frames inside stretches of at least 5 s whose picture changes by under 3 grey levels over 1 s, with each stretch's time range in `stretches_s` in its evidence. Measured under a full frame scan only, `not_applicable` otherwise. Report-only. |
 
 `GradedStream.frames.parameters` also gains `footage`, the bundle's `vision.footage` setting.
 
-An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db` or `corrupt_frame_pct`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
+An 8.0.0 report loads unchanged: no channel in it carries `quaternion`, its streams have no `rotation_snr_db`, `corrupt_frame_pct` or `still_scene_pct`, its episodes have no `episode_not_in_metadata`, it holds no `task_instruction_missing`, `episode_count_mismatch`, `corrupt_footage`, `low_bitrate`, `high_bitrate`, `rotation`, `hdr_transfer` or `interlaced` warning, its datasets have no `simulator`, and its `frozen_frame_pct` evidence has no `footage`. Its `video_format.found` has neither `rotation_deg` nor `interlaced`.
 
 ## Changed in 8.0.0
 

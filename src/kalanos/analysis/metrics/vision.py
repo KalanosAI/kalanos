@@ -12,6 +12,8 @@ Sixteen metrics measure camera footage:
   from each one's native luminance, and blocks through the contract route;
 - frozen_frame_pct reads that many windows of about 1 s of consecutive frames,
   and needs an action stream in the same episode;
+- still_scene_pct reads the change of every frame against the frame 1 s earlier,
+  under a full scan only;
 - frame_count_vs_timebase, pts_defect_pct and max_gap_s share one packet probe,
   decoding nothing, under a full scan too;
 - camera_sync_skew_ms compares the cameras of one episode through the same probe;
@@ -53,9 +55,10 @@ import functools
 import hashlib
 import logging
 import math
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import closing
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from typing import TYPE_CHECKING, Any
 
 # External
@@ -119,6 +122,7 @@ if TYPE_CHECKING:
         int,  # VisionSpec.max_pixels
         tuple[tuple[int, int], ...],  # cut_count's [start, end) windows
         bool,  # whether the first frame is read in a window of its own
+        tuple[int, int] | None,  # the (grid step, lag) stillness is read at
     ]
 
     _CutPlanEntry = tuple[
@@ -200,6 +204,25 @@ _FREEZE_NOISE_PCT = 10
 # Freeze differences are scaled to this contrast,
 # so a dim camera's smaller frame changes are not mistaken for repeats.
 _FREEZE_CONTRAST = 255
+# Stillness is read from a small thumbnail of each frame.
+# The thumbnail is the 2x2 mean of the 64x64 one, which averages away sensor noise.
+_STILL_SIZE = 32
+# It is read on a grid of this many frames per second.
+_STILL_GRID_HZ = 2.0
+# Each grid frame is compared with the frame this long before it.
+_STILL_LAG_S = 1.0
+# A small moving arm changes a few cells by tens of levels,
+# so the change is a high percentile of the difference, not its mean.
+_STILL_PCT = 98
+# A reading is smoothed by the median of those within this much grid time
+# either side, when at least this many are finite.
+_STILL_SMOOTH_S = 2.0
+_STILL_SMOOTH_MIN = 3
+# Candidate: 2.0 splits a low-resolution camera's still stretches into pieces
+# (docs/METRICS.md, "Still scenes").
+_STILL_CHANGE = 3.0
+# The shortest stretch reported.
+_STILL_MIN_S = 5.0
 # A step moves if its mean |d action| exceeds this share of the 90th percentile (rda).
 _MOVING_SHARE = 0.05
 _MOVING_PCT = 90
@@ -316,6 +339,10 @@ class _Frames:
         Why the read stopped early, `None` when it ran to the end.
     failure : DecodeFailed or None
         The decode failure that stopped the read, a `ReadInterrupted` included.
+    still_changes : list of tuple of (int, float)
+        Each grid frame's index with its change against the frame
+        `lag` frames earlier, NaN where either is blank;
+        empty unless the read was a full scan.
     """
 
     windows: list[tuple[int, int]]
@@ -343,6 +370,7 @@ class _Frames:
     pooled: "dict[int, np.ndarray]"
     stopped: tuple[Availability, str] | None = None
     failure: DecodeFailed | None = None
+    still_changes: list[tuple[int, float]] = dataclass_field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -396,6 +424,7 @@ class _VisionAccumulator:
         *,
         dark_level: int,
         bright_level: int,
+        still: tuple[int, int] | None = None,
     ) -> None:
         """Start an empty accumulation over `windows`.
 
@@ -411,6 +440,9 @@ class _VisionAccumulator:
             The positions among `sampled` also measured at native resolution.
         dark_level, bright_level : int
             `VisionSpec.dark_level` and `VisionSpec.bright_level`.
+        still : tuple of (int, int) or None
+            `(grid_step, lag)` in frames to read stillness at,
+            or `None` to skip it.
         """
 
         numpy = load_numpy()
@@ -453,6 +485,12 @@ class _VisionAccumulator:
         self.previous_window = -1
         self.previous_spread = 0.0
         self.levels = numpy.arange(256)
+        self.still = still
+        # Only the last `lag + 1` thumbnails are kept: a full scan stays flat in memory.
+        self.still_ring: deque[tuple[int, np.ndarray, float]] | None = (
+            deque(maxlen=still[1] + 1) if still is not None else None
+        )
+        self.still_changes: list[tuple[int, float]] = []
 
     def add(
         self,
@@ -532,6 +570,8 @@ class _VisionAccumulator:
             self.pooled[index] = _thumbnail(frame, _VARIATION_SIZE) / 255
 
         thumbnail = _thumbnail(frame)
+        if self.still is not None:
+            self._add_still(window, index, thumbnail, spread)
         if window == self.previous_window and self.previous is not None:
             difference = float(numpy.abs(thumbnail - self.previous).mean())
             self.steps[window].append(difference)
@@ -543,6 +583,49 @@ class _VisionAccumulator:
         self.previous, self.previous_window = thumbnail, window
         self.previous_spread = spread
         return thumbnail
+
+    def _add_still(
+        self, window: int, index: int, thumbnail: "np.ndarray", spread: float
+    ) -> None:
+        """Compare a grid frame with the frame `lag` frames before it.
+
+        Parameters
+        ----------
+        window : int
+            The frame's window; a new window starts a new comparison,
+            since its first frames have no predecessor to compare with.
+        index : int
+            The frame's index in the stream.
+        thumbnail : numpy.ndarray
+            The frame's `_thumbnail`.
+        spread : float
+            The frame's P95 - P5.
+        """
+
+        numpy = load_numpy()
+        assert numpy is not None
+        assert self.still is not None and self.still_ring is not None
+
+        grid_step, lag = self.still
+        # `previous_window` is reassigned after this call.
+        if window != self.previous_window:
+            self.still_ring.clear()
+        # The 2x2 means, as strided sums: the thumbnail's values are
+        # multiples of 0.25, so the sum is exact in any order.
+        small = (
+            thumbnail[0::2, 0::2]
+            + thumbnail[1::2, 0::2]
+            + thumbnail[0::2, 1::2]
+            + thumbnail[1::2, 1::2]
+        ) * numpy.float32(0.25)
+        self.still_ring.append((index, small, spread))
+        if index % grid_step or self.still_ring[0][0] != index - lag:
+            return
+        _then_index, then, then_spread = self.still_ring[0]
+        if min(spread, then_spread) < _BLANK_SPREAD:
+            self.still_changes.append((index, float("nan")))
+            return
+        self.still_changes.append((index, _still_change(small - then)))
 
     def finish(
         self,
@@ -617,6 +700,7 @@ class _VisionAccumulator:
             pooled=self.pooled,
             stopped=stopped,
             failure=failure,
+            still_changes=self.still_changes,
             **self.kept,
         )
 
@@ -700,6 +784,62 @@ def _frame_rate(ctx: StreamContext) -> float | None:
         return None
     gap = float(numpy.median(numpy.diff(timestamps)))
     return 1 / gap if gap > 0 else None
+
+
+def _still_plan(ctx: StreamContext) -> tuple[int, int] | None:
+    """Where stillness is read, as `(grid_step, lag)` in frames.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream.
+
+    Returns
+    -------
+    tuple of (int, int) or None
+        `None` unless the read is a full scan of a stream with a frame rate.
+    """
+
+    fps = _frame_rate(ctx)
+    if not ctx.full_frame_scan or fps is None:
+        return None
+    return max(1, round(fps / _STILL_GRID_HZ)), max(1, round(fps * _STILL_LAG_S))
+
+
+def _still_change(difference: "np.ndarray") -> float:
+    """The change between two thumbnails, once their common shift is removed.
+
+    Equal to the `_STILL_PCT`th percentile of `|difference - median(difference)|`,
+    taken with two partial sorts instead of `numpy.median` and `numpy.percentile`,
+    which cost several times as much on a thumbnail this small.
+
+    Parameters
+    ----------
+    difference : numpy.ndarray
+        The `(_STILL_SIZE, _STILL_SIZE)` float32 difference of two thumbnails.
+
+    Returns
+    -------
+    float
+        The change, in gray levels.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    flat = difference.ravel()
+    middle = flat.size // 2
+    low, high = numpy.partition(flat, [middle - 1, middle])[middle - 1 : middle + 1]
+    # The median of an even count, the mean of its two middle values.
+    centred = numpy.abs(flat - (low + high) / 2)
+    # Linear interpolation between the neighbouring ranks, as `numpy.percentile`.
+    rank = (flat.size - 1) * (_STILL_PCT / 100)
+    below = int(rank)
+    weight = rank - below
+    low, high = numpy.partition(centred, [below, below + 1])[below : below + 2]
+    if weight < 0.5:
+        return float(low + (high - low) * weight)
+    return float(high - (high - low) * (1 - weight))
 
 
 def _min_run(fps: float) -> int:
@@ -957,6 +1097,7 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
         plan = None
     cut_windows = [] if plan is None or isinstance(plan, MetricResult) else plan.windows
     first = [] if any(start == 0 for start, _end in windows + cut_windows) else [(0, 1)]
+    still = _still_plan(ctx)
     key = (
         id(payload),
         tuple(windows),
@@ -969,6 +1110,7 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
         spec.max_pixels,
         tuple(cut_windows),
         bool(first),
+        still,
     )
     if key in _CACHE and _CACHE[key][0] is payload:
         _CACHE.move_to_end(key)
@@ -986,6 +1128,7 @@ def _shared_read(ctx: StreamContext) -> "_Read | MetricResult":
         bright_level=spec.bright_level,
         max_decode_frames=max_decode_frames,
         max_pixels=spec.max_pixels,
+        still=still,
     )
     _CACHE[key] = (payload, result)
     while len(_CACHE) > _CACHE_SIZE:
@@ -1109,6 +1252,7 @@ def _pass(
     bright_level: int,
     max_decode_frames: int | None,
     max_pixels: int,
+    still: tuple[int, int] | None = None,
 ) -> _Read:
     """Decode `ranges` of `payload` once, handing each frame to the consumers it serves.
 
@@ -1145,6 +1289,8 @@ def _pass(
         The most frames the whole pass may decode.
     max_pixels : int
         The most pixels a summary frame may hold.
+    still : tuple of (int, int) or None
+        `(grid_step, lag)` in frames to read stillness at, `None` to skip it.
 
     Returns
     -------
@@ -1167,6 +1313,7 @@ def _pass(
         summary,
         dark_level=dark_level,
         bright_level=bright_level,
+        still=still,
     )
     cut: dict[int, np.ndarray] = {}
     vision_numbering = _Numbering(windows, ranges)
@@ -1234,6 +1381,7 @@ def _pass(
                 bright_level=bright_level,
                 max_decode_frames=max_decode_frames,
                 max_pixels=max_pixels,
+                still=still,
             )
         # cut_count's own read takes no frame at native resolution,
         # so it never meets a frame over max_pixels.
@@ -1258,6 +1406,7 @@ def _pass(
             bright_level=bright_level,
             max_decode_frames=max_decode_frames,
             max_pixels=max_pixels,
+            still=still,
         )
     if cut_numbering.irregular:
         cut, cut_failure = _window_thumbnails(payload, cut_windows)
@@ -1357,6 +1506,7 @@ def _read(
     bright_level: int,
     max_decode_frames: int | None,
     max_pixels: int,
+    still: tuple[int, int] | None = None,
 ) -> "_Frames | MetricResult":
     """Decode `windows` of `payload` for the vision metrics alone.
 
@@ -1368,6 +1518,7 @@ def _read(
     and `error` for a failure outside the file, such as on the network.
     A failure before any frame decoded, such as a file that cannot be opened,
     is `not_applicable`.
+    `still` is `(grid_step, lag)` in frames to read stillness at, `None` to skip it.
     """
 
     accumulator = _VisionAccumulator(
@@ -1377,6 +1528,7 @@ def _read(
         summary,
         dark_level=dark_level,
         bright_level=bright_level,
+        still=still,
     )
     stopped: tuple[Availability, str] | None = None
     failure: DecodeFailed | None = None
@@ -2950,6 +3102,141 @@ def frozen_frame_pct(ctx: StreamContext) -> MetricResult:
         support=support_for(
             list(range(n)), [(index, index + run) for index, run in counted]
         ),
+    )
+
+
+@metric(level=Level.STREAM, family=Family.VISION, label="still scene")
+def still_scene_pct(ctx: StreamContext) -> MetricResult:
+    """Share of frames inside stretches where the camera's picture does not move.
+
+    Every second frame is compared with the frame 1 s before it,
+    on 32x32 gray thumbnails, and the change is the 98th percentile of the
+    difference once its median is removed.
+    Each reading is then the median of those within 2 s either side.
+    A stretch is a run of frames whose readings stay under 3 grey levels
+    for at least 5 s, and sensor noise in a still scene reads under that.
+    A reading with a blank frame is never still.
+    The footage setting is not read: a still simulated scene reads 0,
+    and is as much a stretch as a still real one.
+    The metric needs every frame, so it is `not_applicable` outside a full scan.
+
+    Parameters
+    ----------
+    ctx : StreamContext
+        The camera stream to measure.
+
+    Returns
+    -------
+    MetricResult
+        `report_only` in percent, with each stretch's time range in evidence
+        and as a support interval, or `not_applicable` outside a full scan,
+        without a frame rate, or when the stream is shorter than a stretch.
+    """
+
+    # Step 1: the stream must be a camera read in full, long enough to hold a stretch.
+    payload = _readable(ctx)
+    if isinstance(payload, MetricResult):
+        return payload
+    if not ctx.full_frame_scan:
+        return not_applicable("needs every frame; grade with --full-frame-scan")
+    plan = _still_plan(ctx)
+    if plan is None:
+        return not_applicable("the stream has no frame rate to measure stillness in")
+    grid_step, lag = plan
+    numpy = load_numpy()
+    assert numpy is not None
+    timestamps = ctx.timestamps.to_numpy()
+    n = len(timestamps)
+    if timestamps[-1] - timestamps[0] < _STILL_MIN_S:
+        return not_applicable(
+            f"shorter than {_STILL_MIN_S:g} s, too short to hold a still stretch"
+        )
+
+    # Step 2: the readings from the shared full read.
+    frames = _frames(ctx)
+    if isinstance(frames, MetricResult):
+        return frames
+    if frames.stopped is not None:
+        return _stopped_result(frames.stopped)
+    if frames.n_read > n:
+        return not_applicable(
+            f"the footage decodes to {frames.n_read} frames"
+            f" but the stream has {n} timestamps"
+        )
+    if not frames.still_changes:
+        return not_applicable("too few frames decoded to compare over 1 s")
+
+    # Step 3: smooth each reading over +-2 s, and call it still under the threshold.
+    positions = numpy.array([index for index, _change in frames.still_changes])
+    changes = numpy.array([change for _index, change in frames.still_changes])
+    times = timestamps[positions]
+    lows = numpy.searchsorted(times, times - _STILL_SMOOTH_S, side="left")
+    highs = numpy.searchsorted(times, times + _STILL_SMOOTH_S, side="right")
+    still = numpy.zeros(len(changes), dtype=bool)
+    for k in range(len(changes)):
+        if not numpy.isfinite(changes[k]):
+            continue
+        near = changes[lows[k] : highs[k]]
+        near = near[numpy.isfinite(near)]
+        still[k] = near.size >= _STILL_SMOOTH_MIN and numpy.median(near) < _STILL_CHANGE
+
+    # Step 4: a run of still grid frames, with the second each reading looks back over,
+    # is a stretch when it lasts long enough.
+    stretches: list[tuple[int, int]] = []
+    k = 0
+    while k < len(still):
+        if not still[k]:
+            k += 1
+            continue
+        end = k
+        while (
+            end + 1 < len(still)
+            and still[end + 1]
+            and positions[end + 1] - positions[end] == grid_step
+        ):
+            end += 1
+        first, last = int(positions[k]) - lag, int(positions[end])
+        # Neighbouring runs can look back over the same frames.
+        if stretches:
+            first = max(first, stretches[-1][1])
+        if timestamps[last] - timestamps[first] >= _STILL_MIN_S:
+            stretches.append((first, last + 1))
+        k = end + 1
+
+    covered = sum(end - start for start, end in stretches)
+    longest = round(
+        max(
+            (
+                float(timestamps[end - 1] - timestamps[start])
+                for start, end in stretches
+            ),
+            default=0.0,
+        ),
+        3,
+    )
+    return MetricResult(
+        value=float(100 * covered / n),
+        unit="%",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "n_frames": n,
+            "grid_step": grid_step,
+            "lag": lag,
+            "threshold": _STILL_CHANGE,
+            "min_stretch_s": _STILL_MIN_S,
+            "n_readings": len(changes),
+            "n_blank_readings": int(numpy.isnan(changes).sum()),
+            "stretches_s": [
+                [
+                    round(float(timestamps[start]), 3),
+                    round(float(timestamps[end - 1]), 3),
+                ]
+                for start, end in stretches
+            ],
+            "longest_s": longest,
+            "first_stretch_index": stretches[0][0] if stretches else None,
+        },
+        support=support_for(list(range(n)), stretches),
     )
 
 
