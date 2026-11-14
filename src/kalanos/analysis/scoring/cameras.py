@@ -17,6 +17,7 @@ to say how much its footage changes between episodes.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import itertools
 import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from kalanos.analysis.localization import support_for
 from kalanos.analysis.metrics.vision import (
     _RELATIVE_FLOOR,
     _SHIFT_FLOOR,
+    _VARIATION_SIZE,
     is_camera_footage,
 )
 from kalanos.analysis.models.coverage import Availability
@@ -81,6 +83,16 @@ _LOG_FLOOR = 1e-6
 # Garbage on a simulated camera read at least 32.8 times that median,
 # and the clean frames of the calibration datasets at most 4.8 times it.
 _RELATIVE_FACTOR = 10.0
+# Candidate: an episode is a swap when its score against the pair is at most this.
+# On aloha (6 camera pairs) and liftplace (1 pair), injected runs of 1 to 5 episodes
+# scored at most 0.78, and clean episodes at least 1.20.
+_SWAP_SCORE = 0.8
+# Candidate: a pair is compared only when its median score is at least this.
+# Real pairs had medians of 2.38 to 4.59; emulated stereo pairs of static views
+# 1.05 to 1.90, which this gate leaves out.
+_SWAP_SEPARATION = 2.0
+# Candidate: consecutive flagged episodes needed to report a swap.
+_SWAP_RUN = 3
 
 # TODO: an absolute blur floor is not set;
 # placing one needs data from more than one dataset.
@@ -137,12 +149,17 @@ class _Running:
 class FootageVariation:
     """How much each camera's footage changes between episodes, gathered while grading.
 
-    It keeps no episode's frames: per camera and vector length,
-    only the running mean and sum of squared deviations of each column.
+    Per camera and vector length it keeps the running mean and sum of squared deviations
+    of each column, and per episode one mean pooled frame,
+    256 float32 values (1 KiB) per camera per episode.
+    It keeps no episode's individual frames.
     """
 
     _seen: set[tuple[str, str]] = field(default_factory=set, init=False)
     _groups: "dict[str, dict[int, _Running]]" = field(default_factory=dict, init=False)
+    _signatures: "dict[str, dict[str, np.ndarray]]" = field(
+        default_factory=dict, init=False
+    )
 
     def add(self, episode_id: str, camera: str, vector: "np.ndarray | None") -> None:
         """Add one episode's pooled frames of one camera.
@@ -169,6 +186,14 @@ class FootageVariation:
         numpy = load_numpy()
         assert numpy is not None
 
+        block = _VARIATION_SIZE**2
+        if len(vector) % block == 0:
+            self._signatures.setdefault(camera, {})[episode_id] = (
+                vector.reshape(-1, block)
+                .mean(axis=0, dtype=numpy.float64)
+                .astype(numpy.float32)
+            )
+
         groups = self._groups.setdefault(camera, {})
         if len(vector) not in groups:
             groups[len(vector)] = _Running(
@@ -177,6 +202,30 @@ class FootageVariation:
                 m2=numpy.zeros(len(vector), dtype=numpy.float64),
             )
         groups[len(vector)].add(vector.astype(numpy.float64))
+
+    def appearance(self, camera: str) -> "dict[str, np.ndarray]":
+        """Each episode's mean pooled frame of one camera.
+
+        Parameters
+        ----------
+        camera : str
+            The camera, as `camera_key` names it.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            The mean of the episode's sampled frames,
+            one float32 value per pooled pixel, by episode id in the order added.
+            Empty for an unknown camera.
+            An episode whose read missed a frame has none.
+        """
+
+        return dict(self._signatures.get(camera, {}))
+
+    def cameras(self) -> list[str]:
+        """The cameras with at least one episode signature, in first-seen order."""
+
+        return [camera for camera, found in self._signatures.items() if found]
 
     def result(self, camera: str) -> Variation:
         """The camera's visual variation, over its largest group of episodes.
@@ -209,6 +258,22 @@ class FootageVariation:
             )
         mean_square = 2 * float(best.m2.sum()) / ((best.n - 1) * len(best.mean))
         return Variation(value=round_nrmse(math.sqrt(mean_square)), episodes=best.n)
+
+
+@dataclass(frozen=True)
+class CameraSwap:
+    """Two cameras that hold each other's footage over runs of episodes.
+
+    Attributes
+    ----------
+    cameras : tuple[str, str]
+        The two camera keys.
+    episodes : list[str]
+        The flagged episodes of every reported run of the pair, in report order.
+    """
+
+    cameras: tuple[str, str]
+    episodes: list[str]
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -730,3 +795,159 @@ def find_shared_footage(
                 )
             )
     return groups, findings
+
+
+def _swap_scores(a: "np.ndarray", b: "np.ndarray") -> "np.ndarray":
+    """How much each aligned episode looks like its own camera rather than the other.
+
+    A score at or below 1 reads closer to the other camera's usual picture.
+    Each camera's usual picture is its per-pixel median over the episodes.
+    The medians are taken twice: the second time from the episodes
+    the first pass found unswapped, with the swapped ones exchanged back.
+    One pass lets a long swapped run pull the median toward the other camera.
+
+    Parameters
+    ----------
+    a, b : numpy.ndarray
+        Signatures of the two cameras, one row per shared episode.
+
+    Returns
+    -------
+    numpy.ndarray
+        The second pass's score of each row,
+        the larger of its two cameras' distance ratios.
+    """
+
+    numpy = load_numpy()
+    assert numpy is not None
+
+    a = a.astype(numpy.float64)
+    b = b.astype(numpy.float64)
+
+    def rms(x: "np.ndarray", ref: "np.ndarray") -> "np.ndarray":
+        return numpy.maximum(numpy.sqrt(((x - ref) ** 2).mean(axis=1)), 1e-9)
+
+    def score(ref_a: "np.ndarray", ref_b: "np.ndarray") -> "np.ndarray":
+        return numpy.maximum(
+            rms(a, ref_b) / rms(a, ref_a), rms(b, ref_a) / rms(b, ref_b)
+        )
+
+    first = score(numpy.median(a, axis=0), numpy.median(b, axis=0))
+    swapped = first < 1
+    return score(
+        numpy.median(numpy.where(swapped[:, None], b, a), axis=0),
+        numpy.median(numpy.where(swapped[:, None], a, b), axis=0),
+    )
+
+
+def find_camera_swaps(
+    samples: Iterable[CameraSample],
+    footage: FootageVariation,
+    episode_ids: Sequence[str],
+) -> tuple[list[CameraSwap], list[Finding]]:
+    """Find cameras that hold each other's footage over a run of episodes.
+
+    For each pair of cameras, the episodes both have a signature for
+    are scored by `_swap_scores`.
+    A pair is compared only with at least `_MIN_EPISODES` such episodes
+    and a median score of at least `_SWAP_SEPARATION`,
+    which leaves out cameras that look alike in most episodes, such as a stereo pair.
+    An episode scoring at most `_SWAP_SCORE` is flagged,
+    and `_SWAP_RUN` or more consecutive flagged episodes,
+    in `episode_ids` order, are reported.
+    An episode missing a signature for either camera ends a run.
+
+    The thresholds are candidates, not calibrated.
+    A swap covering more than about a quarter of the pair's episodes
+    can pull the median pictures toward the other camera and be missed.
+    The findings are report-only, one per swapped camera stream in each episode.
+
+    Parameters
+    ----------
+    samples : Iterable[CameraSample]
+        Every episode's `camera_samples`.
+    footage : FootageVariation
+        The signatures gathered while grading.
+    episode_ids : Sequence[str]
+        The episode ids in report order.
+
+    Returns
+    -------
+    tuple[list[CameraSwap], list[Finding]]
+        One `CameraSwap` per pair with a reported run,
+        and a `vision.swapped_vs_camera` finding for each of its two streams
+        in each flagged episode.
+    """
+
+    # Signatures are kept only when numpy is installed, so a base install stops here.
+    if not footage.cameras():
+        return [], []
+    numpy = load_numpy()
+    assert numpy is not None
+
+    by_key: dict[tuple[str, str], CameraSample] = {}
+    for sample in samples:
+        by_key.setdefault((sample.episode_id, sample.camera), sample)
+
+    swaps: list[CameraSwap] = []
+    findings: list[Finding] = []
+    emitted: set[tuple[str, str]] = set()
+    for first, second in itertools.combinations(footage.cameras(), 2):
+        sig_a = footage.appearance(first)
+        sig_b = footage.appearance(second)
+        shared = [e for e in episode_ids if e in sig_a and e in sig_b]
+        if len(shared) < _MIN_EPISODES:
+            continue
+        scores = _swap_scores(
+            numpy.stack([sig_a[e] for e in shared]),
+            numpy.stack([sig_b[e] for e in shared]),
+        )
+        pair_median = float(numpy.median(scores))
+        if pair_median < _SWAP_SEPARATION:
+            continue
+        score_of = dict(zip(shared, (float(x) for x in scores), strict=True))
+
+        runs: list[list[str]] = []
+        current: list[str] = []
+        for episode_id in episode_ids:
+            if score_of.get(episode_id, math.inf) <= _SWAP_SCORE:
+                current.append(episode_id)
+                continue
+            if len(current) >= _SWAP_RUN:
+                runs.append(current)
+            current = []
+        if len(current) >= _SWAP_RUN:
+            runs.append(current)
+        if not runs:
+            continue
+
+        for run in runs:
+            for episode_id in run:
+                for key, other in ((first, second), (second, first)):
+                    sample = by_key.get((episode_id, key))
+                    # A camera in two swapped pairs keeps one finding per episode.
+                    if sample is None or (episode_id, key) in emitted:
+                        continue
+                    emitted.add((episode_id, key))
+                    finding = _finding(
+                        sample,
+                        key,
+                        metric_id="vision.swapped_vs_camera",
+                        value=score_of[episode_id],
+                        unit="ratio",
+                        evidence={
+                            "swapped_with": other,
+                            "run": [run[0], run[-1]],
+                            "run_length": len(run),
+                            "pair_median": pair_median,
+                            "threshold": _SWAP_SCORE,
+                            "separation": _SWAP_SEPARATION,
+                        },
+                        grades_vision=False,
+                        evidence_strength="statistical",
+                    )
+                    findings.append(finding)
+        swaps.append(
+            CameraSwap(cameras=(first, second), episodes=[e for r in runs for e in r])
+        )
+    return swaps, findings

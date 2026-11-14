@@ -28,13 +28,17 @@ from kalanos.analysis.models.report import (
     Report,
     round_nrmse,
 )
-from kalanos.analysis.models.scoring import Finding, ScoreResult
+from kalanos.analysis.models.scoring import Finding, ScoreResult, Severity
 from kalanos.analysis.reporting.assemble import ReportBuilder
 from kalanos.analysis.scoring.cameras import (
+    _SWAP_SCORE,
+    _SWAP_SEPARATION,
     _TOO_FEW_FOOTAGE,
     FootageVariation,
+    _swap_scores,
     camera_samples,
     compare_cameras,
+    find_camera_swaps,
     find_shared_footage,
 )
 from kalanos.assets.policy import load_default_policy
@@ -209,6 +213,67 @@ def _footage(*groups: list) -> FootageVariation:
     for index, vector in enumerate(vectors):
         footage.add(f"episode_{index}", CAMERA, vector)
     return footage
+
+
+LEFT = "observation.images.cam_high"
+RIGHT = "observation.images.cam_left_wrist"
+
+
+def _pair_world(
+    count: int,
+    swapped: set[int],
+    *,
+    stereo: bool = False,
+    missing: frozenset[int] = frozenset(),
+) -> tuple[list[GradedEpisode], FootageVariation, list[str]]:
+    """Two cameras over `count` episodes, with the cameras exchanged in `swapped`.
+
+    Each camera is a fixed 16x16 image seen through 3 frames of small noise.
+    With `stereo`, the second camera is the first one shifted by a column,
+    a smooth picture seen through more noise, so the two views stay alike.
+    The first camera has no vector in the `missing` episodes.
+    """
+
+    rng = numpy.random.default_rng(42)
+    noise = 0.02
+    if stereo:
+        axis = numpy.linspace(0, 1, 16)
+        base_a = numpy.outer(axis, axis)
+        base_b = base_a[:, [0, *range(15)]]
+        noise = 0.08
+    else:
+        base_a, base_b = rng.random((16, 16)), rng.random((16, 16))
+
+    def vector(base):
+        frames = base.reshape(1, -1) + noise * rng.standard_normal((3, 256))
+        return frames.astype(numpy.float32).reshape(-1)
+
+    footage = FootageVariation()
+    episodes = []
+    for index in range(count):
+        base_left, base_right = (
+            (base_b, base_a) if index in swapped else (base_a, base_b)
+        )
+        left = None if index in missing else vector(base_left)
+        footage.add(f"episode_{index}", LEFT, left)
+        footage.add(f"episode_{index}", RIGHT, vector(base_right))
+        episodes.append(
+            _episode(
+                index,
+                _stream(1.0, 1.0, source_field=LEFT),
+                _stream(1.0, 1.0, source_field=RIGHT),
+            )
+        )
+    return episodes, footage, [e.id for e in episodes]
+
+
+def _swaps(world):
+    """What `find_camera_swaps` reports for a `_pair_world`."""
+
+    episodes, footage, ids = world
+    return find_camera_swaps(
+        [sample for e in episodes for sample in camera_samples(e)], footage, ids
+    )
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -815,3 +880,91 @@ def test_too_few_episodes_skip_the_relative_rule():
     _report, findings = _corrupt_findings(streams)
 
     assert findings == []
+
+
+def test_footage_keeps_each_episodes_mean_frame():
+    """`appearance` holds the per-column mean over an episode's frames."""
+
+    frames = _vectors(3, 256)
+    footage = FootageVariation()
+    footage.add("a", CAMERA, numpy.concatenate(frames))
+    footage.add("b", CAMERA, None)
+    footage.add("a", CAMERA, numpy.concatenate(_vectors(3, 256, seed=7)))
+
+    assert list(footage.appearance(CAMERA)) == ["a"]
+    assert numpy.allclose(
+        footage.appearance(CAMERA)["a"], numpy.mean(frames, axis=0), atol=1e-6
+    )
+    assert footage.appearance("unknown") == {}
+    assert footage.cameras() == [CAMERA]
+
+
+def test_without_numpy_no_swap_is_looked_for(monkeypatch):
+    """A base install keeps no signatures, so the pass reports nothing."""
+
+    from kalanos.analysis.scoring import cameras
+
+    monkeypatch.setattr(cameras, "load_numpy", lambda: None)
+
+    assert find_camera_swaps([], FootageVariation(), ["episode_0"]) == ([], [])
+
+
+def test_a_swapped_run_is_reported():
+    """Cameras exchanged in three consecutive episodes are named with that run."""
+
+    swaps, findings = _swaps(_pair_world(12, {5, 6, 7}))
+
+    [swap] = swaps
+    assert swap.cameras == (LEFT, RIGHT)
+    assert swap.episodes == ["episode_5", "episode_6", "episode_7"]
+    assert len(findings) == 6
+    for finding in findings:
+        assert finding.metric_id == "vision.swapped_vs_camera"
+        assert finding.consequence == Consequence.REPORT_ONLY
+        assert finding.severity == Severity.WARNING
+        other = {LEFT: RIGHT, RIGHT: LEFT}
+        assert finding.evidence["swapped_with"] == other[finding.evidence["camera"]]
+        assert finding.evidence["run"] == ["episode_5", "episode_7"]
+
+
+def test_a_swap_shorter_than_three_episodes_is_not_reported():
+    """Two swapped episodes are under the minimum run."""
+
+    assert _swaps(_pair_world(12, {5, 6})) == ([], [])
+
+
+def test_a_stereo_pair_is_not_reported():
+    """Two views of one scene fall under the separation gate.
+
+    The swapped episodes score under `_SWAP_SCORE` here,
+    so only the gate keeps them out.
+    """
+
+    episodes, footage, ids = _pair_world(12, {5, 6, 7}, stereo=True)
+    a = numpy.stack(list(footage.appearance(LEFT).values()))
+    b = numpy.stack(list(footage.appearance(RIGHT).values()))
+    scores = _swap_scores(a, b)
+
+    assert all(scores[5:8] <= _SWAP_SCORE)
+    assert numpy.median(scores) < _SWAP_SEPARATION
+    assert _swaps((episodes, footage, ids)) == ([], [])
+
+
+def test_clean_cameras_raise_nothing():
+    """Cameras that never swap raise nothing."""
+
+    assert _swaps(_pair_world(12, set())) == ([], [])
+
+
+def test_too_few_shared_episodes_are_not_compared():
+    """Four shared episodes are under `_MIN_EPISODES`, even all swapped."""
+
+    assert _swaps(_pair_world(4, {0, 1, 2, 3})) == ([], [])
+
+
+def test_a_missing_signature_breaks_the_run():
+    """An episode without a signature ends a run, so the two halves do not join."""
+
+    world = _pair_world(12, {4, 5, 6, 7, 8}, missing=frozenset({6}))
+
+    assert _swaps(world) == ([], [])

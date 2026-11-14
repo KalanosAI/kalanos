@@ -94,10 +94,12 @@ from kalanos.analysis.models.summaries import EpisodeSummary
 from kalanos.analysis.reporting.card.sections import CardRow
 from kalanos.analysis.reporting.stream import StreamedReport
 from kalanos.analysis.scoring.cameras import (
+    CameraSwap,
     FootageVariation,
     camera_key,
     camera_samples,
     compare_cameras,
+    find_camera_swaps,
     find_shared_footage,
     regrade_corrupt_footage,
 )
@@ -732,6 +734,47 @@ def _corrupt_footage_warning(
     )
 
 
+def _camera_swap_warnings(
+    swaps: Sequence[CameraSwap], n_episodes: int
+) -> list[DatasetWarning]:
+    """The warnings naming each camera pair that holds each other's footage.
+
+    Parameters
+    ----------
+    swaps : Sequence[CameraSwap]
+        The swaps `find_camera_swaps` reported.
+    n_episodes : int
+        How many episodes were graded.
+
+    Returns
+    -------
+    list[DatasetWarning]
+        One warning per swap, with the count and up to `_CORRUPT_RUNS_SHOWN` runs
+        of episode numbers.
+    """
+
+    warnings: list[DatasetWarning] = []
+    for swap in swaps:
+        runs = _episode_runs(swap.episodes)
+        named = ", ".join(runs[:_CORRUPT_RUNS_SHOWN])
+        rest = len(runs) - _CORRUPT_RUNS_SHOWN
+        if rest > 0:
+            named += f", and {rest} more runs"
+        noun = "run" if len(runs) == 1 else "runs"
+        first, second = swap.cameras
+        warnings.append(
+            DatasetWarning(
+                code="camera_swap",
+                message=(
+                    f"{first} and {second} hold each other's footage in"
+                    f" {len(swap.episodes)} of {n_episodes} episodes,"
+                    f" in {len(runs)} {noun}: {named}"
+                ),
+            )
+        )
+    return warnings
+
+
 def _merge_shared_timelines(
     findings: list[Finding], streams: Sequence[Stream]
 ) -> list[Finding]:
@@ -1114,6 +1157,12 @@ class ReportBuilder:
             grades_vision=vision_graded,
         )
         findings.extend(shared_findings)
+        swaps, swap_findings = find_camera_swaps(
+            camera_sample_list,
+            footage,
+            [s.id for s in summaries],
+        )
+        findings.extend(swap_findings)
         duplicates, duplicate_findings, near_duplicates, motion_variation = (
             find_duplicate_episodes([s.id for s in summaries], fingerprints)
         )
@@ -1124,6 +1173,7 @@ class ReportBuilder:
                 near_duplicate_warning(near_duplicates, n_episodes),
                 _task_instruction_warning(summaries),
                 _corrupt_footage_warning(findings, n_episodes),
+                *_camera_swap_warnings(swaps, n_episodes),
                 *container_hints(
                     sample
                     for summary in summaries

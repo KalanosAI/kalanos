@@ -778,6 +778,9 @@ class DatasetWarning(BaseModel):
         `corrupt_footage`: some episodes are blocked because a camera stream
         is blank or decoder noise in enough of its frames;
         the message gives the count and the episodes as runs of consecutive numbers.
+        `camera_swap`: two cameras hold each other's footage over runs
+        of at least 3 episodes;
+        the message names both cameras and the episodes as runs of consecutive numbers.
         `episode_count_mismatch`: a source declares an episode count
         that disagrees with its episode metadata or its data;
         the message gives the counts.
@@ -798,6 +801,7 @@ class DatasetWarning(BaseModel):
         "near_duplicates_saturated",
         "task_instruction_missing",
         "corrupt_footage",
+        "camera_swap",
         "episode_count_mismatch",
         "low_bitrate",
         "high_bitrate",

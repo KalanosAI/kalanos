@@ -65,6 +65,7 @@ from kalanos.analysis.reporting import assemble
 from kalanos.analysis.reporting.assemble import (
     _CORRUPT_RUNS_SHOWN,
     ReportBuilder,
+    _camera_swap_warnings,
     _corrupt_footage_warning,
     _episode_runs,
     _merge_shared_timelines,
@@ -83,6 +84,7 @@ from kalanos.analysis.reporting.render import (
     render_yaml,
 )
 from kalanos.analysis.reporting.write import write_report
+from kalanos.analysis.scoring.cameras import CameraSwap
 from kalanos.analysis.scoring.gate import worse
 from kalanos.analysis.scoring.score import (
     grade_for,
@@ -1869,6 +1871,34 @@ def test_corrupt_footage_warning_caps_the_runs_it_lists():
     assert warning.message.startswith(
         f"{_CORRUPT_RUNS_SHOWN + 3} of 100 episodes are blocked"
     )
+    assert warning.message.endswith(", and 3 more runs")
+
+
+def test_camera_swap_warning_names_both_cameras_and_the_runs():
+    """One warning per swap names the cameras and the runs of episode numbers."""
+
+    ids = [f"episode_{n:06d}" for n in (5, 6, 7, 20, 21, 22)]
+
+    [warning] = _camera_swap_warnings(
+        [CameraSwap(cameras=("top", "wrist"), episodes=ids)], 40
+    )
+
+    assert warning.code == "camera_swap"
+    assert warning.message == (
+        "top and wrist hold each other's footage in 6 of 40 episodes,"
+        " in 2 runs: 5-7, 20-22"
+    )
+
+
+def test_camera_swap_warning_caps_the_runs_it_lists():
+    """Past `_CORRUPT_RUNS_SHOWN` runs, the message counts the rest."""
+
+    ids = [f"episode_{n:06d}" for n in range(0, 2 * (_CORRUPT_RUNS_SHOWN + 3), 2)]
+
+    [warning] = _camera_swap_warnings(
+        [CameraSwap(cameras=("a", "b"), episodes=ids)], 100
+    )
+
     assert warning.message.endswith(", and 3 more runs")
 
 
