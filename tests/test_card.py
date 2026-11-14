@@ -624,6 +624,27 @@ def test_an_episode_count_warning_gets_an_episode_count_row(csv_report):
     assert not any(row.strip().startswith("episode count") for row in unwarned)
 
 
+def test_a_camera_swap_warning_gets_a_camera_swap_row(csv_report):
+    """Verify two cameras holding each other's footage render as a coverage row."""
+
+    message = "a and b hold each other's footage in 3 of 9 episodes, in 1 run: 5-7"
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [DatasetWarning(code="camera_swap", message=message)]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("camera swap").strip()
+        for row in rows
+        if row.strip().startswith("camera swap")
+    ] == [message]
+    assert not any(row.strip().startswith("camera swap") for row in unwarned)
+
+
 def test_a_container_hint_warning_gets_a_row_of_its_kind(csv_report):
     """Verify a `rotation` warning renders as a `rotation` coverage row."""
 
