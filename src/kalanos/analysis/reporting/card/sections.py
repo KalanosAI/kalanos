@@ -640,6 +640,8 @@ def unmapped_types(episodes: Iterable[GradedEpisode]) -> frozenset[str]:
 def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
     """The episodes that did not pass, worst first, and why each did not.
 
+    An unknown row also counts the review findings its status outranks.
+
     Parameters
     ----------
     report : Report
@@ -677,6 +679,9 @@ def needs_attention(report: Report, ctx: CardContext) -> list[Text]:
         reasons = _distinct(
             [_reason_label(r) for r in eligibility.reasons if r.status is status]
         )
+        count = eligibility.review_findings
+        if status is EligibilityStatus.UNKNOWN and count > 0:
+            reasons.append(f"+{count} review finding{'' if count == 1 else 's'}")
         role = "bad" if status is EligibilityStatus.BLOCKED else "warn"
         right = Text()
         right.append(f"{status.value:<7}", style=ctx.theme.style(role))

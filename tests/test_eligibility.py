@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import json
 import shutil
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from kalanos.analysis.models.report import (
     check_agreement,
 )
 from kalanos.analysis.models.scoring import MetricRollup, ScoreResult
+from kalanos.analysis.reporting.render import render_json
 from kalanos.analysis.scoring.eligibility import (
     counts_of,
     readiness_of,
@@ -52,7 +54,7 @@ from kalanos.api import grade
 from kalanos.cli import app
 
 # Local
-from helpers import no_gate_policy
+from helpers import CSV_FIXTURE, no_gate_policy
 from helpers import write_spiked_arm as _write_arm
 
 
@@ -100,6 +102,28 @@ def mixed_report():
             episode(signal(), identifier="b"),
             two_channels(missing=True),
         ]
+    )
+
+
+def _review_finding(ident: str) -> EligibilityReason:
+    return EligibilityReason(
+        id=ident,
+        kind=ReasonKind.FINDING,
+        status=EligibilityStatus.REVIEW,
+        consequence=Consequence.REVIEW,
+    )
+
+
+def _unknown_with_two_review_findings() -> EpisodeEligibility:
+    return EpisodeEligibility(
+        status=EligibilityStatus.UNKNOWN,
+        scope_id="s",
+        policy_id="p",
+        reasons=[
+            _review_finding("a"),
+            _review_finding("b"),
+            _reason(EligibilityStatus.UNKNOWN, "capability"),
+        ],
     )
 
 
@@ -155,6 +179,44 @@ def test_a_status_its_reasons_do_not_justify_is_rejected():
         EpisodeEligibility(
             status=EligibilityStatus.BLOCKED, scope_id="s", policy_id="p"
         )
+
+
+def test_review_findings_counts_review_findings_an_unknown_status_outranks():
+    """Review findings stay counted under `unknown`; a block does not add to them."""
+
+    unknown = _unknown_with_two_review_findings()
+    assert unknown.review_findings == 2
+
+    blocked = EpisodeEligibility(
+        status=EligibilityStatus.BLOCKED,
+        scope_id="s",
+        policy_id="p",
+        reasons=[*unknown.reasons, _reason(EligibilityStatus.BLOCKED, "c")],
+    )
+    assert blocked.review_findings == 2
+
+
+def test_review_findings_is_written_and_read_back():
+    """The count is written, and an 8.1.0 decision without it reads the same count."""
+
+    dumped = _unknown_with_two_review_findings().model_dump(mode="json")
+    assert dumped["review_findings"] == 2
+    assert EpisodeEligibility.model_validate(dumped).review_findings == 2
+
+    del dumped["review_findings"]
+    assert EpisodeEligibility.model_validate(dumped).review_findings == 2
+
+
+def test_a_written_report_carries_review_findings():
+    """Every episode in a graded report's JSON holds the count, 0 included."""
+
+    written = json.loads(render_json(grade(CSV_FIXTURE)))
+
+    assert written["episodes"]
+    assert all(
+        episode["eligibility"]["review_findings"] == 0
+        for episode in written["episodes"]
+    )
 
 
 def test_compatibility_train_ready_mirrors_eligibility_exactly():
