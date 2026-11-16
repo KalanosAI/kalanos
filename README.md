@@ -55,7 +55,7 @@ Choose what fits your workflow; no integration is required to run the local grad
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_synthetic_quickstart.ipynb)
 
-**Preview, validation pending:** [the synthetic-data notebook](notebooks/kalanos_synthetic_quickstart.ipynb) installs Kalanos 0.10.0, downloads the public `kalanosai/synthetic-action-spikes` fixture and runs an assessment in a Colab CPU runtime. It is separate from the verified 0.8.0 quickstart below. No live Colab result is claimed yet, and the badge requires this file to be merged at the linked path.
+Run the synthetic dataset audit in Google Colab. No local installation is required. [The notebook](notebooks/kalanos_synthetic_quickstart.ipynb) installs Kalanos 0.10.0, downloads the public `kalanosai/synthetic-action-spikes` fixture and runs an assessment on a CPU runtime. It is separate from the local quickstart below.
 
 [Notebook instructions](notebooks/README.md) · [Validation and launch checklist](notebooks/VALIDATION.md)
 

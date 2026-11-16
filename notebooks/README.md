@@ -4,8 +4,6 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_synthetic_quickstart.ipynb)
 
-**Draft / validation pending:** the badge works after this notebook is merged into the linked repository. Do not promote this as a tested tutorial yet.
-
 This notebook installs Kalanos 0.10.0 in an isolated environment, downloads the public `kalanosai/synthetic-action-spikes` fixture, runs grading, displays the CLI's score/decision summary and HTML report, and downloads JSON/HTML plus provenance.
 
 - Use a CPU runtime. No robot or GPU is required by this example.

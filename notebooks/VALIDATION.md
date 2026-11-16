@@ -1,6 +1,6 @@
 # Synthetic quickstart validation
 
-Prepared 2026-11-16. Status: **draft, not end-to-end validated**.
+Prepared 2026-11-16. Status: **validated in a fresh Colab CPU session on 2026-11-16** (all five cells ran unchanged: install, download, grade, HTML report, ZIP download). Observed on the default fixture: 10 episodes, 8 pass, 2 review, quality 94.3, readiness undefined, review gate failed as configured. The sections below record the earlier offline checks.
 
 ## Verified
 - Public PyPI metadata lists Kalanos 0.10.0, released November 14, 2026; publishing commit `e9fdc8819a465219440f8fbdc8c70230c44b8d7e`.
