@@ -1,25 +1,63 @@
 # Kalanos
 
+![Kalanos: understand your robot data before you train. Local by default, open source, HTML and JSON reports.](docs/assets/kalanos-grader-banner.svg)
+
 [![PyPI](https://img.shields.io/pypi/v/kalanos)](https://pypi.org/project/kalanos/)
 [![Python](https://img.shields.io/pypi/pyversions/kalanos)](https://pypi.org/project/kalanos/)
 [![CI](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml/badge.svg)](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/github/license/KalanosAI/kalanos)](LICENSE)
 
-Kalanos audits robot recordings for technical quality problems — dropped samples, flatlined sensors, clock jitter, missing evidence — before you commit them to a training set. It reports findings at episode, stream and channel level, shows which checks ran, and gives every episode a decision under a named evaluation scope. Use the HTML report to investigate and the JSON report to automate.
+**Understand your robot data before you train.**
+
+Kalanos is an open-source toolkit for robotics engineers and researchers inspecting recorded demonstrations. Find evidence of dropped samples, flatlined signals, timing irregularities and missing data; review results by episode, stream or channel; and bring repeatable checks into your training workflow.
+
+**Local by default · Apache-2.0 · HTML for investigation · JSON for automation**
+
+[Run the quickstart](#quickstart) · [Explore a public report](https://hub.kalanos.ai/d/@kalanos/hf/lerobot/pusht) · [GitHub Action](https://github.com/marketplace/actions/kalanos-robotics-dataset-audit) · [Training integrations](https://github.com/KalanosAI/kalanos-tracking) · [Browse datasets](https://hub.kalanos.ai) · [Website](https://kalanos.ai/)
+
+## From recordings to evidence
+
+![Workflow: choose recordings, run an assessment, inspect findings and coverage, then use HTML or JSON reports in optional CI and tracking workflows.](docs/assets/kalanos-grader-workflow.svg)
+
+- **Before training:** inspect a collection batch and locate episodes or channels worth reviewing.
+- **During dataset development:** rerun the same checks as recordings change, and gate your pipeline on configured episode decisions.
+- **Alongside experiments:** retain the dataset assessment with the training run so collaborators can inspect the evidence behind the input data.
+
+A score is one part of the assessment. Read the findings, episode decisions, measured coverage and evaluation scope together. A passing decision can still have report-only findings; readiness can be unavailable when evidence does not support a value.
 
 ```bash
 pip install kalanos
 kalanos grade my_recordings/ --report report.html
 ```
 
-Everything runs on your machine. Nothing is uploaded unless you choose to publish.
+Grading runs in your environment. Nothing is uploaded unless you choose to publish. For a version-pinned, previously verified example, use the [quickstart](#quickstart) below.
 
 **Reads out of the box:** CSV, JSON, JSONL, delimited text, LeRobot directories.
 **With extras:** HDF5, MCAP / ROS 2, Hugging Face datasets, sampled video checks. See [Install extras](#install-extras).
 
 ![Kalanos report summary for the sample fixture: readiness 61.4, one eligible recording and six findings](docs/assets/arm-audit-overall.png)
 
-*Report summary for the sample fixture: readiness 61.4, 1 of 1 episodes eligible under `numeric-core-v1`. Sufficiency is reported separately as unknown — eligibility does not mean the dataset is sufficient for training.*
+*Recorded example from Kalanos 0.8.0: a synthetic fixture scores 61.4, with 1 of 1 episodes eligible under `numeric-core-v1`. Sufficiency is unknown. This illustrates the report, not training performance or the expected output of another version.*
+
+## Choose your workflow
+
+| Your goal | Start here |
+|---|---|
+| Inspect your own robot recordings | [Local quickstart](#quickstart), followed by [your own data](#audit-your-own-recordings) |
+| Run dataset checks in CI | [Kalanos Robotics Dataset Audit Action](https://github.com/marketplace/actions/kalanos-robotics-dataset-audit). Runs the public grader on your runner, without MCP. Configure gates and review artifact retention for private data. |
+| Keep assessments next to training curves | [Kalanos tracking adapters](https://github.com/KalanosAI/kalanos-tracking) for W&B, MLflow, Trackio and TensorBoard. These attach existing assessments to runs; they do not replace the grader. |
+| Explore existing public assessments | [Kalanos Hub](https://hub.kalanos.ai). Start with a [PushT report](https://hub.kalanos.ai/d/@kalanos/hf/lerobot/pusht) and inspect its recorded revision and scope. |
+| Use public report evidence in agent and LeRobot workflows | [Kalanos MCP integrations](https://github.com/KalanosAI/kalanos-mcp). These consume stored Hub assessments and support pinned episode selections; they are not a local grading server. |
+
+Choose what fits your workflow; no integration is required to run the local grader. Sending reports to a hosted tracker or publishing them is a separate sharing decision. Review the report for private paths, instructions and diagnostic evidence first.
+
+## Try a notebook in Colab
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_synthetic_quickstart.ipynb)
+
+**Preview, validation pending:** [the synthetic-data notebook](notebooks/kalanos_synthetic_quickstart.ipynb) installs Kalanos 0.10.0, downloads the public `kalanosai/synthetic-action-spikes` fixture and runs an assessment in a Colab CPU runtime. It is separate from the verified 0.8.0 quickstart below. No live Colab result is claimed yet, and the badge requires this file to be merged at the linked path.
+
+[Notebook instructions](notebooks/README.md) · [Validation and launch checklist](notebooks/VALIDATION.md)
 
 ## Quickstart
 
@@ -74,10 +112,12 @@ Both commands exit `0`. The JSON records readiness `61.44832235703186`, a comple
 
 *Detail view: the recording scores 61.4 while the expanded `armA` stream scores 97.2. Cadence is shown as recorded (100 Hz); clock provenance is unknown, so this is not a capture-timing certification. Dashes mean not applicable or no evidence, not a pass.*
 
-The full [HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON report](docs/examples/arm-audit/reports/arm-audit.json) from this run are included, generated with a clean install of 0.8.0 on macOS ARM64 / Python 3.14.7.
+The full [downloadable HTML report](docs/examples/arm-audit/reports/arm-audit.html) and [JSON report](docs/examples/arm-audit/reports/arm-audit.json) from this run are included, generated with a clean install of 0.8.0 on macOS ARM64 / Python 3.14.7.
+Download the HTML file and open it in a browser; GitHub shows its source rather than a rendered report. The screenshots above provide an immediate preview.
 
 ## Reading a decision
 
+![Read scores, episode decisions and coverage together. Missing evidence is not a pass and a pass can still have findings.](docs/assets/kalanos-assessment-guide.svg)
 | Episode decision | Meaning under the selected scope | Next action |
 |---|---|---|
 | `pass` (shown as **eligible** in terminal output) | Required evidence is sufficient; no blocking or review decision remains | Inspect report-only findings and confirm the scope fits your use |
@@ -141,6 +181,12 @@ Kalanos reports technical recording quality within the evidence and scope availa
 - Sampled video checks do not inspect every frame by default.
 - Statistical findings may require review or accepted validation before they can block an episode.
 - The macOS commands above are tested; Linux and Windows variants follow the same CLI but were not separately verified for this release.
+
+## Help improve robotics data checks
+
+Contributions are useful beyond code: share a minimal reproducible fixture, report a false positive or missed issue, improve an adapter, or document a workflow. Include the grader version, dataset format, evaluation scope and expected versus observed behavior. Do not attach private recordings or sensitive report contents to a public issue.
+
+[Contribution guide](CONTRIBUTING.md) · [Report an issue](https://github.com/KalanosAI/kalanos/issues) · [Citation metadata](CITATION.cff)
 
 ## Documentation and support
 
