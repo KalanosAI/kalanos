@@ -22,7 +22,7 @@ episode eligibility recorded here. Nothing else may answer the same question.
 from enum import Enum
 
 # External
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -148,6 +148,9 @@ class EpisodeEligibility(BaseModel):
         The decision policy that assigned consequences.
     reasons : list[EligibilityReason]
         Every reason, including those outranked by `status`.
+    review_findings : int
+        How many findings in `reasons` have consequence review,
+        including those outranked by `status`.
     """
 
     status: EligibilityStatus
@@ -166,6 +169,26 @@ class EpisodeEligibility(BaseModel):
                 f"its reasons (expected {expected.value!r})"
             )
         return self
+
+    @computed_field
+    @property
+    def review_findings(self) -> int:
+        """Count the findings whose consequence is review, whatever the status.
+
+        A `blocked` or `unknown` status outranks review, so without this count
+        an episode's review findings show only in its reasons.
+
+        Returns
+        -------
+        int
+            The number of `FINDING` reasons with consequence `REVIEW`.
+        """
+
+        return sum(
+            1
+            for r in self.reasons
+            if r.kind is ReasonKind.FINDING and r.consequence is Consequence.REVIEW
+        )
 
     @property
     def compatibility_train_ready(self) -> bool | None:

@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Added
+
+- Each episode's eligibility gains `review_findings`, the number of its findings that request review, kept when a missing requirement makes the episode unknown or a block outranks them, and the report card's "Needs attention" row for an unknown episode shows it (report schema 8.2.0). Before, an unknown episode's review findings showed only in its reasons, so a dataset could list sources needing review while 0 episodes were in review.
+
 ## [0.10.0] - 2026-11-14
 
 Report schema 8.1.0.
