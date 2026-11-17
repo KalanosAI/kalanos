@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc"><title id="title">From recordings to repeatable checks</title><desc id="desc">Recordings are assessed locally under a scope. Inspect findings, decisions and coverage, then use HTML or JSON with optional CI and experiment tracking.</desc><rect width="1200" height="440" rx="20" fill="#f5f8fb"/>
+<text x="36" y="48" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="21" font-weight="700">FROM RECORDINGS TO REPEATABLE CHECKS</text>
+<rect x="36" y="83" width="249" height="245" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="56" y="119" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="700">01</text>
+<text x="56" y="158" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="22" font-weight="700">Choose inputs</text>
+<text x="56" y="211" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Local recordings</text>
+<text x="56" y="243" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">LeRobot · CSV · JSON</text>
+<text x="56" y="275" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">HDF5 / MCAP with extras</text>
+<path d="M 296 205 h 23 m -7 -7 l 7 7 -7 7" fill="none" stroke="#00745f" stroke-width="2"/><rect x="329" y="83" width="249" height="245" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="349" y="119" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="700">02</text>
+<text x="349" y="158" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="22" font-weight="700">Run assessment</text>
+<text x="349" y="211" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Select evaluation scope</text>
+<text x="349" y="243" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Check available evidence</text>
+<text x="349" y="275" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Record unavailable checks</text>
+<path d="M 589 205 h 23 m -7 -7 l 7 7 -7 7" fill="none" stroke="#00745f" stroke-width="2"/><rect x="622" y="83" width="249" height="245" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="642" y="119" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="700">03</text>
+<text x="642" y="158" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="22" font-weight="700">Inspect results</text>
+<text x="642" y="211" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Findings + decisions</text>
+<text x="642" y="243" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Affected episodes</text>
+<text x="642" y="275" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">Coverage and context</text>
+<path d="M 882 205 h 23 m -7 -7 l 7 7 -7 7" fill="none" stroke="#00745f" stroke-width="2"/><rect x="915" y="83" width="249" height="245" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="935" y="119" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="700">04</text>
+<text x="935" y="158" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="22" font-weight="700">Use the report</text>
+<text x="935" y="211" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">HTML: investigate</text>
+<text x="935" y="243" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">JSON: automate</text>
+<text x="935" y="275" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="15" font-weight="400">CI / trackers: optional</text>
+<text x="36" y="378" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="22" font-weight="700">You decide what to repair, review or exclude.</text>
+<text x="36" y="408" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">No automatic data deletion or training. Publishing and hosted tracking are separate sharing choices.</text>
+</svg>

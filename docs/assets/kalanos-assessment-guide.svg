@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-labelledby="title desc"><title id="title">Read the assessment, not only the score</title><desc id="desc">Use score, episode decisions and measured coverage together. Unavailable evidence is not a pass, and a pass can still carry report-only findings.</desc><rect width="1200" height="330" rx="20" fill="#f5f8fb"/>
+<text x="36" y="48" fill="#00745f" font-family="DejaVu Sans,Arial,sans-serif" font-size="21" font-weight="700">READ THE ASSESSMENT, NOT ONLY THE SCORE</text>
+<rect x="36" y="82" width="340" height="177" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="56" y="123" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="26" font-weight="700">Score</text>
+<text x="56" y="164" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">A summary where evidence</text>
+<text x="56" y="193" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">supports a value.</text>
+<text x="56" y="222" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">Unavailable is not zero.</text>
+<rect x="430" y="82" width="340" height="177" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="450" y="123" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="26" font-weight="700">Episode decisions</text>
+<text x="450" y="164" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">Pass · review · blocked · unknown</text>
+<text x="450" y="193" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">Decisions apply within scope.</text>
+<text x="450" y="222" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">A pass can still carry findings.</text>
+<rect x="824" y="82" width="340" height="177" rx="12" fill="#ffffff" stroke="#d6e1e9"/>
+<text x="844" y="123" fill="#172b42" font-family="DejaVu Sans,Arial,sans-serif" font-size="26" font-weight="700">Coverage</text>
+<text x="844" y="164" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">What ran and what did not.</text>
+<text x="844" y="193" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">Inspect evidence and limitations.</text>
+<text x="844" y="222" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="17" font-weight="400">Unchecked is not passed.</text>
+<text x="36" y="302" fill="#4b6075" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="400">An assessment does not establish task success or training performance.</text>
+</svg>
