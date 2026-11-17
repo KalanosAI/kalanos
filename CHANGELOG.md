@@ -14,6 +14,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Fixed
 
 - LeRobot state channels named `<motor>.pos`, or with the joint names SO-100, Unitree G1, AgileX and ALOHA arms declare (`main_shoulder_pan`, `kLeftShoulderPitch`, `left_arm_joint_1_rad`, `left_waist`), now grade as joint positions instead of unmapped, and end-effector channels in `observation.state` as end-effector pose. In an `action.*` feature no alias typed, `<motor>.pos` channels grade as joint position commands and `gripper.pos` as a gripper command. A joint name followed by another quantity, such as `shoulder_pan.load`, stays unmapped. `gripper_binary` and `progress` grade as computed features, and an `ee_pos` namespace as end-effector pose. The `semantic_mapping` coverage row lists each unmapped channel in its `reasons`.
+- A LeRobot v3 episode whose metadata names a data file that does not exist is now loaded and blocked by `schema.episode_file_mismatch`, with `pointed_path_exists: false` and the files that hold its rows in the evidence. Before, the adapter refused the whole dataset at that episode, and every later episode went unresolved.
 
 ## [0.10.0] - 2026-11-14
 
