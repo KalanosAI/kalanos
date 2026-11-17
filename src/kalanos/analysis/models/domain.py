@@ -694,6 +694,10 @@ class LayoutCheck(BaseModel):
         The data file the episode's metadata names.
         `None` when the episode has no metadata row naming a data file:
         its rows were found in the data alone.
+    pointed_exists : bool
+        Whether the data file `pointed_path` names exists.
+        `False` only when the metadata names a file that is not there,
+        in which case `holding_paths` cannot include it.
     holding_paths : list[AnyPath]
         Every data file the episode's rows were found in, empty when none.
     range_mismatches : list[RangeMismatch] or None
@@ -708,6 +712,7 @@ class LayoutCheck(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     pointed_path: AnyPath | None
+    pointed_exists: bool = True
     holding_paths: list[AnyPath] = Field(default_factory=list)
     range_mismatches: list[RangeMismatch] | None = None
     pointer_effect: str | None = None

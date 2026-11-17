@@ -309,6 +309,19 @@ def test_layout_check_with_rows_in_no_file():
     assert check.range_mismatches is None
 
 
+def test_layout_check_on_a_missing_file():
+    """Verify a pointer at a missing file records it as missing and states no effect."""
+
+    check = layout_check(
+        _ROW, _FILE_1, _rows(0, 7, 10, 20), [_FILE_0], pointed_exists=False
+    )
+
+    assert not check.pointer_matches
+    assert check.pointed_exists is False
+    assert check.pointer_effect is None
+    assert check.holding_paths == [_FILE_0]
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -457,6 +470,23 @@ def test_the_pointer_metric_on_a_mismatch():
         "pointed_path": str(_FILE_0),
         "holding_paths": [str(_FILE_1)],
         "effect": "loads nothing",
+    }
+
+
+def test_the_pointer_metric_on_a_missing_file():
+    """Verify a pointer at a file that does not exist reads 1 and says so."""
+
+    check = LayoutCheck(
+        pointed_path=_FILE_1, pointed_exists=False, holding_paths=[_FILE_0]
+    )
+
+    result = episode_file_mismatch(_context(check))
+
+    assert result.value == 1.0
+    assert result.evidence == {
+        "pointed_path": str(_FILE_1),
+        "holding_paths": [str(_FILE_0)],
+        "pointed_path_exists": False,
     }
 
 
