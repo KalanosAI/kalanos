@@ -157,6 +157,17 @@ def test_a_mapping_file_beats_the_sidecar_and_an_argument_beats_both(dataset, tm
     assert override.origin is OverrideOrigin.ARGUMENT
     torque = _streams_typed(from_argument, "proprio.joint_torque")
     assert len(torque) == len(from_argument.episodes)
+    # The joints a channel pattern typed give way to the mapping, and say so.
+    displaced = [
+        conflict
+        for stream in torque
+        for graded in stream.channels
+        if graded.channel.binding is not None
+        for conflict in graded.channel.binding.conflicts
+        if conflict.displaced == JOINT_POSITION
+    ]
+    assert displaced
+    assert {c.reason for c in displaced} == {"feature mapping displaced inferred type"}
 
 
 def test_a_sidecar_applies_on_its_own_and_sidecar_false_ignores_it(dataset):
@@ -170,7 +181,15 @@ def test_a_sidecar_applies_on_its_own_and_sidecar_false_ignores_it(dataset):
     assert override.path is not None
     assert Path(str(override.path)) == dataset / SIDECAR_NAME
     assert ignored.mapping_overrides == []
-    assert len(_streams_typed(ignored, UNMAPPED_STATE)) == len(ignored.episodes)
+    # Without the sidecar, the state's joints are typed by their names.
+    states = _streams_typed(ignored, JOINT_POSITION)
+    assert len(states) == len(ignored.episodes)
+    assert _streams_typed(ignored, UNMAPPED_STATE) == []
+    assert all(
+        stream.mapping_source is not MappingSource.OVERRIDE
+        for episode in ignored.episodes
+        for stream in episode.streams
+    )
 
 
 @pytest.mark.parametrize(
