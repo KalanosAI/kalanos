@@ -45,7 +45,7 @@ from kalanos.analysis.reporting.assemble import grade_stream
 from kalanos.assets.policy import load_default_policy
 
 # Local
-from helpers import LEROBOT_FIXTURE
+from helpers import FIXTURES_DIR, LEROBOT_FIXTURE
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -56,6 +56,8 @@ from helpers import LEROBOT_FIXTURE
 LEROBOT_VIDEO = (
     LEROBOT_FIXTURE / "videos" / "observation.images.up" / "chunk-000" / "file-000.mp4"
 )
+# Encoded once and committed, because PyAV 13 cannot write a display rotation.
+ROTATED_VIDEO = FIXTURES_DIR / "rotated_90.mp4"
 
 # The ways a vision metric reads a video payload.
 READS = [
@@ -997,13 +999,12 @@ def _payload(path: UPath) -> VideoPayload:
     return VideoPayload(path=path, frame_count=4, start_s=0.0, end_s=4 / 30)
 
 
-def test_the_header_reads_the_first_frames_rotation(tmp_path):
+def test_the_header_reads_the_first_frames_rotation():
     """Verify a display rotation of 90 reads as 90.0, and a file without one as 0.0."""
 
-    rotated = UPath(tmp_path) / "rotated.mp4"
-    _write_flagged_video(rotated, rotation=90)
+    pytest.importorskip("av")
 
-    assert _payload(rotated).header().rotation_deg == 90.0
+    assert _payload(ROTATED_VIDEO).header().rotation_deg == 90.0
     assert VideoPayload(
         path=LEROBOT_VIDEO, frame_count=8, start_s=0.0, end_s=8 / 30
     ).header().rotation_deg == pytest.approx(0.0)
