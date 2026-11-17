@@ -17,6 +17,7 @@ import yaml
 # Internal
 from kalanos.analysis.models.dictionary import (
     CategoryGroup,
+    ChannelPattern,
     Dictionary,
     DictionaryEntry,
     GroupHintKind,
@@ -69,6 +70,20 @@ _BARE = {
     "modality": "numeric",
     "kind": "series",
     "shape": "scalar",
+}
+
+# An entry typed by channel pattern alone.
+# Names match only under an observation.state feature,
+# and the exclude glob vetoes velocity channels a name glob would otherwise catch.
+_JOINTS = {
+    **_BARE,
+    "channel_patterns": [
+        {
+            "features": ["observation.state*"],
+            "names": ["*.pos", "*shoulder*"],
+            "exclude": ["*vel*"],
+        }
+    ],
 }
 
 
@@ -840,3 +855,66 @@ def test_generic_state_keys_stay_unmapped(name):
     """
 
     assert load_default_dictionary().resolve(name).taxonomy_type is None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        {"features": ["observation.state"], "names": ["*Shoulder*"]},
+        {"features": ["observation.state"], "names": []},
+        {"features": [], "names": ["*.pos"]},
+        {"features": ["observation.state"], "names": [""]},
+        {"features": ["observation.state"], "names": ["*.pos"], "except": ["*vel*"]},
+    ],
+    ids=["uppercase", "no-names", "no-features", "empty-glob", "unknown-key"],
+)
+def test_a_malformed_channel_pattern_is_rejected(pattern):
+    with pytest.raises(ValueError):
+        ChannelPattern.model_validate(pattern)
+
+
+def test_a_channel_pattern_types_a_name_only_under_its_features():
+    dictionary = _dictionary(proprio_joint=_JOINTS)
+
+    assert dictionary.match_channel("observation.state", "elbow.pos") == "proprio.joint"
+    assert dictionary.match_channel("observation.velocity", "elbow.pos") is None
+    assert dictionary.match_channel(None, "elbow.pos") is None
+
+
+def test_a_channel_pattern_matches_names_in_any_case():
+    dictionary = _dictionary(proprio_joint=_JOINTS)
+
+    assert dictionary.match_channel("Observation.State", "kLeftShoulderPitch") == (
+        "proprio.joint"
+    )
+
+
+def test_an_exclude_glob_vetoes_a_channel_name():
+    dictionary = _dictionary(proprio_joint=_JOINTS)
+
+    assert dictionary.match_channel("observation.state", "shoulder_vel") is None
+
+
+def test_two_entries_matching_a_channel_leave_it_untyped():
+    dictionary = _dictionary(
+        proprio_joint=_JOINTS,
+        proprio_motor={
+            **_BARE,
+            "channel_patterns": [{"features": ["observation.*"], "names": ["*.pos"]}],
+        },
+    )
+
+    assert dictionary.match_channel("observation.state", "elbow.pos") is None
+    assert dictionary.match_channel("observation.state", "shoulder") == "proprio.joint"
+
+
+@pytest.mark.parametrize(
+    ("name", "taxonomy_type"),
+    [
+        ("observation.ee_pos.robot_xyzrpy", "proprio.ee_pose"),
+        ("observation.gripper_binary", "derived.computed_feature"),
+        ("skill.progress", "derived.computed_feature"),
+    ],
+)
+def test_so101_extra_feature_keys_resolve(name, taxonomy_type):
+    assert load_default_dictionary().resolve(name).taxonomy_type == taxonomy_type

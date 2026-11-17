@@ -627,7 +627,7 @@ def test_unmapped_stream_types_get_a_mapping_row(csv_report, vision_report):
         for row in _section(render_terminal(csv_report), "Coverage")
     )
     assert _row(render_terminal(vision_report), "mapping").startswith(
-        "2 stream types unmapped - type them with --map"
+        "1 stream type unmapped - type them with --map"
     )
 
 
