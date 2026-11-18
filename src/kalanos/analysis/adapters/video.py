@@ -1051,12 +1051,13 @@ def _display_rotation(frame: Any) -> float:
 
     # The matrix is parsed from its bytes because `VideoFrame.rotation` is missing
     # before PyAV 14.2, and `side_data` is gone from the stream after PyAV 13.
-    for entry in frame.side_data:
-        if "DISPLAYMATRIX" in str(entry.type):
-            matrix = struct.unpack("<9i", bytes(entry)[:36])
-            break
-    else:
+    # It is looked up by name because iterating `frame.side_data` yields
+    # `SideData` objects up to PyAV 18 and `Type` keys from PyAV 19,
+    # while `get` with the name works on both.
+    entry = frame.side_data.get("DISPLAYMATRIX")
+    if entry is None:
         return 0.0
+    matrix = struct.unpack("<9i", bytes(entry)[:36])
     x_scale = hypot(matrix[0], matrix[3])
     y_scale = hypot(matrix[1], matrix[4])
     if not x_scale or not y_scale:
