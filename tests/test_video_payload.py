@@ -5,6 +5,7 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 import random
 import threading
 import time
@@ -23,6 +24,7 @@ from upath import UPath
 # Internal
 import kalanos
 from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters.prefetch import prefetching
 from kalanos.analysis.adapters.readahead import ReadaheadCache
 from kalanos.analysis.adapters.video import (
     DecodeFailed,
@@ -890,6 +892,48 @@ def test_a_remote_open_uses_the_readahead_settings(buffered_remote_video):
     assert handle.blocksize == 65536
     assert isinstance(handle.cache, ReadaheadCache)
     assert handle.cache.readahead == 2
+
+
+def test_a_prefetched_remote_read_matches_a_streamed_one(remote_video):
+    """Verify a remote file read from prefetched bytes reads as a streamed one does."""
+
+    def reads() -> tuple:
+        payload = VideoPayload(
+            path=remote_video, frame_count=8, start_s=0.0, end_s=8 / 30
+        )
+        windows = _windows(payload, [(0, 2), (6, 8)], 16)
+        return (
+            payload.header(),
+            payload.packet_times(),
+            [[frame.tobytes() for frame in window] for window in windows],
+        )
+
+    streamed = reads()
+    video.close_video_files()
+    with prefetching([[remote_video]], 10 * remote_video.stat().st_size):
+        prefetched = reads()
+        handle = video._OPEN_FILES[str(remote_video)].handle
+
+    assert isinstance(handle, io.BytesIO)
+    assert prefetched == streamed
+
+
+def test_closing_video_files_by_path_closes_only_those(remote_video, tmp_path):
+    """Verify closing named files leaves every other pooled file open."""
+
+    other = UPath("memory://videos/file-001.mp4")
+    other.write_bytes(LEROBOT_VIDEO.read_bytes())
+    try:
+        for path in (remote_video, other):
+            VideoPayload(path=path, frame_count=8, start_s=0.0, end_s=8 / 30).header()
+        kept = video._OPEN_FILES[str(other)]
+
+        video.close_video_files([remote_video])
+
+        assert list(video._OPEN_FILES) == [str(other)]
+        assert video._OPEN_FILES[str(other)] is kept
+    finally:
+        other.unlink()
 
 
 def test_a_grade_leaves_no_video_file_open(monkeypatch):
