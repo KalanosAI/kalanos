@@ -11,6 +11,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - Each episode's eligibility gains `review_findings`, the number of its findings that request review, kept when a missing requirement makes the episode unknown or a block outranks them, and the report card's "Needs attention" row for an unknown episode shows it (report schema 8.2.0). Before, an unknown episode's review findings showed only in its reasons, so a dataset could list sources needing review while 0 episodes were in review.
 - `dictionary.yaml` entries can list `channel_patterns` (`features`, `names` and `exclude` globs) to type the channels of a feature no alias resolved, by their declared names. A `--map`, `--map-file`, bundle or sidecar mapping of the feature replaces them.
 
+### Changed
+
+- The Colab quickstart notebook is rewritten: it installs Kalanos into the notebook kernel, grades `lerobot/aloha_sim_transfer_cube_human` with the CLI, reads the saved report in Python, charts the signal-to-noise finding that sends 11 of its 50 episodes to review, and offers the JSON and HTML reports as a download.
+
 ### Fixed
 
 - LeRobot state channels named `<motor>.pos`, or with the joint names SO-100, Unitree G1, AgileX and ALOHA arms declare (`main_shoulder_pan`, `kLeftShoulderPitch`, `left_arm_joint_1_rad`, `left_waist`), now grade as joint positions instead of unmapped, and end-effector channels in `observation.state` as end-effector pose. In an `action.*` feature no alias typed, `<motor>.pos` channels grade as joint position commands and `gripper.pos` as a gripper command. A joint name followed by another quantity, such as `shoulder_pan.load`, stays unmapped. `gripper_binary` and `progress` grade as computed features, and an `ee_pos` namespace as end-effector pose. The `semantic_mapping` coverage row lists each unmapped channel in its `reasons`.
