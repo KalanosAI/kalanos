@@ -18,7 +18,7 @@ import yaml
 
 # Internal
 import kalanos
-from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters import prefetch, video
 from kalanos.analysis.adapters.video import RemoteReads
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
 from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION
@@ -26,7 +26,7 @@ from kalanos.assets.policy import load_default_policy, load_policy
 from kalanos.core.settings import get_settings
 
 # Local
-from helpers import FIXTURES_DIR
+from helpers import FIXTURES_DIR, LEROBOT_V2_0_FIXTURE, copy_to_memory
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -152,6 +152,35 @@ def test_grade_passes_the_remote_read_settings(monkeypatch):
 
     assert seen
     assert set(seen) == {RemoteReads(block_bytes=131072, readahead_blocks=2)}
+
+
+def test_remote_v2_grade_matches_with_and_without_prefetch(monkeypatch):
+    """Verify prefetching a remote dataset's video changes nothing but the run."""
+
+    root = copy_to_memory(LEROBOT_V2_0_FIXTURE, "api/prefetch-v2")
+    try:
+        monkeypatch.setenv("KALANOS_REMOTE_PREFETCH_BYTES", "0")
+        get_settings.cache_clear()
+        streamed = kalanos.grade(root)
+        monkeypatch.delenv("KALANOS_REMOTE_PREFETCH_BYTES")
+        get_settings.cache_clear()
+        taken = []
+        original = prefetch.VideoPrefetcher.take
+
+        def counting(self, path):
+            data = original(self, path)
+            taken.append(data is not None)
+            return data
+
+        monkeypatch.setattr(prefetch.VideoPrefetcher, "take", counting)
+        prefetched = kalanos.grade(root)
+    finally:
+        root.fs.rm(root.path, recursive=True)
+
+    assert streamed.episodes
+    assert taken and all(taken)
+    same_run = {"run": streamed.run, "duration_s": streamed.duration_s}
+    assert prefetched.model_copy(update=same_run) == streamed
 
 
 def test_grade_accepts_a_plain_string():

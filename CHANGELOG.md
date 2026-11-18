@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Added
+
+- Grading a remote LeRobot v2 dataset downloads the video files of the episodes after the one being graded, whole and in episode order, in the background, and drops each episode's files once it is graded. `KALANOS_REMOTE_PREFETCH_BYTES` caps the bytes held (default 200 MB, `0` turns it off); a file larger than the cap streams as before. `RoboCOIN/Agilex_Cobot_Magic_fold_towel_pink_tray` (50 episodes, 150 video files), graded from `hf://` on 4 cores, took 1 min 50 s instead of 4 min, and its peak memory rose from 329 MiB to 641 MiB, of which about 125 MiB is memory the allocator keeps for the download threads rather than downloaded files. `RoboCOIN/AI2_Alphabot_2_tidy_countertop` (406 episodes, 1,624 video files, 18 GB) took 22 min 30 s instead of 67 min 30 s, and its peak memory rose from 851 MiB to 1,237 MiB. Metric values are unchanged.
+
 ## [0.10.0] - 2026-11-14
 
 Report schema 8.1.0.

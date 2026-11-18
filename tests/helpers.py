@@ -145,6 +145,29 @@ class DisclosureStateCollector(HTMLParser):
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
+def copy_to_memory(source: Path, name: str) -> UPath:
+    """Copy a fixture tree onto fsspec's in-memory filesystem, which reads as remote.
+
+    Parameters
+    ----------
+    source : Path
+        The local directory to copy.
+    name : str
+        The directory under `memory://` to copy it into, unique to the caller.
+
+    Returns
+    -------
+    UPath
+        The copy's root. Remove it with `rmtree` when done.
+    """
+
+    root = UPath(f"memory://{name}")
+    for file in Path(source).rglob("*"):
+        if file.is_file():
+            (root / file.relative_to(source).as_posix()).write_bytes(file.read_bytes())
+    return root
+
+
 def csv_schema(path: UPath) -> SourceSchema:
     """Sniff, read, and infer a CSV file's schema.
 

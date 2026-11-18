@@ -757,6 +757,7 @@ def benchmark_dataset(
     reads = RemoteReads(
         block_bytes=settings.remote_block_bytes,
         readahead_blocks=settings.remote_readahead_blocks,
+        prefetch_bytes=settings.remote_prefetch_bytes,
     )
     try:
         with use_tier(config.scope.tier), use_remote_reads(reads):

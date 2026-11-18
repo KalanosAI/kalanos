@@ -7,6 +7,7 @@ chunk rollover at a small `chunks_size`, and a camera-less tree.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 import json
 import shutil
 from pathlib import Path
@@ -17,9 +18,10 @@ import pytest
 from upath import UPath
 
 # Internal
-from kalanos.analysis.adapters import video
+from kalanos.analysis.adapters import prefetch, video
 from kalanos.analysis.adapters.lerobot.common import split_of
 from kalanos.analysis.adapters.lerobot.v2 import LeRobotV2Adapter
+from kalanos.analysis.adapters.video import RemoteReads, use_remote_reads
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal
 from kalanos.analysis.models.domain import Clock, Kind, TimestampDtype
@@ -29,7 +31,12 @@ from kalanos.api import grade
 from kalanos.testing import check_adapter
 
 # Local
-from helpers import CSV_FIXTURE, LEROBOT_V2_0_FIXTURE, LEROBOT_V2_1_FIXTURE
+from helpers import (
+    CSV_FIXTURE,
+    LEROBOT_V2_0_FIXTURE,
+    LEROBOT_V2_1_FIXTURE,
+    copy_to_memory,
+)
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -54,9 +61,84 @@ def _episodes(fixture):
     return list(LeRobotV2Adapter().episodes(fixture))
 
 
+# ░█▀▀░▀█▀░█░█░▀█▀░█░█░█▀▄░█▀▀░█▀▀
+# ░█▀▀░░█░░▄▀▄░░█░░█░█░█▀▄░█▀▀░▀▀█
+# ░▀░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀▀▀
+
+
+@pytest.fixture
+def remote_v2_0(request):
+    """Copy the v2.0 fixture, which has videos, into memory; remove it afterwards."""
+
+    root = copy_to_memory(LEROBOT_V2_0_FIXTURE, f"v2/{request.node.name}")
+    yield root
+    root.fs.rm(root.path, recursive=True)
+
+
+@pytest.fixture
+def no_prefetcher(monkeypatch):
+    """Fail the test if a prefetcher is ever created."""
+
+    def refuse(self, episodes, cap_bytes):
+        pytest.fail("a prefetcher was created")
+
+    monkeypatch.setattr(prefetch.VideoPrefetcher, "__init__", refuse)
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
+
+
+def test_remote_episodes_release_each_episode_after_it_is_graded(remote_v2_0):
+    """Verify an episode's video is read from prefetched bytes and dropped after it.
+
+    Asking for the next episode means the previous one has been graded,
+    so its pooled container and its prefetched bytes are both let go.
+    """
+
+    with use_remote_reads(RemoteReads(prefetch_bytes=10**9)):
+        reader = LeRobotV2Adapter().episodes(remote_v2_0)
+        first = next(reader)
+        (stream,) = [s for s in first.streams if s.kind == Kind.VIDEO]
+        payload = stream.payload
+        assert isinstance(payload, video.VideoPayload)
+        payload.header()
+        key = str(payload.path)
+        assert isinstance(video._OPEN_FILES[key].handle, io.BytesIO)
+        active = prefetch._ACTIVE
+        assert active is not None and key in active._entries
+
+        next(reader)
+
+        assert key not in video._OPEN_FILES
+        assert key not in active._entries
+        reader.close()
+
+    assert prefetch._ACTIVE is None
+
+
+def test_metadata_tier_prefetches_nothing(remote_v2_0, no_prefetcher):
+    """Verify a metadata-tier read of a remote dataset starts no prefetch."""
+
+    with use_tier(ExecutionTier.METADATA):
+        assert len(_episodes(remote_v2_0)) == 2
+
+
+def test_a_run_without_the_decoder_prefetches_nothing(
+    monkeypatch, remote_v2_0, no_prefetcher
+):
+    """Verify a remote read without PyAV, which opens no video, starts no prefetch."""
+
+    monkeypatch.setattr(video, "av", None)
+
+    assert len(_episodes(remote_v2_0)) == 2
+
+
+def test_local_dataset_prefetches_nothing(no_prefetcher):
+    """Verify a local dataset starts no prefetch."""
+
+    assert len(_episodes(LEROBOT_V2_0_FIXTURE)) == 2
 
 
 def test_contract_v2_0(tmp_path):
