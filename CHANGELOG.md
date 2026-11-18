@@ -14,6 +14,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Changed
 
 - `kalanos[video]` requires `av>=13,<19`, since PyAV 19 changed how a frame's side data iterates.
+- The Colab quickstart notebook is rewritten: it installs Kalanos into the notebook kernel, grades `lerobot/aloha_sim_transfer_cube_human` with the CLI, reads the saved report in Python, charts the signal-to-noise finding that sends 11 of its 50 episodes to review, and offers the JSON and HTML reports as a download.
 
 ### Fixed
 
