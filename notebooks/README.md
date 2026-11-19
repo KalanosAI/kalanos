@@ -15,3 +15,13 @@ This notebook installs Kalanos 0.10.0 in an isolated environment, downloads the 
 - Scores are generated, never hard-coded. A missing score remains missing. The synthetic fixture is not evidence of training performance.
 
 See [validation and launch checklist](VALIDATION.md). The existing main README quickstart and its version pin are unchanged.
+
+## Audit Cube to Bowl before training
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_cube_to_bowl.ipynb)
+
+A real-dataset audit of the public [Cube to Bowl](https://huggingface.co/datasets/triton7777/cube_to_bowl_so100) SO-100 recording, pinned to one Hugging Face commit. It installs Kalanos 0.10.0 in an isolated environment, grades the snapshot with the `vision-imitation-v1` profile at the full tier, shows the episode that needs review (a gripper-camera sharpness outlier), previews the audit JSON, and offers JSON, HTML and provenance downloads.
+
+- Use a CPU runtime. No Hugging Face token or API key is needed, and the notebook does not publish reports.
+- The download cap is 200 MB and the dataset revision is pinned, so every run grades the same recording.
+- The [published Hub assessment](https://hub.kalanos.ai/d/@kalanos/hf/triton7777/cube_to_bowl_so100) is an independent run. Counts and findings can differ between grader releases.
