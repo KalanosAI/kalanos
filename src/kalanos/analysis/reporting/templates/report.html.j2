@@ -316,8 +316,12 @@
         </p>
       </div>
       <div class="plate-score">
+        {% if report.readiness is not none and report.readiness.score is not none %}
         <span>Readiness</span>
-        <span class="dataset-score">{% if report.readiness is none or report.readiness.score is none %}undefined{% else %}{{ "%.1f"|format(report.readiness.score) }}{% endif %}</span>
+        <span class="dataset-score">{{ "%.1f"|format(report.readiness.score) }}</span>
+        {% else %}
+        <span class="verdict verdict-unknown readiness-status">Readiness not established{% if report.readiness is not none %}: {{ report.readiness.reasons | join('; ') }}{% endif %}</span>
+        {% endif %}
         <span>Quality: {% if report.score.score is none %}unassessed{% else %}{{ "%.1f"|format(report.score.score) }}{% endif %}</span>
         {% if report.eligibility_counts is not none %}
         {% set c = report.eligibility_counts %}
@@ -332,9 +336,6 @@
         {% if report.sufficiency %}<span>Sufficiency: {{ report.sufficiency.status.value }}</span>{% endif %}
         {% if report.scope is not none %}
         <span class="verdict verdict-unknown">scope {{ report.scope.requirements_id }} &middot; {{ report.scope.policy_id }}</span>
-        {% endif %}
-        {% if report.readiness is not none and report.readiness.score is none %}
-        <span class="verdict verdict-unknown">readiness undefined: {{ report.readiness.reasons | join('; ') }}</span>
         {% endif %}
       </div>
     </div>

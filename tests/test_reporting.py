@@ -35,7 +35,7 @@ from kalanos.analysis.models.domain import (
     Stream,
     TimestampDtype,
 )
-from kalanos.analysis.models.eligibility import Consequence
+from kalanos.analysis.models.eligibility import Consequence, Readiness
 from kalanos.analysis.models.metrics import (
     Family,
     Level,
@@ -1220,6 +1220,52 @@ def test_every_skipped_source_appears_in_the_html_with_its_reason():
 
     assert "video_meta.json" in html
     assert "no_adapter" in html
+
+
+def test_an_undefined_readiness_renders_a_compact_status_with_its_reasons():
+    """Verify a scoreless readiness shows its reasons once, in the score's place."""
+
+    report = _sample_report().model_copy(
+        update={
+            "readiness": Readiness(score=None, reasons=["1 episode(s) need review"])
+        }
+    )
+
+    html = render_html(report)
+
+    assert "Readiness not established: 1 episode(s) need review" in html
+    assert 'class="dataset-score"' not in html
+    assert "undefined" not in html
+    assert html.count("1 episode(s) need review") == 1
+
+
+def test_a_missing_readiness_renders_the_status_without_reasons():
+    """Verify a report with no readiness at all shows the bare status."""
+
+    html = render_html(_sample_report())
+
+    assert "Readiness not established</span>" in html
+    assert 'class="dataset-score"' not in html
+
+
+@pytest.mark.parametrize("value", [0.0, 61.4])
+def test_a_numeric_readiness_keeps_the_large_score(value):
+    """Verify every numeric readiness, zero included, renders at full score size."""
+
+    html = render_html(
+        _sample_report().model_copy(update={"readiness": Readiness(score=value)})
+    )
+
+    assert f'<span class="dataset-score">{value:.1f}</span>' in html
+    assert "Readiness not established" not in html
+
+
+def test_the_html_has_no_whitespace_only_lines():
+    """Verify template block tags leave no indentation-only lines in the page."""
+
+    html = render_html(_sample_report())
+
+    assert [line for line in html.splitlines() if line and not line.strip()] == []
 
 
 def test_render_yaml_round_trips_back_into_the_model():
