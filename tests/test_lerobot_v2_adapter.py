@@ -135,10 +135,13 @@ def test_a_run_without_the_decoder_prefetches_nothing(
     assert len(_episodes(remote_v2_0)) == 2
 
 
-def test_local_dataset_prefetches_nothing(no_prefetcher):
-    """Verify a local dataset starts no prefetch."""
+@pytest.mark.parametrize("protocol", ["", "local"])
+def test_local_dataset_prefetches_nothing(no_prefetcher, protocol):
+    """Verify a local dataset starts no prefetch, under any local protocol."""
 
-    assert len(_episodes(LEROBOT_V2_0_FIXTURE)) == 2
+    root = UPath(LEROBOT_V2_0_FIXTURE, protocol=protocol)
+
+    assert len(_episodes(root)) == 2
 
 
 def test_contract_v2_0(tmp_path):

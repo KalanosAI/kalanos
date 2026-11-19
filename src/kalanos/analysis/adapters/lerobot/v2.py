@@ -52,6 +52,7 @@ from kalanos.analysis.adapters.video import (
 
 # Internal
 from kalanos.analysis.execution import reads_numeric_payloads
+from kalanos.analysis.hosts import LOCAL_PROTOCOLS
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.domain import (
@@ -336,7 +337,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
         # so prefetching there would only download bytes nobody reads.
         cap = (
             current_remote_reads().prefetch_bytes
-            if path.protocol not in ("", "file")
+            if path.protocol not in LOCAL_PROTOCOLS
             and plan.video
             and reads_numeric_payloads()
             and decoder_available()
