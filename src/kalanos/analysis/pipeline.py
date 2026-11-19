@@ -436,52 +436,62 @@ def run(
                 reader = iter(selection.adapter.episodes(candidate.path))
             except AdapterRefusal as exc:
                 refusal = exc
-        while reader is not None:
-            with use_tier(tier):
-                try:
-                    raw = next(reader)
-                except StopIteration:
-                    break
-                except AdapterRefusal as exc:
-                    refusal = exc
-                    break
-            loaded += 1
+        try:
+            while reader is not None:
+                with use_tier(tier):
+                    try:
+                        raw = next(reader)
+                    except StopIteration:
+                        break
+                    except AdapterRefusal as exc:
+                        refusal = exc
+                        break
+                loaded += 1
 
-            # Step 6: an adapter's name for a recording is local to the file it
-            # read, so re-mint it against the walked root to keep it unique
-            # across the run.
-            [episode] = _qualify_ids([raw], path=candidate.path, base=base)
-            del raw
-            # A comprehension, so no loop variable keeps a stream of this episode.
-            fields = {
-                s.source_field for s in episode.streams if s.source_field is not None
-            }
-            seen |= fields
-            matched |= fields & by_feature.keys()
-            [episode] = resolve_episodes(
-                [episode],
-                dictionary=dictionary,
-                channels=channel_assertions,
-                overrides=overrides,
-                source_identity=str(candidate.path),
-                matched=matched_channels,
-            )
-            records.update(binding_records([episode]))
-            builder.add(
-                AnalysedEpisode(
-                    episode=episode,
-                    adapter=selection.name,
-                    adapter_confidence=selection.confidence,
-                    policy=episode_policy,
-                    simulated=simulated,
+                # Step 6: an adapter's name for a recording is local to the file it
+                # read, so re-mint it against the walked root to keep it unique
+                # across the run.
+                [episode] = _qualify_ids([raw], path=candidate.path, base=base)
+                del raw
+                # A comprehension, so no loop variable keeps a stream of this episode.
+                fields = {
+                    s.source_field
+                    for s in episode.streams
+                    if s.source_field is not None
+                }
+                seen |= fields
+                matched |= fields & by_feature.keys()
+                [episode] = resolve_episodes(
+                    [episode],
+                    dictionary=dictionary,
+                    channels=channel_assertions,
+                    overrides=overrides,
+                    source_identity=str(candidate.path),
+                    matched=matched_channels,
                 )
-            )
-            check = episode.layout_check
-            if check is not None:
-                located_any = True
-                in_metadata += check.pointed_path is not None
-                in_data += bool(check.holding_paths)
-            del episode, check
+                records.update(binding_records([episode]))
+                builder.add(
+                    AnalysedEpisode(
+                        episode=episode,
+                        adapter=selection.name,
+                        adapter_confidence=selection.confidence,
+                        policy=episode_policy,
+                        simulated=simulated,
+                    )
+                )
+                check = episode.layout_check
+                if check is not None:
+                    located_any = True
+                    in_metadata += check.pointed_path is not None
+                    in_data += bool(check.holding_paths)
+                del episode, check
+        finally:
+            # A failure while grading leaves the adapter's generator suspended,
+            # holding whatever it opened, such as its video prefetcher, until it
+            # is garbage collected; a kept traceback can delay that indefinitely.
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
         datasets.append(info)
         # A directory an adapter selected belongs to that adapter whatever
         # the read produced — episodes, none, or a refusal. Offering its

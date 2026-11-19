@@ -10,10 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 # External
+import pytest
 from typer.testing import CliRunner
 
 # Internal
 from kalanos import benchmark
+from kalanos.analysis.adapters import prefetch
 from kalanos.analysis.metrics.registry import registered_metrics
 from kalanos.analysis.models.binding import Bundle, RequirementsSection
 from kalanos.analysis.models.domain import Clock, ClockInfo, Episode
@@ -31,7 +33,7 @@ from kalanos.cli import app
 from kalanos.testing import Defect, clean_frames, clean_recording
 
 # Local
-from helpers import FIXTURES_DIR
+from helpers import FIXTURES_DIR, LEROBOT_V2_0_FIXTURE, copy_to_memory
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -325,3 +327,22 @@ def test_camera_defects_are_injected_at_native_resolution(monkeypatch):
         assert defect not in dataset.not_injected, dataset.not_injected.get(defect)
 
     assert shapes == {(32, 32, 3)}
+
+
+def test_a_failed_remote_benchmark_leaves_no_prefetcher_behind(monkeypatch):
+    """Verify a benchmark that fails mid-dataset stops its prefetcher at once."""
+
+    root = copy_to_memory(LEROBOT_V2_0_FIXTURE, "benchmark/failed-prefetch")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("grading failed")
+
+    monkeypatch.setattr(benchmark, "grade_episode", fail)
+    try:
+        with pytest.raises(RuntimeError, match="grading failed") as kept:
+            benchmark.benchmark_dataset(str(root), sample=1)
+    finally:
+        root.fs.rm(root.path, recursive=True)
+
+    assert kept.value is not None
+    assert prefetch._ACTIVE is None

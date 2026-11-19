@@ -22,6 +22,7 @@ from kalanos.analysis.adapters import prefetch, video
 from kalanos.analysis.adapters.video import RemoteReads
 from kalanos.analysis.models.provenance import ExecutionTier, content_digest
 from kalanos.analysis.models.report import CURRENT_SCHEMA_VERSION
+from kalanos.analysis.reporting.assemble import ReportBuilder
 from kalanos.assets.policy import load_default_policy, load_policy
 from kalanos.core.settings import get_settings
 
@@ -181,6 +182,29 @@ def test_remote_v2_grade_matches_with_and_without_prefetch(monkeypatch):
     assert taken and all(taken)
     same_run = {"run": streamed.run, "duration_s": streamed.duration_s}
     assert prefetched.model_copy(update=same_run) == streamed
+
+
+def test_a_failed_remote_grade_leaves_no_prefetcher_behind(monkeypatch):
+    """Verify a grade that fails mid-dataset stops its prefetcher at once.
+
+    The exception is kept, as a notebook keeps its last traceback,
+    so nothing relies on the adapter's generator being garbage collected.
+    """
+
+    root = copy_to_memory(LEROBOT_V2_0_FIXTURE, "api/failed-prefetch")
+
+    def fail(self, item):
+        raise RuntimeError("grading failed")
+
+    monkeypatch.setattr(ReportBuilder, "add", fail)
+    try:
+        with pytest.raises(RuntimeError, match="grading failed") as kept:
+            kalanos.grade(root)
+    finally:
+        root.fs.rm(root.path, recursive=True)
+
+    assert kept.value is not None
+    assert prefetch._ACTIVE is None
 
 
 def test_grade_accepts_a_plain_string():
