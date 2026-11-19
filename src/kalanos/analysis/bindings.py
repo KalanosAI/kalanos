@@ -146,16 +146,38 @@ def _inferred(
     channel: Channel,
     dictionary: Dictionary,
     quaternion: frozenset[str],
-) -> ChannelBinding:
-    """Interpret names in one place and explicitly label the result inference."""
+) -> tuple[ChannelBinding, bool]:
+    """Interpret names in one place and explicitly label the result inference.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream the channel belongs to.
+    channel : Channel
+        The channel to type.
+    dictionary : Dictionary
+        The taxonomy whose aliases and channel patterns read the name.
+    quaternion : frozenset[str]
+        The names of the stream's channels that hold quaternion components.
+
+    Returns
+    -------
+    tuple[ChannelBinding, bool]
+        The inferred binding, and whether its type is the one a dictionary
+        channel pattern gave. A feature mapping replaces such a type.
+    """
 
     taxonomy = stream.taxonomy_type
-    [role] = roles([channel.declared_name or channel.name], dictionary)
+    name = channel.declared_name or channel.name
+    [role] = roles([name], dictionary)
     # A partly recognized declared vector must not type its unresolved members.
     if taxonomy.startswith("unmapped."):
         taxonomy = role.taxonomy_type or taxonomy
+    matched = None
+    if taxonomy.startswith("unmapped."):
+        matched = dictionary.match_channel(stream.source_field, name)
+        taxonomy = matched or taxonomy
     actuator, quantity = _TYPES.get(taxonomy, (ActuatorKind.UNKNOWN, Quantity.UNKNOWN))
-    name = channel.declared_name or channel.name
     tokens = _name_tokens(name)
     # A hand token plus a digit token keeps `panda_hand` and `left_hand_pos_x` out.
     digit = bool(tokens & _HAND_DIGITS)
@@ -208,7 +230,7 @@ def _inferred(
         else BindingOrigin.INFERRED
     )
     binding.property_origins["identity"] = BindingOrigin.DECLARED
-    return binding
+    return binding, matched is not None and taxonomy == matched
 
 
 def capability_checks(
@@ -358,10 +380,13 @@ def resolve_stream(
     for position, channel in enumerate(stream.channels):
         if channel.source_index is None and len(stream.channels) > 1:
             channel = channel.model_copy(update={"source_index": position})
-        base = channel.binding or _inferred(stream, channel, dictionary, quaternion)
+        if channel.binding is None:
+            base, patterned = _inferred(stream, channel, dictionary, quaternion)
+        else:
+            base, patterned = channel.binding, False
         binding = base.model_copy(deep=True)
         binding.source_identity = source
-        specific = (
+        specific = not patterned and (
             partly_named
             or channel.binding is not None
             or (

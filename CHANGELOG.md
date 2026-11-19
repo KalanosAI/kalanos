@@ -4,6 +4,31 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.10.1] - 2026-11-19
+
+Report schema 8.2.0.
+Unknown episodes count their review findings, LeRobot channels are typed by their declared names, remote LeRobot v2 grades download upcoming episodes' video in the background, and grades with video no longer fail under PyAV 19.
+
+### Added
+
+- Each episode's eligibility gains `review_findings`, the number of its findings that request review, kept when a missing requirement makes the episode unknown or a block outranks them, and the report card's "Needs attention" row for an unknown episode shows it (report schema 8.2.0). Before, an unknown episode's review findings showed only in its reasons, so a dataset could list sources needing review while 0 episodes were in review. ([#115](https://github.com/KalanosAI/kalanos/pull/115))
+- `dictionary.yaml` entries can list `channel_patterns` (`features`, `names` and `exclude` globs) to type the channels of a feature no alias resolved, by their declared names. A `--map`, `--map-file`, bundle or sidecar mapping of the feature replaces them. ([#120](https://github.com/KalanosAI/kalanos/pull/120))
+- Grading a remote LeRobot v2 dataset downloads the video files of the episodes after the one being graded, whole and in episode order, in the background, and drops each episode's files once it is graded. `KALANOS_REMOTE_PREFETCH_BYTES` caps the bytes held (default 200 MB, `0` turns it off); a file larger than the cap streams as before. `RoboCOIN/Agilex_Cobot_Magic_fold_towel_pink_tray` (50 episodes, 150 video files), graded from `hf://` on 4 cores, took 1 min 50 s instead of 4 min, and its peak memory rose from 329 MiB to 641 MiB, of which about 125 MiB is memory the allocator keeps for the download threads rather than downloaded files. `RoboCOIN/AI2_Alphabot_2_tidy_countertop` (406 episodes, 1,624 video files, 18 GB) took 22 min 30 s instead of 67 min 30 s, and its peak memory rose from 851 MiB to 1,237 MiB. Metric values are unchanged. ([#126](https://github.com/KalanosAI/kalanos/pull/126))
+- A second Colab notebook, `notebooks/kalanos_cube_to_bowl.ipynb`, grades a pinned commit of the public `triton7777/cube_to_bowl_so100` SO-100 dataset with the `vision-imitation-v1` profile at the full tier, shows the episode it sends to review, and offers the JSON report, the HTML report and a provenance file as downloads. ([#125](https://github.com/KalanosAI/kalanos/pull/125))
+
+### Changed
+
+- `kalanos[video]` requires `av>=13,<19`, since PyAV 19 changed how a frame's side data iterates. ([#123](https://github.com/KalanosAI/kalanos/pull/123))
+- The Colab quickstart notebook is rewritten: it installs Kalanos into the notebook kernel, grades `lerobot/aloha_sim_transfer_cube_human` with the CLI, reads the saved report in Python, charts the signal-to-noise finding that sends 11 of its 50 episodes to review, and offers the JSON and HTML reports as a download. ([#124](https://github.com/KalanosAI/kalanos/pull/124))
+
+### Fixed
+
+- The HTML report's header shows "Readiness not established" and its reasons when the readiness index is undefined, instead of the word "undefined" at full score size, and the page no longer carries the whitespace-only lines its template's block tags left behind. ([#127](https://github.com/KalanosAI/kalanos/pull/127))
+- LeRobot state channels named `<motor>.pos`, or with the joint names SO-100, Unitree G1, AgileX and ALOHA arms declare (`main_shoulder_pan`, `kLeftShoulderPitch`, `left_arm_joint_1_rad`, `left_waist`), now grade as joint positions instead of unmapped, and end-effector channels in `observation.state` as end-effector pose. In an `action.*` feature no alias typed, `<motor>.pos` channels grade as joint position commands and `gripper.pos` as a gripper command. A joint name followed by another quantity, such as `shoulder_pan.load`, stays unmapped. `gripper_binary` and `progress` grade as computed features, and an `ee_pos` namespace as end-effector pose. The `semantic_mapping` coverage row lists each unmapped channel in its `reasons`. ([#120](https://github.com/KalanosAI/kalanos/pull/120))
+- A LeRobot v3 episode whose metadata names a data file that does not exist is now loaded and blocked by `schema.episode_file_mismatch`, with `pointed_path_exists: false` and the files that hold its rows in the evidence. Before, the adapter refused the whole dataset at that episode, and every later episode went unresolved. ([#121](https://github.com/KalanosAI/kalanos/pull/121))
+- Reading a video no longer fails with `AttributeError: 'Type' object has no attribute 'type'` under PyAV 19, which stopped every grade with video from writing a report. ([#123](https://github.com/KalanosAI/kalanos/pull/123))
+- The verdict words in the HTML report's header use lighter colours on its navy background. Before, they used the colours tuned for the page background, which fall below a 3:1 contrast ratio on navy. ([#117](https://github.com/KalanosAI/kalanos/pull/117))
+
 ## [0.10.0] - 2026-11-14
 
 Report schema 8.1.0.
@@ -356,6 +381,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.10.1]: https://github.com/KalanosAI/kalanos/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/KalanosAI/kalanos/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/KalanosAI/kalanos/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/KalanosAI/kalanos/compare/v0.9.1...v0.9.2

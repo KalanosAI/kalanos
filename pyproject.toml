@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.10.0"
+version = "0.10.1"
 description = "Grade robot training data before you train on it: a 0-100 readiness score, the blocking episodes to exclude, and the evidence behind every finding, for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,7 +54,7 @@ dependencies = [
 # instead of repeating its pins, so a new extra is one line added to both lists.
 [project.optional-dependencies]
 all = ["kalanos[video]", "kalanos[hdf5]", "kalanos[mcap]", "kalanos[hf]", "kalanos[numeric]"]
-video = ["av>=13", "numpy>=2.2.6", "opencv-python-headless>=4.10.0.84"]
+video = ["av>=13,<19", "numpy>=2.2.6", "opencv-python-headless>=4.10.0.84"]
 hdf5 = ["h5py>=3"]
 mcap = ["mcap>=1.4", "mcap-ros2-support>=0.5"]
 hf = ["huggingface-hub>=1.31.0"]
@@ -126,7 +126,7 @@ include = [
 
 [dependency-groups]
 dev = [
-    "av>=13",
+    "av>=13,<19",
     "h5py>=3.16.0",
     "huggingface-hub>=1.31.0",
     "mcap>=1.4",
@@ -145,7 +145,7 @@ target-version = "py310"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# The notebook builds HTML strings inline; the formatter cannot wrap string literals.
+# The notebooks build HTML strings inline; the formatter cannot wrap string literals.
 "notebooks/*.ipynb" = ["E501"]
 
 [tool.ruff.lint.isort]

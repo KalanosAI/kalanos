@@ -72,6 +72,13 @@ class Settings(BaseSettings):
         It briefly holds `(2 * remote_readahead_blocks + 5) * remote_block_bytes`
         while fetches dropped by a seek finish.
         Up to 4 idle files stay open, plus the one being read.
+    remote_prefetch_bytes : int
+        The most bytes of upcoming episodes' video files downloaded whole
+        ahead of the reader, for a LeRobot v2 dataset read remotely,
+        set by `KALANOS_REMOTE_PREFETCH_BYTES`. Defaults to 200 MB; `0` turns it off.
+        A file larger than this streams through the readahead above.
+        Downloads already under way when a dataset's read ends still finish,
+        so for about one download the next dataset can hold up to twice this.
     vision_samples : int or None
         How many frames blur and exposure sample, and windows frozen frames read,
         overridden for one invocation by the CLI's `--vision-samples` option.
@@ -107,6 +114,7 @@ class Settings(BaseSettings):
     remote_max_files: int | None = 10_000
     remote_block_bytes: int = Field(default=4 * 1024 * 1024, ge=64 * 1024)
     remote_readahead_blocks: int = Field(default=5, ge=0)
+    remote_prefetch_bytes: int = Field(default=200_000_000, ge=0)
     vision_samples: int | None = Field(default=None, ge=1)
     full_frame_scan: bool | None = None
     vision_summary_ratio: float | None = Field(default=None, gt=0, le=1)

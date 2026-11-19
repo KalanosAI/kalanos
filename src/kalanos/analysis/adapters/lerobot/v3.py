@@ -313,6 +313,9 @@ class LeRobotV3Adapter(LeRobotAdapter):
             found in the data and absent from the episode index, in index order:
             no streams, `tasks` `None`, and a `layout_check` whose `pointed_path`
             is `None` and whose `holding_paths` are the data files holding its rows.
+            An episode whose row names a data file that does not exist has no
+            streams, no `schema_check`, and a `layout_check` with `pointed_exists`
+            `False`.
 
         Raises
         ------
@@ -386,6 +389,33 @@ class LeRobotV3Adapter(LeRobotAdapter):
         # the files no metadata row names.
         read_paths: set[UPath] = set()
         held: dict[int, list[UPath]] = {}
+        # Each named data file is checked for existence once, since on a remote
+        # host every check is a request and many episodes can name the same file.
+        missing_paths: set[UPath] = set()
+        present_paths: set[UPath] = set()
+
+        def locate(with_index: bool) -> tuple[list[UPath], pl.DataFrame]:
+            """Find every episode's rows across all data files, scanning them once.
+
+            Parameters
+            ----------
+            with_index : bool
+                Whether to read the `index` column too.
+
+            Returns
+            -------
+            tuple[list[UPath], pl.DataFrame]
+                The data files, and the `read_episode_rows` output that indexes them.
+            """
+
+            nonlocal located
+            if located is None:
+                all_paths = _data_files(path, info)
+                located = (
+                    all_paths,
+                    read_episode_rows(all_paths, with_index=with_index),
+                )
+            return located
 
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
@@ -397,6 +427,45 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     chunk_index=row["data/chunk_index"],
                     file_index=row["data/file_index"],
                 )
+                if data_path not in missing_paths | present_paths:
+                    if data_path.exists():
+                        present_paths.add(data_path)
+                    else:
+                        missing_paths.add(data_path)
+                if data_path in missing_paths:
+                    source_paths, all_rows = locate("index" in cached_schema)
+                    holding = all_rows.filter(
+                        pl.col("episode_index") == row["episode_index"]
+                    )
+                    missing_layout = layout_check(
+                        row, data_path, holding, source_paths, pointed_exists=False
+                    )
+                else:
+                    missing_layout = None
+            except AdapterRefusal:
+                raise
+            except Exception as exc:
+                raise AdapterRefusal(
+                    path, f"episode {row.get('episode_index')}: {exc}"
+                ) from exc
+
+            if missing_layout is not None:
+                # No file to read a frame or schema from, and the pointer finding
+                # blocks the episode anyway. The cache is left alone, so a later
+                # episode naming the cached file does not read it again.
+                yield Episode(
+                    id=f"episode_{row['episode_index']:06d}",
+                    streams=[],
+                    tasks=None
+                    if task_map is None
+                    else task_map.get(row["episode_index"], []),
+                    split=split_of(info, row["episode_index"]),
+                    schema_check=None,
+                    layout_check=missing_layout,
+                )
+                continue
+
+            try:
                 materialise = reads_numeric_payloads()
                 if data_path != cached_path:
                     with data_path.open("rb") as handle:
@@ -443,13 +512,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         episode_frame, with_index=with_index
                     )
                 else:
-                    if located is None:
-                        all_paths = _data_files(path, info)
-                        located = (
-                            all_paths,
-                            read_episode_rows(all_paths, with_index=with_index),
-                        )
-                    source_paths, all_rows = located
+                    source_paths, all_rows = locate(with_index)
                     holding = all_rows.filter(
                         pl.col("episode_index") == row["episode_index"]
                     )

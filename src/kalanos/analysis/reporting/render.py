@@ -55,6 +55,9 @@ _TEMPLATE_ENVIRONMENT = Environment(
     # or it silently turns itself off for the one file that renders user paths.
     autoescape=select_autoescape(enabled_extensions=("html", "j2", "xml")),
     undefined=StrictUndefined,
+    # Without these, each block tag leaves its indentation and newline in the page.
+    trim_blocks=True,
+    lstrip_blocks=True,
 )
 
 

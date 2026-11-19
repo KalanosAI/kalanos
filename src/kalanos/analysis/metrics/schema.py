@@ -88,7 +88,8 @@ def episode_file_mismatch(ctx: EpisodeContext) -> MetricResult:
         `report_only` otherwise, `1.0` when the named file lacks the episode's rows,
         whether another file holds them or none does, and `0.0` when it holds them,
         with the named file and the files holding the rows as evidence,
-        plus the adapter's `pointer_effect` on a mismatch when it states one.
+        plus the adapter's `pointer_effect` on a mismatch when it states one,
+        and `pointed_path_exists: False` when the named file does not exist.
     """
 
     check = ctx.episode.layout_check
@@ -103,6 +104,8 @@ def episode_file_mismatch(ctx: EpisodeContext) -> MetricResult:
     }
     if not check.pointer_matches and check.pointer_effect is not None:
         evidence["effect"] = check.pointer_effect
+    if not check.pointed_exists:
+        evidence["pointed_path_exists"] = False
     return MetricResult(
         value=0.0 if check.pointer_matches else 1.0,
         unit="episodes",

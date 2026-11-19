@@ -1,8 +1,16 @@
 # Report schema
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0) and the 8.1.0 additions below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0), the 8.1.0 additions and the 8.2.0 addition below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 8.2.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `episodes[].eligibility.review_findings` | `int` | How many of the episode's findings have consequence `review`, counted from `reasons`, including those a `blocked` or `unknown` status outranks. Written on every episode. |
+
+An 8.1.0 report loads unchanged: the count is derived from `reasons` on load.
 
 ## Added in 8.1.0
 
@@ -169,7 +177,7 @@ A 7.0.0 report loads with `family_weights`, `duplicates`, every `metrics` and ev
 
 | Field | What it is |
 |---|---|
-| `episodes[].eligibility` | `status`, `scope_id`, `policy_id`, `reasons[]` (each with `id`, `kind`, `status`, `consequence`, `route`, `detail`). Required on every episode. |
+| `episodes[].eligibility` | `status`, `scope_id`, `policy_id`, `reasons[]` (each with `id`, `kind`, `status`, `consequence`, `route`, `detail`), `review_findings`. Required on every episode. |
 | `episodes[].streams[].evaluation` | `payload` (`computed`, `not_required`, `missing_input`, `skipped`, `error`), `reason`, `n_channels_declared`, `n_channels_graded`. Under `numeric-core` a stream with channels whose payload is `missing_input`, `skipped` or `error` makes the episode `unknown` — one stream's pass never covers another stream that was not read. |
 | `episodes[].streams[].frames` | A camera stream's shared read: rows requested, examined and missing, the sample plan and its parameters, and per frame its presentation time, shape, blur, clipped share and, for evidence frames, `luma_sha256`. `null` for a stream not read as camera footage. |
 | `findings[].consequence` | `block`, `review` or `report_only`. |

@@ -145,6 +145,25 @@ _CLEAN_LIBERO_META = [
     (7, 2, 1925, 2197, 272),
 ]
 
+# Real metadata rows and data `index` ranges, read 2026-11-17, shaped like `_G1_META`.
+# The metadata names file-001 for episodes 231 and 232, and no file-001 exists.
+_MISSING_FILE_META = [
+    (229, 0, 77038, 77357, 319),
+    (230, 0, 77357, 77665, 308),
+    (231, 1, 77665, 78001, 336),
+    (232, 1, 78001, 78327, 326),
+    (700, 0, 217062, 217552, 490),
+]
+_MISSING_FILE_DATA = {
+    0: [
+        (229, 77038, 77357),
+        (230, 77357, 77665),
+        (231, 77665, 78001),
+        (232, 78001, 78327),
+        (700, 217062, 217552),
+    ]
+}
+
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
@@ -1149,6 +1168,81 @@ def test_the_scan_runs_only_on_a_miss(tmp_path, monkeypatch, meta_rows, calls):
 
     assert len(episodes) == 8
     assert len(counted) == calls
+
+
+@pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
+def test_an_episode_pointed_at_a_missing_file_is_blocked(tmp_path, tier):
+    """Verify an episode whose metadata names a file that does not exist is blocked."""
+
+    root = _layout_dataset(tmp_path / "missing", _MISSING_FILE_META, _MISSING_FILE_DATA)
+
+    report = grade(root, tier=tier)
+
+    assert len(report.episodes) == 5
+    assert report.inventory is not None
+    assert report.inventory.loaded == 5
+    assert report.inventory.unresolved == 0
+    assert report.inventory.refused_sources == []
+    assert report.inventory.complete is True
+    assert report.unresolved == []
+    findings = _episode_findings(report, _POINTER_FINDING)
+    assert sorted(_episode_number(e) for e in findings) == [231, 232]
+    for episode_findings in findings.values():
+        [finding] = episode_findings
+        assert finding.consequence == Consequence.BLOCK
+        assert finding.evidence["pointed_path"].endswith(
+            "data/chunk-000/file-001.parquet"
+        )
+        assert finding.evidence["pointed_path_exists"] is False
+        [holding] = finding.evidence["holding_paths"]
+        assert holding.endswith("data/chunk-000/file-000.parquet")
+        assert "effect" not in finding.evidence
+    assert {231, 232} <= _blocked(report)
+    values = {
+        _episode_number(e.id): e.metrics[_POINTER_METRIC].value for e in report.episodes
+    }
+    assert values == {229: 0.0, 230: 0.0, 231: 1.0, 232: 1.0, 700: 0.0}
+
+
+def test_a_missing_file_is_checked_once(tmp_path, monkeypatch):
+    """Verify a missing data file is checked once and the data files scanned once."""
+
+    root = _layout_dataset(tmp_path / "missing", _MISSING_FILE_META, _MISSING_FILE_DATA)
+    checked = []
+    scanned = []
+    original_exists = type(root).exists
+    original_scan = v3.read_episode_rows
+
+    def counting_exists(self, *args, **kwargs):
+        if str(self).endswith("file-001.parquet"):
+            checked.append(self)
+        return original_exists(self, *args, **kwargs)
+
+    def counting_scan(*args, **kwargs):
+        scanned.append(args)
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(type(root), "exists", counting_exists)
+    monkeypatch.setattr(v3, "read_episode_rows", counting_scan)
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 5
+    assert len(checked) == 1
+    assert len(scanned) == 1
+    missing = {
+        _episode_number(e.id): e
+        for e in episodes
+        if _episode_number(e.id) in (231, 232)
+    }
+    for episode in missing.values():
+        assert episode.streams == []
+        assert episode.schema_check is None
+        assert episode.layout_check is not None
+        assert episode.layout_check.pointed_exists is False
+    assert all(
+        e.schema_check is not None for e in episodes if e not in missing.values()
+    )
 
 
 def _blocked(report):

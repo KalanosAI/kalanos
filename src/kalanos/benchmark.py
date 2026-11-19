@@ -757,11 +757,13 @@ def benchmark_dataset(
     reads = RemoteReads(
         block_bytes=settings.remote_block_bytes,
         readahead_blocks=settings.remote_readahead_blocks,
+        prefetch_bytes=settings.remote_prefetch_bytes,
     )
+    episodes = bound_episodes()
     try:
         with use_tier(config.scope.tier), use_remote_reads(reads):
             rates = benchmark_episodes(
-                episodes=bound_episodes(),
+                episodes=episodes,
                 policy=episode_policy,
                 n_episodes=info.episode_count,
                 sample=sample,
@@ -772,6 +774,10 @@ def benchmark_dataset(
                 inject_cameras=grades_vision(config.requirements),
             )
     finally:
+        # Stopping at `sample`, or on an error, leaves the adapter's generator
+        # suspended, holding whatever it opened, such as its video prefetcher,
+        # until it is garbage collected.
+        episodes.close()
         # Video files stay open across episodes, local and remote,
         # as in `kalanos grade`; a later run must not read a file
         # that changed since through a stale container.
