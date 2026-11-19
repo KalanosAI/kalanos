@@ -28,7 +28,8 @@ from helpers import LEROBOT_FIXTURE
 LEROBOT_VIDEO = (
     LEROBOT_FIXTURE / "videos" / "observation.images.up" / "chunk-000" / "file-000.mp4"
 )
-SIZE = LEROBOT_VIDEO.stat().st_size
+# Each copy ends in its own index byte, so a mixed-up file is told apart.
+SIZE = LEROBOT_VIDEO.stat().st_size + 1
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -99,7 +100,7 @@ def _prefetch_threads() -> list[threading.Thread]:
 def remote_files(request):
     """Return a factory copying the fixture mp4 to `count` files in memory.
 
-    Every file is removed afterwards.
+    Each copy ends in its own index byte. Every file is removed afterwards.
     """
 
     made: list[UPath] = []
@@ -109,8 +110,8 @@ def remote_files(request):
             UPath(f"memory://prefetch/{request.node.name}/episode-{k:03d}.mp4")
             for k in range(count)
         ]
-        for path in paths:
-            path.write_bytes(LEROBOT_VIDEO.read_bytes())
+        for index, path in enumerate(paths):
+            path.write_bytes(LEROBOT_VIDEO.read_bytes() + bytes([index]))
         made.extend(paths)
         return paths
 
@@ -149,7 +150,7 @@ def test_held_bytes_never_exceed_the_cap(monkeypatch, remote_files):
         for path in paths:
             assert _wait_for(lambda p=path: _submitted(prefetcher, p))
             gates[str(path)].set()
-            assert prefetcher.take(path) == LEROBOT_VIDEO.read_bytes()
+            assert prefetcher.take(path) == path.read_bytes()
             prefetcher.release([path])
 
     assert len(held) == 10
@@ -168,7 +169,7 @@ def test_files_ahead_are_fetched_while_an_episode_is_open(remote_files):
             assert _wait_for(lambda p=path: _submitted(prefetcher, p))
             future = prefetcher._entries[str(path)]
             assert isinstance(future, Future)
-            assert future.result(timeout=5) == LEROBOT_VIDEO.read_bytes()
+            assert future.result(timeout=5) == path.read_bytes()
         assert prefetcher._used == 1
 
 
@@ -224,7 +225,7 @@ def test_a_failed_download_falls_back(monkeypatch, remote_files):
         assert _wait_for(lambda: _submitted(prefetcher, broken))
         assert prefetcher.take(broken) is None
         assert _wait_for(lambda: _submitted(prefetcher, healthy))
-        assert prefetcher.take(healthy) == LEROBOT_VIDEO.read_bytes()
+        assert prefetcher.take(healthy) == healthy.read_bytes()
         assert prefetcher._failed == 1
 
 
