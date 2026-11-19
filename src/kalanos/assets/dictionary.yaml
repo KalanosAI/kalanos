@@ -67,6 +67,18 @@ entries:
     shape: per_joint
     unit: rad
     aliases: [arm_joints, joint_angles, joint_positions, position, q, qpos, robot0_joint_pos, sensor_msgs/msg/JointState]
+    # Each name glob matches up to the name's end, so a joint name followed by another quantity (`shoulder_pan.load`, `kLeftElbow_dq`) stays unmapped.
+    # LeRobot motor-bus names (`<motor>.pos`), then joint names as SO-100, Unitree G1, AgileX and ALOHA arms declare them.
+    # Finger and hand channels are left to the gripper and hand rules.
+    channel_patterns:
+      - features: ["observation.state", "observation.state.*", "state"]
+        names: [
+          "*.pos",
+          "*shoulder_pan", "*shoulder_lift", "*elbow_flex", "*wrist_flex", "*wrist_roll",
+          "*shoulderpitch", "*shoulderroll", "*shoulderyaw", "*elbow", "*wristroll",
+          "*joint_[0-9]_rad",
+          "*waist", "*shoulder", "*forearm_roll", "*wrist_angle", "*wrist_rotate"]
+        exclude: ["*finger*", "*hand*"]
     typical_rate_hz: [20.0, 1000.0]
     plausible_range: [-6.3, 6.3]
     group_hint: indexed
@@ -134,6 +146,11 @@ entries:
     kind: series
     shape: free
     aliases: [O_T_EE, ee_quat, eef_pos, eef_pose, eef_quat, observation.ee_pos, robot0_eef_pos, robot0_eef_quat, tcp_pose]
+    namespace_aliases: [ee_pos]
+    # End-effector position and rotation channels inside a state vector, as AgileX arms name them.
+    channel_patterns:
+      - features: ["observation.state", "observation.state.*"]
+        names: ["*eef_pos_[xyz]_m", "*eef_rot_euler_[xyz]_rad"]
     typical_rate_hz: [20.0, 100.0]
     group_hint: axes
   proprio.ee_twist:
@@ -390,6 +407,11 @@ entries:
     shape: per_joint
     unit: rad
     aliases: [action.joint_pos, target_joint_position]
+    # LeRobot motor-bus names, `<motor>.pos`, in an action feature no alias typed.
+    channel_patterns:
+      - features: ["action.*"]
+        names: ["*.pos"]
+        exclude: ["*gripper*"]
     typical_rate_hz: [20.0, 1000.0]
     plausible_range: [-6.3, 6.3]
     group_hint: indexed
@@ -435,6 +457,10 @@ entries:
     kind: series
     shape: scalar
     aliases: [grasp, gripper_action, gripper_closedness_action, gripper_open_scale_action]
+    # A gripper position command, `gripper.pos`, in an action feature no alias typed.
+    channel_patterns:
+      - features: ["action.*"]
+        names: ["*gripper.pos"]
     typical_rate_hz: [20.0, 100.0]
   action.base_velocity_command:
     label: Base velocity command (cmd_vel)
@@ -601,7 +627,8 @@ entries:
     aliases: [
       eef_acc_mag_action, eef_acc_mag_state, eef_direction_action, eef_direction_state,
       eef_sim_pose_action, eef_sim_pose_state, eef_velocity_action, eef_velocity_state,
-      gripper_activity_action, gripper_activity_state, gripper_mode_action, gripper_mode_state]
+      gripper_activity_action, gripper_activity_state, gripper_mode_action, gripper_mode_state,
+      gripper_binary, progress]
   
   # ░█▀▀░█▀█░█░░░▀█▀░█▀▄
   # ░█░░░█▀█░█░░░░█░░█▀▄

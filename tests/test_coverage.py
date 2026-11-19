@@ -16,16 +16,23 @@ from typer.testing import CliRunner
 # Internal
 from kalanos.analysis.coverage import (
     coverage_lines,
+    episode_coverage,
     merge_rows,
     metric_rows,
     rows_that_ran,
 )
 from kalanos.analysis.metrics.results import not_applicable
-from kalanos.analysis.models.binding import Bundle, RequirementsSection
+from kalanos.analysis.models.binding import (
+    Bundle,
+    ChannelBinding,
+    RequirementsSection,
+)
 from kalanos.analysis.models.coverage import Availability, CoverageRow
+from kalanos.analysis.models.domain import Channel
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import ExecutionTier
-from kalanos.analysis.models.report import Report
+from kalanos.analysis.models.report import GradedEpisode, GradedStream, Report
+from kalanos.analysis.models.scoring import ScoreResult
 from kalanos.analysis.reporting.card import render_terminal
 from kalanos.analysis.reporting.render import render_html, render_json
 from kalanos.analysis.reporting.summary import finding_groups
@@ -444,3 +451,46 @@ def test_report_without_ledgers_still_reads_as_not_recorded():
     assert coverage_lines(report.coverage) == [
         "Coverage was not recorded in this report."
     ]
+
+
+def test_the_mapping_row_names_each_unmapped_channel():
+    def channel(index: int, declared: str | None, taxonomy_type: str) -> Channel:
+        name = declared or f"observation.state_{index}"
+        binding = ChannelBinding(
+            feature="observation.state",
+            index=index,
+            name=name,
+            taxonomy_type=taxonomy_type,
+        )
+        return Channel(
+            name=name, declared_name=declared, source_index=index, binding=binding
+        )
+
+    score = ScoreResult(
+        level=Level.EPISODE, score=None, grade=None, train_ready=None, n_contributing=0
+    )
+    stream = GradedStream(
+        taxonomy_type="unmapped.observation.state",
+        score=score,
+        declared_channels=[
+            channel(0, "shoulder_pan.pos", "proprio.joint_position"),
+            channel(1, "tool_flag", "unmapped.observation.state"),
+            channel(2, None, "unmapped.observation.state"),
+        ],
+    )
+    episode = GradedEpisode(
+        id="e0",
+        adapter="lerobot",
+        adapter_confidence=1.0,
+        score=score,
+        streams=[stream],
+    )
+
+    coverage = episode_coverage(episode, RequirementsSection())
+
+    [row] = [r for r in coverage.dimensions if r.key == "semantic_mapping"]
+    assert (row.computed, row.unavailable) == (1, 2)
+    assert row.reasons == {
+        "observation.state[1] tool_flag": 1,
+        "observation.state[2]": 1,
+    }

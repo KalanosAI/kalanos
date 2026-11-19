@@ -14,6 +14,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import polars as pl
+import pytest
 from calibration_helpers import grade_with_test_calibration
 from upath import UPath
 
@@ -43,10 +44,11 @@ ALOHA_MOTORS = [
 ]
 
 
-def channel_taxonomy(stream_type: str, name: str) -> str:
+def channel_taxonomy(stream_type: str, name: str, *, feature: str | None = None) -> str:
     """Exercise the resolver, rather than a hidden reporting-stage heuristic."""
     stream = Stream(
         taxonomy_type=stream_type,
+        source_field=feature,
         kind=Kind.SERIES,
         timestamps=pl.Series("t", [0.0, 0.1]),
         source_path=UPath("fixture.csv"),
@@ -100,9 +102,9 @@ def test_a_channel_named_as_a_gripper_grades_as_one():
     assert channel_taxonomy("action.action_vector", "right_gripper") == (
         "action.gripper_command"
     )
-    assert channel_taxonomy("unmapped.observation.state", "left_waist") == (
-        "unmapped.observation.state"
-    )
+    assert channel_taxonomy(
+        "unmapped.observation.state", "left_waist", feature="observation.state"
+    ) == ("proprio.joint_position")
     assert channel_taxonomy("proprio.gripper_width", "gripper") == (
         "proprio.gripper_width"
     )
@@ -143,6 +145,98 @@ def test_a_hand_without_a_digit_is_not_a_finger_joint():
         assert channel_taxonomy("unmapped.observation.state", name) == (
             "unmapped.observation.state"
         )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "shoulder_pan.pos",
+        "shoulder_pan_joint.pos",
+        "joint_1.pos",
+        "main_shoulder_pan",
+        "kLeftShoulderPitch",
+        "left_arm_joint_1_rad",
+        "left_waist",
+    ],
+)
+def test_a_state_channel_named_as_an_arm_joint_grades_as_a_joint_position(name):
+    assert channel_taxonomy(
+        "unmapped.observation.state", name, feature="observation.state"
+    ) == ("proprio.joint_position")
+
+
+def test_a_joint_in_a_second_state_feature_grades_as_a_joint_position():
+    feature = "observation.state.radian_urdf0"
+    assert channel_taxonomy(
+        f"unmapped.{feature}", "elbow_flex.pos", feature=feature
+    ) == ("proprio.joint_position")
+
+
+def test_an_end_effector_channel_in_the_state_grades_as_its_pose():
+    assert channel_taxonomy(
+        "unmapped.observation.state", "left_eef_pos_x_m", feature="observation.state"
+    ) == ("proprio.ee_pose")
+
+
+def test_a_patterned_gripper_or_finger_joint_still_grades_as_a_gripper():
+    for name in ("gripper.pos", "finger_joint.pos"):
+        assert channel_taxonomy(
+            "unmapped.observation.state", name, feature="observation.state"
+        ) == ("proprio.gripper_width")
+    assert channel_taxonomy(
+        "unmapped.observation.state", "kLeftHandThumb0", feature="observation.state"
+    ) == ("proprio.finger_joint_state")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "thumb_finger.pos",
+        "panda_hand_joint",
+        "left_hand_pos_x",
+        "shoulder_pan.vel",
+        "shoulder_pan.load",
+        "shoulder_pan.acc",
+        "kLeftShoulderPitch_dq",
+        "kLeftElbow_tau",
+        "elbow_speed",
+        "wrist_cam_exposure",
+        "left_eef_pos_x_vel",
+    ],
+)
+def test_a_hand_or_other_quantity_channel_is_no_joint_position(name):
+    assert channel_taxonomy(
+        "unmapped.observation.state", name, feature="observation.state"
+    ) == ("unmapped.observation.state")
+
+
+def test_an_unmapped_action_feature_types_its_joints_and_gripper():
+    feature = "action.radian_urdf0"
+    assert channel_taxonomy(
+        f"unmapped.{feature}", "wrist_roll.pos", feature=feature
+    ) == ("action.joint_position_command")
+    assert channel_taxonomy(f"unmapped.{feature}", "gripper.pos", feature=feature) == (
+        "action.gripper_command"
+    )
+    assert channel_taxonomy(f"unmapped.{feature}", "gripper.vel", feature=feature) == (
+        f"unmapped.{feature}"
+    )
+
+
+def test_the_main_action_feature_keeps_its_type():
+    assert channel_taxonomy(
+        "action.action_vector", "wrist_roll.pos", feature="action"
+    ) == ("action.action_vector")
+
+
+def test_a_joint_name_outside_the_state_features_stays_unmapped():
+    assert channel_taxonomy("unmapped.foo", "shoulder_pan.pos", feature="foo") == (
+        "unmapped.foo"
+    )
+    feature = "observation.state_velocity"
+    assert channel_taxonomy(f"unmapped.{feature}", "shoulder_pan", feature=feature) == (
+        f"unmapped.{feature}"
+    )
 
 
 def _write_with_gripper(path: Path, n_episodes: int, glitched: set[int]) -> None:

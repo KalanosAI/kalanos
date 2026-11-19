@@ -412,7 +412,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av", marker = "extra == 'video'", specifier = ">=13" },
+    { name = "av", marker = "extra == 'video'", specifier = ">=13,<19" },
     { name = "certifi", specifier = ">=2026.7.22" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.31.0" },
@@ -440,7 +440,7 @@ provides-extras = ["all", "video", "hdf5", "mcap", "hf", "numeric"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "av", specifier = ">=13" },
+    { name = "av", specifier = ">=13,<19" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "huggingface-hub", specifier = ">=1.31.0" },
     { name = "mcap", specifier = ">=1.4" },

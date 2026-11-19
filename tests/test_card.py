@@ -149,6 +149,32 @@ def _flagged(
     return report.model_copy(update={"episodes": flagged})
 
 
+def _with_reasons(
+    report: Report, status: EligibilityStatus, *reasons: EligibilityReason
+) -> Report:
+    """A copy of `report` whose one flagged episode, `ep`, holds `reasons`."""
+
+    flagged = _flagged(report, ("ep", status, None))
+    episode = flagged.episodes[0]
+    eligibility = EpisodeEligibility.model_construct(
+        status=status, scope_id="s", policy_id="p", reasons=list(reasons)
+    )
+    episode = episode.model_copy(update={"eligibility": eligibility})
+    return flagged.model_copy(update={"episodes": [episode]})
+
+
+def _review_findings(n: int) -> list[EligibilityReason]:
+    return [
+        EligibilityReason(
+            id=f"cam{i}.sharpness_score",
+            kind=ReasonKind.FINDING,
+            status=EligibilityStatus.REVIEW,
+            consequence=Consequence.REVIEW,
+        )
+        for i in range(n)
+    ]
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -267,6 +293,31 @@ def test_needs_attention_orders_by_status_then_score_with_none_last(csv_report):
         "unknown_none",
         "+",
     ]
+
+
+def test_needs_attention_counts_review_findings_on_an_unknown_episode(csv_report):
+    missing = EligibilityReason(
+        id="capability:video_quality",
+        kind=ReasonKind.REQUIREMENT,
+        status=EligibilityStatus.UNKNOWN,
+    )
+    unknown = EligibilityStatus.UNKNOWN
+
+    three = _with_reasons(csv_report, unknown, missing, *_review_findings(3))
+    [row] = _section(render_terminal(three, width=120), "Needs attention")
+    assert row.rstrip().endswith("+3 review findings")
+
+    one = _with_reasons(csv_report, unknown, missing, *_review_findings(1))
+    [row] = _section(render_terminal(one, width=120), "Needs attention")
+    assert row.rstrip().endswith("+1 review finding")
+
+
+def test_needs_attention_shows_no_count_on_a_review_row(csv_report):
+    report = _with_reasons(csv_report, EligibilityStatus.REVIEW, *_review_findings(2))
+
+    [row] = _section(render_terminal(report, width=120), "Needs attention")
+
+    assert "review finding" not in row
 
 
 def test_an_episode_inside_a_container_is_named_by_its_id(csv_report):
@@ -576,7 +627,7 @@ def test_unmapped_stream_types_get_a_mapping_row(csv_report, vision_report):
         for row in _section(render_terminal(csv_report), "Coverage")
     )
     assert _row(render_terminal(vision_report), "mapping").startswith(
-        "2 stream types unmapped - type them with --map"
+        "1 stream type unmapped - type them with --map"
     )
 
 

@@ -15,6 +15,7 @@ Name matching normalises both sides through `normalise_name`, so a column called
 # Built-in
 import re
 from enum import Enum
+from fnmatch import fnmatchcase
 from functools import cached_property
 from typing import Annotated
 
@@ -220,6 +221,58 @@ class Category(BaseModel):
     group: CategoryGroup
 
 
+class ChannelPattern(BaseModel):
+    """Globs that type the channels of a feature by their names.
+
+    A pattern matches a channel when the feature's key matches one of `features`,
+    the channel's name matches one of `names`, and the name matches none of `exclude`.
+    Matching lowercases the key and the name, so the globs are written in lowercase.
+
+    Attributes
+    ----------
+    features : list[str]
+        Globs over the feature key, such as `observation.state.*`.
+    names : list[str]
+        Globs over the channel's declared name, such as `*.pos`.
+    exclude : list[str]
+        Globs that veto a name the `names` globs matched, such as `*finger*`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    features: list[str] = Field(min_length=1)
+    names: list[str] = Field(min_length=1)
+    exclude: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _globs_are_lowercase(self) -> "ChannelPattern":
+        """Refuse an empty glob, or one with an uppercase letter.
+
+        Matching lowercases what it compares, so an uppercase glob could never match.
+
+        Returns
+        -------
+        ChannelPattern
+            `self`, unchanged, once every glob is non-empty and lowercase.
+
+        Raises
+        ------
+        ValueError
+            If any glob is empty or contains an uppercase letter.
+        """
+
+        bad = [
+            glob
+            for glob in (*self.features, *self.names, *self.exclude)
+            if not glob or glob != glob.lower()
+        ]
+        if bad:
+            raise ValueError(
+                f"channel pattern globs must be non-empty lowercase, got {bad}"
+            )
+        return self
+
+
 class DictionaryEntry(BaseModel):
     """One signal the taxonomy knows about.
 
@@ -256,6 +309,10 @@ class DictionaryEntry(BaseModel):
         and parent segments are tried, nearest first, only when no entry matches
         that last segment. Only entries listing a name here take part, because
         a parent word is often an alias of an unrelated signal.
+    channel_patterns : list[ChannelPattern]
+        Globs that type the channels of a feature no alias resolved, by the channel
+        names it declares, such as `shoulder_pan.pos` in `observation.state`.
+        They are a default: any feature mapping of that feature replaces them.
     typical_rate_hz : tuple[float, float] or None
         The sampling rate band this signal is usually recorded at, low to high.
         Context for a reader and a prior for inference, never a grading bound.
@@ -275,6 +332,7 @@ class DictionaryEntry(BaseModel):
     unit: str | None = None
     aliases: list[str] = Field(default_factory=list)
     namespace_aliases: list[str] = Field(default_factory=list)
+    channel_patterns: list[ChannelPattern] = Field(default_factory=list)
     typical_rate_hz: tuple[float, float] | None = None
     plausible_range: tuple[float, float] | None = None
     group_hint: GroupHintKind | None = None
@@ -537,6 +595,38 @@ class Dictionary(BaseModel):
                 name=name, normalised=normalised, taxonomy_type=claimants[0]
             )
         return NameMatch(name=name, normalised=normalised, candidates=list(claimants))
+
+    def match_channel(self, feature: str | None, name: str) -> str | None:
+        """Type one channel by its feature and its name, through `channel_patterns`.
+
+        Parameters
+        ----------
+        feature : str or None
+            The key of the feature the channel belongs to, e.g. `observation.state`.
+        name : str
+            The channel's declared name, e.g. `shoulder_pan.pos`.
+
+        Returns
+        -------
+        str or None
+            The taxonomy type whose patterns match, or `None` when no entry's do,
+            when several entries' do, or when the channel has no feature.
+        """
+
+        if feature is None:
+            return None
+        feature, name = feature.lower(), name.lower()
+        matched = [
+            taxonomy_type
+            for taxonomy_type, entry in self.entries.items()
+            if any(
+                any(fnmatchcase(feature, glob) for glob in pattern.features)
+                and any(fnmatchcase(name, glob) for glob in pattern.names)
+                and not any(fnmatchcase(name, glob) for glob in pattern.exclude)
+                for pattern in entry.channel_patterns
+            )
+        ]
+        return matched[0] if len(matched) == 1 else None
 
     def category_of(self, taxonomy_type: str) -> str | None:
         """Look up the category a taxonomy type is filed under.

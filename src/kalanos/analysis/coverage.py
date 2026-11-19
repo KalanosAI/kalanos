@@ -19,7 +19,7 @@ from kalanos.analysis.models.binding import (
 )
 from kalanos.analysis.models.coverage import Availability, Coverage, CoverageRow
 from kalanos.analysis.models.diagnostics import DiagnosticResult
-from kalanos.analysis.models.domain import Stream
+from kalanos.analysis.models.domain import Channel, Stream
 from kalanos.analysis.models.metrics import Level, MetricResult, MetricStatus
 from kalanos.analysis.models.provenance import Inventory
 from kalanos.analysis.models.report import (
@@ -297,6 +297,36 @@ def vision_metric_frames(streams: list[GradedStream]) -> tuple[int, int] | None:
     return sum(e for e, _ in counts), sum(d for _, d in counts)
 
 
+def _channel_label(channel: Channel) -> str:
+    """Name one channel the way the `semantic_mapping` row reports it.
+
+    Parameters
+    ----------
+    channel : Channel
+        The channel, with or without a binding.
+
+    Returns
+    -------
+    str
+        The feature, the index when the feature is a vector, and the declared name
+        when it adds anything: `observation.state[1] shoulder_lift.pos`,
+        `observation.state[3]` or `skill.progress`. The channel's name when it has
+        no binding.
+    """
+
+    binding = channel.binding
+    if binding is None:
+        return channel.name
+    label = (
+        binding.feature
+        if binding.index is None
+        else f"{binding.feature}[{binding.index}]"
+    )
+    if channel.declared_name and channel.declared_name != binding.feature:
+        label = f"{label} {channel.declared_name}"
+    return label
+
+
 def episode_coverage(
     episode: GradedEpisode,
     requirements: RequirementsSection,
@@ -425,12 +455,9 @@ def episode_coverage(
             )
         )
     mapping = [
-        (
-            Availability.COMPUTED
-            if c.binding and not c.binding.taxonomy_type.startswith("unmapped")
-            else Availability.UNAVAILABLE,
-            None,
-        )
+        (Availability.COMPUTED, None)
+        if c.binding and not c.binding.taxonomy_type.startswith("unmapped")
+        else (Availability.UNAVAILABLE, _channel_label(c))
         for c in channels
     ]
     clocks = [
