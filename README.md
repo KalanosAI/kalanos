@@ -57,6 +57,8 @@ Choose what fits your workflow; no integration is required to run the local grad
 
 Run a dataset audit in Google Colab. No local installation is required. [The notebook](notebooks/kalanos_quickstart.ipynb) installs Kalanos 0.10.0 in the Colab kernel, downloads the public `lerobot/aloha_sim_transfer_cube_human` dataset, grades it, charts the signal it sends episodes to review for, and offers the JSON and HTML reports as a download. It is separate from the local quickstart below.
 
+To audit a real recording, [the Cube to Bowl notebook](notebooks/kalanos_cube_to_bowl.ipynb) grades a pinned commit of the public `triton7777/cube_to_bowl_so100` SO-100 dataset and shows the episode it sends to review. [![Open Cube to Bowl in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_cube_to_bowl.ipynb)
+
 [Notebook instructions](notebooks/README.md)
 
 ## Quickstart
