@@ -10,11 +10,12 @@ optional decoder.
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import io
 import logging
 import struct
 import threading
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from upath import UPath
 
 # Internal
+from kalanos.analysis.adapters.prefetch import prefetched
 from kalanos.analysis.adapters.readahead import ReadaheadCache
 from kalanos.analysis.entry_points import MissingDependency
 from kalanos.analysis.optional import load_numpy
@@ -390,7 +392,8 @@ class _VideoFile:
     container : Any
         The PyAV input container.
     handle : Any or None
-        The fsspec file object a remote container reads, `None` for a local file.
+        The file object a remote container reads, an fsspec file or the prefetched
+        bytes in a `BytesIO`, `None` for a local file.
     header : ContainerHeader or None
         The header read at open, `None` when the file has no video stream.
         Decoding updates the codec context from the bitstream,
@@ -426,10 +429,14 @@ class RemoteReads:
         The size of each range request.
     readahead_blocks : int
         How many blocks are fetched ahead of a sequential read; `0` turns it off.
+    prefetch_bytes : int
+        The most bytes of upcoming whole files an adapter may prefetch;
+        `0` turns it off. A file larger than this streams.
     """
 
     block_bytes: int = 4 * 1024 * 1024
     readahead_blocks: int = 5
+    prefetch_bytes: int = 200_000_000
 
 
 @dataclass(frozen=True)
@@ -895,6 +902,18 @@ def _tag(container: Any, stream: Any, keys: Sequence[str]) -> str | None:
     return None
 
 
+def decoder_available() -> bool:
+    """Return whether PyAV is installed, so video can be decoded at all.
+
+    Returns
+    -------
+    bool
+        `False` without the `video` extra.
+    """
+
+    return av is not None
+
+
 @contextmanager
 def use_remote_reads(reads: RemoteReads) -> Iterator[None]:
     """Fetch remote video files opened in the body as `reads` says.
@@ -914,6 +933,18 @@ def use_remote_reads(reads: RemoteReads) -> Iterator[None]:
         yield
     finally:
         _REMOTE_READS.reset(token)
+
+
+def current_remote_reads() -> RemoteReads:
+    """Return how remote video is fetched in this run, the defaults outside one.
+
+    Returns
+    -------
+    RemoteReads
+        The value `use_remote_reads` set, or `RemoteReads()`.
+    """
+
+    return _REMOTE_READS.get() or RemoteReads()
 
 
 def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
@@ -937,13 +968,17 @@ def _open_file(av: ModuleType, path: UPath) -> _VideoFile:
         container = av.open(str(path))
     else:
         # PyAV cannot resolve an fsspec URL such as hf://, so it reads a file object.
-        reads = _REMOTE_READS.get() or RemoteReads()
-        handle = path.open(
-            "rb",
-            block_size=reads.block_bytes,
-            cache_type=ReadaheadCache.name,
-            cache_options={"readahead": reads.readahead_blocks},
-        )
+        data = prefetched(path)
+        if data is not None:
+            handle = io.BytesIO(data)
+        else:
+            reads = current_remote_reads()
+            handle = path.open(
+                "rb",
+                block_size=reads.block_bytes,
+                cache_type=ReadaheadCache.name,
+                cache_options={"readahead": reads.readahead_blocks},
+            )
         try:
             container = av.open(handle)
         except BaseException:
@@ -1113,12 +1148,27 @@ def _check_in(path: UPath, file: _VideoFile) -> None:
         stale.close()
 
 
-def close_video_files() -> None:
-    """Close and forget every pooled video file, at the end of a run."""
+def close_video_files(paths: Iterable[UPath] | None = None) -> None:
+    """Close and forget pooled video files.
+
+    Parameters
+    ----------
+    paths : Iterable of UPath or None
+        The files to close, such as an episode's once it is read,
+        so no idle container keeps their bytes alive.
+        `None` closes every pooled file, at the end of a run.
+    """
 
     with _OPEN_LOCK:
-        files = list(_OPEN_FILES.values())
-        _OPEN_FILES.clear()
+        if paths is None:
+            files = list(_OPEN_FILES.values())
+            _OPEN_FILES.clear()
+        else:
+            files = [
+                file
+                for file in (_OPEN_FILES.pop(str(path), None) for path in paths)
+                if file is not None
+            ]
     for file in files:
         file.close()
 

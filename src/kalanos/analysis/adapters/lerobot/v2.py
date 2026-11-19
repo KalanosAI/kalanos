@@ -41,11 +41,18 @@ from kalanos.analysis.adapters.lerobot.common import (
     timestamp_dtype_of,
     with_episode_clock,
 )
+from kalanos.analysis.adapters.prefetch import prefetching
 from kalanos.analysis.adapters.registry import adapter
-from kalanos.analysis.adapters.video import VideoPayload
+from kalanos.analysis.adapters.video import (
+    VideoPayload,
+    close_video_files,
+    current_remote_reads,
+    decoder_available,
+)
 
 # Internal
 from kalanos.analysis.execution import reads_numeric_payloads
+from kalanos.analysis.hosts import LOCAL_PROTOCOLS
 from kalanos.analysis.inference.tasks import as_task_list, dataset_tasks
 from kalanos.analysis.models.adapters import AdapterRefusal, DatasetInfo
 from kalanos.analysis.models.domain import (
@@ -71,6 +78,41 @@ _DEFAULT_CHUNKS_SIZE = 1000
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
+
+
+def _video_path(
+    info: dict[str, Any],
+    dataset_root: UPath,
+    video_key: str,
+    episode_index: int,
+    episode_chunk: int,
+) -> UPath:
+    """Return the mp4 `info["video_path"]` names for one camera of one episode.
+
+    Parameters
+    ----------
+    info : dict
+        The parsed `info.json`.
+    dataset_root : UPath
+        The dataset root, `video_path` is resolved relative to it.
+    video_key : str
+        The video feature key.
+    episode_index : int
+        The episode's own index.
+    episode_chunk : int
+        The chunk `episode_index` falls into.
+
+    Returns
+    -------
+    UPath
+        The video file.
+    """
+
+    return dataset_root / info["video_path"].format(
+        video_key=video_key,
+        episode_chunk=episode_chunk,
+        episode_index=episode_index,
+    )
 
 
 def _video_stream(
@@ -125,10 +167,8 @@ def _video_stream(
         until a metric actually calls it.
     """
 
-    video_path = dataset_root / info["video_path"].format(
-        video_key=video_key,
-        episode_chunk=episode_chunk,
-        episode_index=episode_index,
+    video_path = _video_path(
+        info, dataset_root, video_key, episode_index, episode_chunk
     )
     return Stream(
         taxonomy_type=taxonomy_type,
@@ -292,96 +332,135 @@ class LeRobotV2Adapter(LeRobotAdapter):
 
         episode_count = total if sample is None else min(total, sample)
 
-        for episode_index in range(episode_count):
-            try:
-                episode_chunk = episode_index // chunks_size
-                data_path = path / info["data_path"].format(
-                    episode_chunk=episode_chunk, episode_index=episode_index
-                )
-                # One parquet holds exactly one episode, unlike v3's shared chunks:
-                # no episode_index filter and no chunk cache are needed here.
-                materialise = reads_numeric_payloads()
-                with data_path.open("rb") as handle:
-                    parquet_schema = pl.read_parquet_schema(handle)
-                check_scalar_index(path, parquet_schema)
-                schema_check = check_schema(info, parquet_schema, data_path)
-                with data_path.open("rb") as handle:
-                    # Metadata tier: index and clock columns only; the
-                    # numeric feature vectors never leave the file.
-                    frame = storage_columns(
-                        pl.read_parquet(
-                            handle,
-                            columns=None
-                            if materialise
-                            else [
-                                c
-                                for c in ("episode_index", TIME_COLUMN, "frame_index")
-                                if c in parquet_schema
-                            ],
+        # Each episode's video files, fetched whole ahead of the reader when remote.
+        # A metadata tier, or a run without the decoder, opens no video,
+        # so prefetching there would only download bytes nobody reads.
+        cap = (
+            current_remote_reads().prefetch_bytes
+            if path.protocol not in LOCAL_PROTOCOLS
+            and plan.video
+            and reads_numeric_payloads()
+            and decoder_available()
+            else 0
+        )
+        video_paths = (
+            [
+                [
+                    _video_path(info, path, video_key, index, index // chunks_size)
+                    for video_key in plan.video
+                ]
+                for index in range(episode_count)
+            ]
+            if cap
+            else []
+        )
+
+        with prefetching(video_paths, cap) as prefetcher:
+            for episode_index in range(episode_count):
+                try:
+                    episode_chunk = episode_index // chunks_size
+                    data_path = path / info["data_path"].format(
+                        episode_chunk=episode_chunk, episode_index=episode_index
+                    )
+                    # One parquet holds exactly one episode, unlike v3's shared chunks:
+                    # no episode_index filter and no chunk cache are needed here.
+                    materialise = reads_numeric_payloads()
+                    with data_path.open("rb") as handle:
+                        parquet_schema = pl.read_parquet_schema(handle)
+                    check_scalar_index(path, parquet_schema)
+                    schema_check = check_schema(info, parquet_schema, data_path)
+                    with data_path.open("rb") as handle:
+                        # Metadata tier: index and clock columns only; the
+                        # numeric feature vectors never leave the file.
+                        frame = storage_columns(
+                            pl.read_parquet(
+                                handle,
+                                columns=None
+                                if materialise
+                                else [
+                                    c
+                                    for c in (
+                                        "episode_index",
+                                        TIME_COLUMN,
+                                        "frame_index",
+                                    )
+                                    if c in parquet_schema
+                                ],
+                            )
+                        )
+
+                    episode_frame = frame
+                    timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
+                    clock = episode_clock(episode_frame, fps, timestamp_dtype)
+                    timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
+                    is_regular = sampling_is_regular(timestamps)
+
+                    streams = (
+                        series_streams(
+                            episode_frame,
+                            plan,
+                            timestamps,
+                            data_path,
+                            path=path,
+                            episode_label=episode_index,
+                            clock=clock,
+                            timestamp_dtype=timestamp_dtype,
+                            is_regular=is_regular,
+                        )
+                        if materialise
+                        else declared_series_streams(
+                            plan,
+                            parquet_schema,
+                            timestamps,
+                            data_path,
+                            clock=clock,
+                            timestamp_dtype=timestamp_dtype,
+                            is_regular=is_regular,
                         )
                     )
-
-                episode_frame = frame
-                timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
-                clock = episode_clock(episode_frame, fps, timestamp_dtype)
-                timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
-                is_regular = sampling_is_regular(timestamps)
-
-                streams = (
-                    series_streams(
-                        episode_frame,
-                        plan,
-                        timestamps,
-                        data_path,
-                        path=path,
-                        episode_label=episode_index,
-                        clock=clock,
-                        timestamp_dtype=timestamp_dtype,
-                        is_regular=is_regular,
+                    streams.extend(
+                        _video_stream(
+                            info,
+                            video_key,
+                            taxonomy_type,
+                            timestamps,
+                            path,
+                            mapping_source=mapping_source,
+                            episode_index=episode_index,
+                            episode_chunk=episode_chunk,
+                            fps=fps,
+                            clock=clock,
+                            timestamp_dtype=timestamp_dtype,
+                            is_regular=is_regular,
+                        )
+                        for video_key, (
+                            taxonomy_type,
+                            mapping_source,
+                        ) in plan.video.items()
                     )
-                    if materialise
-                    else declared_series_streams(
-                        plan,
-                        parquet_schema,
-                        timestamps,
-                        data_path,
-                        clock=clock,
-                        timestamp_dtype=timestamp_dtype,
-                        is_regular=is_regular,
-                    )
+                except AdapterRefusal:
+                    raise
+                except Exception as exc:
+                    raise AdapterRefusal(
+                        path, f"episode {episode_index}: {exc}"
+                    ) from exc
+
+                streams = with_episode_clock(
+                    streams,
+                    episode_frame,
+                    clock=clock,
+                    domain=f"{path}#episode:{episode_index}",
                 )
-                streams.extend(
-                    _video_stream(
-                        info,
-                        video_key,
-                        taxonomy_type,
-                        timestamps,
-                        path,
-                        mapping_source=mapping_source,
-                        episode_index=episode_index,
-                        episode_chunk=episode_chunk,
-                        fps=fps,
-                        clock=clock,
-                        timestamp_dtype=timestamp_dtype,
-                        is_regular=is_regular,
-                    )
-                    for video_key, (taxonomy_type, mapping_source) in plan.video.items()
+                yield Episode(
+                    id=f"episode_{episode_index:06d}",
+                    streams=streams,
+                    tasks=None if task_map is None else task_map.get(episode_index, []),
+                    split=split_of(info, episode_index),
+                    schema_check=schema_check,
                 )
-            except AdapterRefusal:
-                raise
-            except Exception as exc:
-                raise AdapterRefusal(path, f"episode {episode_index}: {exc}") from exc
-
-            streams = with_episode_clock(
-                streams,
-                episode_frame,
-                clock=clock,
-                domain=f"{path}#episode:{episode_index}",
-            )
-            yield Episode(
-                id=f"episode_{episode_index:06d}",
-                streams=streams,
-                tasks=None if task_map is None else task_map.get(episode_index, []),
-                split=split_of(info, episode_index),
-                schema_check=schema_check,
-            )
+                if prefetcher is not None:
+                    # The pipeline grades an episode before asking for the next,
+                    # so its files are done with. Pooled containers are closed first,
+                    # since one left idle would keep the released bytes alive.
+                    close_video_files(video_paths[episode_index])
+                    prefetcher.release(video_paths[episode_index])

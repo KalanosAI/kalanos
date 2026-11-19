@@ -106,21 +106,27 @@ def test_plugin_dir_is_overridden_through_the_environment(monkeypatch, tmp_path)
 
 
 def test_remote_read_settings_are_overridden_through_the_environment(monkeypatch):
-    """Verify the remote block size and readahead parse, a readahead of 0 included."""
+    """Verify the remote read settings parse, a readahead and prefetch of 0 included."""
 
     monkeypatch.setenv("KALANOS_REMOTE_BLOCK_BYTES", "1048576")
     monkeypatch.setenv("KALANOS_REMOTE_READAHEAD_BLOCKS", "0")
+    monkeypatch.setenv("KALANOS_REMOTE_PREFETCH_BYTES", "0")
     settings = Settings()
     assert settings.remote_block_bytes == 1048576
     assert settings.remote_readahead_blocks == 0
+    assert settings.remote_prefetch_bytes == 0
 
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("KALANOS_REMOTE_BLOCK_BYTES", "1024"), ("KALANOS_REMOTE_READAHEAD_BLOCKS", "-1")],
+    [
+        ("KALANOS_REMOTE_BLOCK_BYTES", "1024"),
+        ("KALANOS_REMOTE_READAHEAD_BLOCKS", "-1"),
+        ("KALANOS_REMOTE_PREFETCH_BYTES", "-1"),
+    ],
 )
 def test_remote_read_settings_out_of_range_are_refused(monkeypatch, name, value):
-    """Verify a block under 64 KiB or a negative readahead is refused."""
+    """Verify a block under 64 KiB, or a negative readahead or prefetch, is refused."""
 
     monkeypatch.setenv(name, value)
     with pytest.raises(ValidationError):
