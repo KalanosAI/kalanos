@@ -77,6 +77,8 @@ class Settings(BaseSettings):
         ahead of the reader, for a LeRobot v2 dataset read remotely,
         set by `KALANOS_REMOTE_PREFETCH_BYTES`. Defaults to 200 MB; `0` turns it off.
         A file larger than this streams through the readahead above.
+        Downloads already under way when a dataset's read ends still finish,
+        so for about one download the next dataset can hold up to twice this.
     vision_samples : int or None
         How many frames blur and exposure sample, and windows frozen frames read,
         overridden for one invocation by the CLI's `--vision-samples` option.
