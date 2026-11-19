@@ -144,6 +144,10 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# The notebooks build HTML strings inline; the formatter cannot wrap string literals.
+"notebooks/*.ipynb" = ["E501"]
+
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # tests/ has no __init__.py, so `helpers` resolves as a bare top-level

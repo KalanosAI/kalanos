@@ -145,12 +145,12 @@ class DisclosureStateCollector(HTMLParser):
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
-def copy_to_memory(source: Path, name: str) -> UPath:
+def copy_to_memory(source: UPath, name: str) -> UPath:
     """Copy a fixture tree onto fsspec's in-memory filesystem, which reads as remote.
 
     Parameters
     ----------
-    source : Path
+    source : UPath
         The local directory to copy.
     name : str
         The directory under `memory://` to copy it into, unique to the caller.
@@ -162,7 +162,7 @@ def copy_to_memory(source: Path, name: str) -> UPath:
     """
 
     root = UPath(f"memory://{name}")
-    for file in Path(source).rglob("*"):
+    for file in source.rglob("*"):
         if file.is_file():
             (root / file.relative_to(source).as_posix()).write_bytes(file.read_bytes())
     return root
