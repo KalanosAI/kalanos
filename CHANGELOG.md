@@ -4,6 +4,19 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [0.10.2] - 2026-11-22
+
+Documentation and notebooks only; no code or report schema changes.
+
+### Added
+
+- Three Colab notebooks, `kalanos_pick_and_place_audit.ipynb`, `kalanos_mimicgen_preflight.ipynb` and `kalanos_compare_dataset_audits.ipynb`, and a notebooks index with Open in Colab links. ([#129](https://github.com/KalanosAI/kalanos/pull/129))
+
+### Changed
+
+- The README is shorter: a one-line description, a runnable install and grade example, and a chart of the 11 ALOHA episodes the quickstart sends to review. ([#131](https://github.com/KalanosAI/kalanos/pull/131))
+- The Cube to Bowl notebook installs Kalanos into the notebook kernel like the quickstart, and its sharpness chart labels each camera reading by its blur flag. ([#129](https://github.com/KalanosAI/kalanos/pull/129), [#130](https://github.com/KalanosAI/kalanos/pull/130))
+
 ## [0.10.1] - 2026-11-19
 
 Report schema 8.2.0.
@@ -381,6 +394,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.10.2]: https://github.com/KalanosAI/kalanos/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/KalanosAI/kalanos/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/KalanosAI/kalanos/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/KalanosAI/kalanos/compare/v0.9.2...v0.9.3
