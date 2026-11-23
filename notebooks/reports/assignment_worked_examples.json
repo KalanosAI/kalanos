@@ -1,0 +1,509 @@
+{
+  "IDEAS-Lab-Northwestern/datagen-dusty-v1-joint-5cam": {
+    "version": "0.10.1",
+    "profile": "numeric-core-v1",
+    "tier": "standard",
+    "counts": {
+      "pass_": 1040,
+      "review": 0,
+      "blocked": 0,
+      "unknown": 0
+    },
+    "total": 1040,
+    "complete": true,
+    "readiness": 90.6,
+    "readiness_reasons": [],
+    "revision": "ac57d863b06c294007bd74c9ae3046e26c2ccf0c",
+    "summary_only": true,
+    "episodes": [],
+    "findings": []
+  },
+  "triton7777/cube_to_bowl_so100": {
+    "version": "0.10.1",
+    "profile": "vision-imitation-v1",
+    "tier": "full",
+    "counts": {
+      "pass_": 9,
+      "review": 1,
+      "blocked": 0,
+      "unknown": 0
+    },
+    "total": 10,
+    "complete": true,
+    "readiness": null,
+    "readiness_reasons": [
+      "1 episode(s) require review"
+    ],
+    "episodes": [
+      {
+        "id": "cube_to_bowl_so100::episode_000000",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000001",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000002",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000003",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000004",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000005",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000006",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000007",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000008",
+        "status": "review",
+        "reasons": [
+          "vision.blur_vs_camera critical: 6.446931382150321 variance"
+        ]
+      },
+      {
+        "id": "cube_to_bowl_so100::episode_000009",
+        "status": "pass",
+        "reasons": []
+      }
+    ],
+    "findings": [
+      {
+        "episode": "cube_to_bowl_so100::episode_000008",
+        "metric": "vision.blur_vs_camera",
+        "source": "observation.images.gripper",
+        "channel": null,
+        "value": 6.446931382150321,
+        "unit": "variance",
+        "consequence": "review",
+        "camera_median": 53.92101254125532
+      }
+    ],
+    "revision": "9f490c4e624034eb5c6e961e65767abb9ab7c391"
+  },
+  "lerobot/aloha_sim_transfer_cube_human": {
+    "version": "0.10.0",
+    "profile": "numeric-core-v1",
+    "tier": "standard",
+    "counts": {
+      "pass_": 39,
+      "review": 11,
+      "blocked": 0,
+      "unknown": 0
+    },
+    "total": 50,
+    "complete": true,
+    "readiness": null,
+    "readiness_reasons": [
+      "11 episode(s) require review"
+    ],
+    "episodes": [
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000000",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000001",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000002",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: -5.144926659449629 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000003",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000004",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000005",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000006",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000007",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000008",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000009",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000010",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000011",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 13.738650420535103 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000012",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000013",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000014",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 5.777245765047239 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000015",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000016",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 11.183932606592757 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000017",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000018",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000019",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000020",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000021",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000022",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000023",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000024",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 5.468559601674299 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000025",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000026",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000027",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 13.627394894883098 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000028",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000029",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000030",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: -3.411291001653991 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000031",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 14.80979814221576 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000032",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000033",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000034",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000035",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000036",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000037",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 6.803706399410121 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000038",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000039",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000040",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000041",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000042",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000043",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000044",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 3.3351443276276083 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000045",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000046",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000047",
+        "status": "review",
+        "reasons": [
+          "integrity.snr_db critical: 4.679757349461804 dB"
+        ]
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000048",
+        "status": "pass",
+        "reasons": []
+      },
+      {
+        "id": "aloha_sim_transfer_cube_human::episode_000049",
+        "status": "pass",
+        "reasons": []
+      }
+    ],
+    "findings": [
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000002",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": -5.144926659449629,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000011",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 13.738650420535103,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000014",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 5.777245765047239,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000016",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 11.183932606592757,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000024",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 5.468559601674299,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000027",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 13.627394894883098,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000030",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": -3.411291001653991,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000031",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 14.80979814221576,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000037",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 6.803706399410121,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000044",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 3.3351443276276083,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      },
+      {
+        "episode": "aloha_sim_transfer_cube_human::episode_000047",
+        "metric": "integrity.snr_db",
+        "source": "action",
+        "channel": "left_waist",
+        "value": 4.679757349461804,
+        "unit": "dB",
+        "consequence": "review",
+        "camera_median": null
+      }
+    ],
+    "revision": "6a43d500f101255823a9d2b9dc244eeb01a2cd31"
+  }
+}
