@@ -1,23 +1,16 @@
 # Kalanos notebooks
 
-## Find what needs review in a robot dataset
+Open any notebook in Google Colab and choose **Runtime → Run all**. (The assignment notebook opens with its charts already saved; it only audits when you choose a fresh mode and tick **RUN_FRESH_AUDIT**.) (The assignment notebook opens with its charts already saved; it only audits when you choose a fresh mode and tick **RUN_FRESH_AUDIT**.) Each runs on a CPU runtime, needs no Hugging Face token or Kalanos API key, and publishes nothing. For private or restricted data, use an approved local Jupyter environment instead.
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb)
+| Notebook | Open | Data | What it shows |
+| --- | --- | --- | --- |
+| [Quickstart](kalanos_quickstart.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | [`lerobot/aloha_sim_transfer_cube_human`](https://huggingface.co/datasets/lerobot/aloha_sim_transfer_cube_human)<br>50 episodes, ~70 MB | Grade a dataset and chart the signal behind the 11 episodes sent to review. |
+| [Cube to Bowl](kalanos_cube_to_bowl.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_cube_to_bowl.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | [`triton7777/cube_to_bowl_so100`](https://huggingface.co/datasets/triton7777/cube_to_bowl_so100)<br>LeRobot v2.1, 10 episodes, ~66 MB | Find the gripper-camera blur outlier: 9 pass, 1 review (episode 000008). |
+| [Pick and place audit](kalanos_pick_and_place_audit.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_pick_and_place_audit.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | Cube to Bowl,<br>or your own LeRobot dataset | Decision chart and per-camera sharpness plot; reads a local dataset too. |
+| [MimicGen preflight](kalanos_mimicgen_preflight.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_mimicgen_preflight.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | [MimicGen `source/stack.hdf5`](https://huggingface.co/datasets/amandlek/mimicgen_datasets/blob/89835eddc2abbe2966e43024504b1ff62f914a75/source/stack.hdf5)<br>HDF5, 10 demos, ~11.8 MB | Read action traces and audit decisions before training; optional D0/D1 comparison from local files. |
+| [Compare audits](kalanos_compare_dataset_audits.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_compare_dataset_audits.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | Saved reports:<br>[Cube to Bowl](https://hub.kalanos.ai/d/@kalanos/hf/triton7777/cube_to_bowl_so100)<br>[SO-101 Teleop Cubes](https://hub.kalanos.ai/d/@kalanos/hf/qb1t/so101_teleop_cubes) | Compare recorded decisions and coverage. Downloads no dataset and runs no new audit. |
+| [Assignment dataset check](kalanos_assignment_dataset_check.ipynb) | <a href="https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_assignment_dataset_check.ipynb"><img src="https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/open-in-colab.svg" alt="Open in Colab" width="132"></a> | Saved examples (Cube to Bowl, ALOHA),<br>pinned [IDEAS-Lab Northwestern](https://huggingface.co/datasets/IDEAS-Lab-Northwestern/datagen-dusty-v1-joint-5cam/tree/ac57d863b06c294007bd74c9ae3046e26c2ccf0c),<br>or your own dataset or audit JSON | For coursework: charts are already drawn; audit a dataset in a fresh mode, then write an evidence note. |
 
-The notebook installs Kalanos 0.10.0 into the Colab kernel, downloads the public `lerobot/aloha_sim_transfer_cube_human` dataset, grades it, and charts the signal Kalanos sends episodes to review for.
-
-- Use a CPU runtime. No robot or GPU is needed.
-- Kalanos, the two packages the notebook adds and the dataset revision are pinned.
-- No Hugging Face token or Kalanos API key is needed, and the notebook publishes nothing.
-- The last cell downloads the JSON and HTML reports as a ZIP.
-
-## Audit Cube to Bowl before training
-
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_cube_to_bowl.ipynb)
-
-The notebook installs Kalanos 0.10.0 in its own virtual environment, downloads a pinned commit of the public [Cube to Bowl](https://huggingface.co/datasets/triton7777/cube_to_bowl_so100) SO-100 dataset, grades it with the `vision-imitation-v1` profile at the full tier, and shows the episode it sends to review: one whose gripper camera is less sharp than that camera's usual baseline.
-
-- Use a CPU runtime. No Hugging Face token or Kalanos API key is needed, and the notebook publishes nothing.
-- Kalanos, `huggingface-hub` and the dataset revision are pinned, and the download is capped at 200 MB.
-- The last cell previews the audit JSON and downloads the JSON report, the HTML report and a provenance file.
-- The [published Hub assessment](https://hub.kalanos.ai/d/@kalanos/hf/triton7777/cube_to_bowl_so100) is a separate run, so its counts and findings can differ between grader releases.
+- Kalanos, the helper packages and every dataset revision are pinned, so each run sees the same files. The Quickstart installs 0.10.0; the others install 0.10.1.
+- The [published Hub reports](https://hub.kalanos.ai) are separate runs, so their counts can differ between grader releases.
+- An audit describes the checks that ran. A pass does not establish task success or predict training results.
