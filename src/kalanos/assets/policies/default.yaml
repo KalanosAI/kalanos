@@ -482,6 +482,12 @@ metrics:
         good: 0.5
         bad: 1
 
+  # Stats that disagree with the data make training normalise with the wrong values,
+  # but the recorded data is sound and regenerating the stats fixes it,
+  # so this reports and never blocks.
+  schema.stats_mismatch_count:
+    report_only: true
+
   # Report-only: a missing instruction breaks a language-conditioned model but does not matter for behaviour cloning, and this policy cannot tell which is being trained.
   # The report lists the affected episodes in a dataset warning; language_conditioned blocks them.
   annotation.task_instruction_missing:

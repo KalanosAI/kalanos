@@ -665,6 +665,50 @@ class SchemaCheck(BaseModel):
     mismatches: list[SchemaMismatch] = Field(default_factory=list)
 
 
+class StatsMismatch(BaseModel):
+    """One stored statistic of a feature that disagrees with the episode's data.
+
+    Attributes
+    ----------
+    feature : str
+        The feature key the statistic describes.
+    stat : {"min", "max", "mean", "std", "count"}
+        The statistic.
+    stored : list[float]
+        The value the source stores, flattened to one dimension.
+        Empty when the stored value holds anything other than numbers.
+    found : list[float]
+        The value recomputed from the episode's data, flattened to one dimension.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    feature: str
+    stat: Literal["min", "max", "mean", "std", "count"]
+    stored: list[float]
+    found: list[float]
+
+
+class StatsCheck(BaseModel):
+    """An episode's stored per-feature statistics compared with its data.
+
+    Attributes
+    ----------
+    source_path : AnyPath
+        The file the stored statistics were read from.
+    checked : list[str]
+        The feature keys compared, in stored order.
+    mismatches : list[StatsMismatch]
+        Each statistic of a checked feature that disagrees with the data.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_path: AnyPath
+    checked: list[str] = Field(default_factory=list)
+    mismatches: list[StatsMismatch] = Field(default_factory=list)
+
+
 class RangeMismatch(BaseModel):
     """One episode index range field that disagrees with the data's `index` column.
 
@@ -758,6 +802,10 @@ class Episode(BaseModel):
         The data file the episode's metadata names compared with the files that hold
         its rows, set by an adapter whose format points each episode at a data file.
         `None` when the format has no such pointer.
+    stats_check : StatsCheck or None
+        The per-feature statistics the source stores for the episode compared with
+        statistics recomputed from its data, set by an adapter whose format stores them.
+        `None` when the source stores none for the episode, or its data was not read.
     """
 
     id: str
@@ -766,6 +814,7 @@ class Episode(BaseModel):
     split: str | None = None
     schema_check: SchemaCheck | None = None
     layout_check: LayoutCheck | None = None
+    stats_check: StatsCheck | None = None
 
     @property
     def source_paths(self) -> list[UPath]:
