@@ -49,7 +49,7 @@ from kalanos.assets.policy import load_default_policy
 from kalanos.testing import check_adapter
 
 # Local
-from helpers import CSV_FIXTURE, LEROBOT_FIXTURE
+from helpers import CSV_FIXTURE, LEROBOT_FIXTURE, lerobot_stats
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -1490,3 +1490,89 @@ def test_an_undecodable_card_leaves_the_declared_facts(tmp_path):
 
     assert info.simulator is None
     assert info.episode_count == 2
+
+
+def _with_episode_stats(root, edit=None):
+    """Copy the v3 fixture to `root`, adding `stats/*` columns computed from its data.
+
+    Parameters
+    ----------
+    root : Path
+        Where to write the copy.
+    edit : Callable[[dict[int, dict]], None] or None
+        Called with each episode's stats, by `episode_index`, before they are written.
+    """
+
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    data = pl.read_parquet(root / "data" / "chunk-000" / "file-000.parquet")
+    meta_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    meta = pl.read_parquet(meta_path)
+    per_episode = {
+        index: lerobot_stats(
+            data.filter(pl.col("episode_index") == index), data.columns
+        )
+        for index in meta["episode_index"].to_list()
+    }
+    if edit is not None:
+        edit(per_episode)
+    columns = [
+        pl.Series(
+            f"stats/{feature}/{stat}",
+            [per_episode[index][feature][stat] for index in meta["episode_index"]],
+        )
+        for feature in data.columns
+        for stat in ("min", "max", "mean", "std", "count")
+    ]
+    meta.with_columns(columns).write_parquet(meta_path)
+
+
+def test_v3_stats_written_from_the_data_match_it(tmp_path):
+    """Verify every v3 episode's stats columns are compared, with no mismatch."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    _with_episode_stats(root)
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert episode.stats_check is not None
+        assert episode.stats_check.mismatches == []
+        assert "observation.state" in episode.stats_check.checked
+        assert UPath(episode.stats_check.source_path).name == "file-000.parquet"
+
+
+def test_an_edited_v3_stored_mean_is_reported_on_its_episode_only(tmp_path):
+    """Verify a stale mean in one episode's stats columns flags that episode alone."""
+
+    def stale_mean(per_episode):
+        per_episode[1]["observation.state"]["mean"][0] += 10.0
+
+    root = tmp_path / "lerobot_v3_tiny"
+    _with_episode_stats(root, stale_mean)
+
+    first, second = LeRobotV3Adapter().episodes(UPath(root))
+
+    assert first.stats_check is not None and first.stats_check.mismatches == []
+    assert second.stats_check is not None
+    assert [(m.feature, m.stat) for m in second.stats_check.mismatches] == [
+        ("observation.state", "mean")
+    ]
+
+
+def test_v3_stats_are_not_read_at_the_metadata_tier(tmp_path):
+    """Verify a metadata-tier read leaves `stats_check` unset."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    _with_episode_stats(root)
+
+    with use_tier(ExecutionTier.METADATA):
+        episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.stats_check for e in episodes] == [None, None]
+
+
+def test_v3_without_stats_columns_has_no_stats_check():
+    """Verify an episode index with no `stats/*` columns leaves `stats_check` unset."""
+
+    assert [e.stats_check for e in _episodes()] == [None, None]

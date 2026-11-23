@@ -12,7 +12,7 @@ import string
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import islice
-from typing import Any
+from typing import Any, Literal
 
 # External
 import polars as pl
@@ -38,6 +38,8 @@ from kalanos.analysis.models.domain import (
     SchemaCheck,
     SchemaMismatch,
     SchemaProblem,
+    StatsCheck,
+    StatsMismatch,
     Stream,
     TimestampDtype,
 )
@@ -71,6 +73,23 @@ INDEX_COLUMNS = frozenset(
 
 VIDEO_DTYPE = "video"
 IMAGE_DTYPE = "image"
+
+# The per-feature statistics LeRobot stores that `check_stats` recomputes.
+# Newer LeRobot also stores quantiles, which are left uncompared.
+_STATS: tuple[Literal["min", "max", "mean", "std", "count"], ...] = (
+    "min",
+    "max",
+    "mean",
+    "std",
+    "count",
+)
+
+# A stored statistic matches its recomputation when
+# `abs(found - stored) <= _STATS_ATOL + _STATS_RTOL * abs(stored)`, element-wise.
+# LeRobot writes stats in float32, which on `lerobot/pusht` drifts from a float64
+# recomputation by a relative error under 1e-6, far inside this tolerance.
+_STATS_RTOL = 1e-3
+_STATS_ATOL = 1e-6
 
 # Each declared dtype LeRobot writes, mapped to a test on the innermost stored type.
 # Width is not compared: a declared float64 stored as Float32 matches.
@@ -862,6 +881,186 @@ def check_schema(
                 )
             )
     return SchemaCheck(source_path=source_path, checked=checked, mismatches=mismatches)
+
+
+def _flatten_numbers(value: Any) -> list[float] | None:
+    """Flatten a stored statistic, a number or nested lists of them, to floats.
+
+    Parameters
+    ----------
+    value : Any
+        The statistic as the stats file holds it.
+
+    Returns
+    -------
+    list[float] or None
+        The numbers in row-major order, `None` when `value` holds anything else.
+    """
+
+    if isinstance(value, (int, float)):
+        try:
+            return [float(value)]
+        except OverflowError:
+            return None
+    if isinstance(value, (list, tuple)):
+        flat: list[float] = []
+        for item in value:
+            inner = _flatten_numbers(item)
+            if inner is None:
+                return None
+            flat.extend(inner)
+        return flat
+    return None
+
+
+def _element_stats(column: pl.Series) -> dict[str, list[float]] | None:
+    """Compute min, max, mean and population std of each element of a column.
+
+    Parameters
+    ----------
+    column : pl.Series
+        A numeric or Boolean column, scalar or nested in List and Array layers.
+
+    Returns
+    -------
+    dict[str, list[float]] or None
+        Each statistic per element, in row-major element order,
+        with a null result as NaN.
+        `None` when the rows hold different numbers of elements.
+    """
+
+    flat = column.rename("value").to_frame().with_row_index("row")
+    while isinstance(flat.schema["value"], (pl.List, pl.Array)):
+        flat = flat.explode("value")
+    if flat.group_by("row").len()["len"].n_unique() != 1:
+        return None
+    # polars min and max skip NaN where numpy, which LeRobot computes with,
+    # returns NaN, so a NaN in the data is carried through explicitly.
+    has_nan = pl.col("value").is_nan().any()
+    stats = (
+        flat.with_columns(
+            pl.int_range(pl.len()).over("row").alias("element"),
+            pl.col("value").cast(pl.Float64),
+        )
+        .group_by("element")
+        .agg(
+            pl.when(has_nan)
+            .then(math.nan)
+            .otherwise(pl.col("value").min())
+            .alias("min"),
+            pl.when(has_nan)
+            .then(math.nan)
+            .otherwise(pl.col("value").max())
+            .alias("max"),
+            pl.col("value").mean().alias("mean"),
+            pl.col("value").std(ddof=0).alias("std"),
+        )
+        .sort("element")
+    )
+    return {
+        stat: [math.nan if v is None else float(v) for v in stats[stat].to_list()]
+        for stat in ("min", "max", "mean", "std")
+    }
+
+
+def _stat_matches(stat: str, found: list[float], stored: list[float]) -> bool:
+    """Whether a stored statistic agrees with its recomputation.
+
+    Parameters
+    ----------
+    stat : str
+        The statistic's name; `count` must match exactly.
+    found : list[float]
+        The recomputed value, flattened.
+    stored : list[float]
+        The stored value, flattened.
+
+    Returns
+    -------
+    bool
+        True when both have the same length and every element agrees.
+    """
+
+    if len(found) != len(stored):
+        return False
+    if stat == "count":
+        return found == stored
+    return all(
+        (math.isnan(f) and math.isnan(s))
+        or f == s
+        or (math.isfinite(s) and abs(f - s) <= _STATS_ATOL + _STATS_RTOL * abs(s))
+        for f, s in zip(found, stored, strict=True)
+    )
+
+
+def check_stats(
+    info: dict[str, Any],
+    stored: Mapping[str, Any],
+    frame: pl.DataFrame,
+    source_path: UPath,
+) -> StatsCheck:
+    """Compare an episode's stored per-feature statistics with its data.
+
+    Video and image features are not compared, since LeRobot computes their
+    statistics from sampled frames. Neither are features missing from `frame`,
+    non-numeric columns, or columns whose rows hold different numbers of elements.
+    Nothing here raises on stored content: a statistic that is not numeric,
+    or has another length than its recomputation, is reported as a mismatch.
+
+    Parameters
+    ----------
+    info : dict
+        The parsed `info.json`.
+    stored : Mapping[str, Any]
+        Each feature key mapped to its `{stat: value}` object,
+        as the stats file holds it.
+        Statistics other than min, max, mean, std and count are ignored.
+    frame : pl.DataFrame
+        The episode's rows, with numeric payloads read.
+    source_path : UPath
+        The file `stored` was read from.
+
+    Returns
+    -------
+    StatsCheck
+        The features compared and each statistic that disagrees with the data.
+    """
+
+    if frame.height == 0:
+        return StatsCheck(source_path=source_path)
+    features = info.get("features")
+    if not isinstance(features, Mapping):
+        features = {}
+    checked = []
+    mismatches = []
+    for key, stats in stored.items():
+        if not isinstance(stats, Mapping) or key not in frame.columns:
+            continue
+        spec = features.get(key)
+        dtype = spec.get("dtype") if isinstance(spec, Mapping) else None
+        if dtype in (VIDEO_DTYPE, IMAGE_DTYPE) or not holds_numbers(frame.schema[key]):
+            continue
+        recomputed = _element_stats(frame[key])
+        if recomputed is None:
+            continue
+        recomputed["count"] = [float(frame.height)]
+        checked.append(key)
+        for stat in _STATS:
+            if stats.get(stat) is None:
+                continue
+            stored_value = _flatten_numbers(stats[stat])
+            if stored_value is None or not _stat_matches(
+                stat, recomputed[stat], stored_value
+            ):
+                mismatches.append(
+                    StatsMismatch(
+                        feature=key,
+                        stat=stat,
+                        stored=stored_value or [],
+                        found=recomputed[stat],
+                    )
+                )
+    return StatsCheck(source_path=source_path, checked=checked, mismatches=mismatches)
 
 
 def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:
