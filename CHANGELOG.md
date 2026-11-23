@@ -8,7 +8,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Added
 
-- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with decision and evidence charts and a review-queue CSV for three saved worked examples, or for your own dataset or saved report. It pins Kalanos 0.10.2.
+- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with decision and evidence charts and a review-queue CSV for three saved worked examples, or for your own dataset or saved report. An optional cell regrades the worked examples from their pinned sources and compares them with the saved ones. It pins Kalanos 0.10.2.
 
 ### Fixed
 
