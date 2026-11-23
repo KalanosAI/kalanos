@@ -816,6 +816,26 @@ def test_common_robot_learning_keys_resolve(name, taxonomy_type):
 
 
 @pytest.mark.parametrize(
+    "name",
+    [
+        "observation.images.wrist_depth",
+        "observation.images.top_depth",
+        "observation.images.left_depth",
+        "observation.images.right_depth",
+        "observation.images.overhead_depth",
+    ],
+)
+def test_depth_camera_keys_resolve_to_depth(name):
+    """Verify LeRobot depth cameras named by their mount resolve as depth images.
+
+    Some datasets store these streams as 3-channel `yuv420p` video,
+    with `video.is_depth_map` false, so the name is what marks them as depth.
+    """
+
+    assert load_default_dictionary().resolve(name).taxonomy_type == "extero.depth"
+
+
+@pytest.mark.parametrize(
     ("name", "taxonomy_type"),
     [
         # computed from the recorded state
