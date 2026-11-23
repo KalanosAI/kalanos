@@ -8,11 +8,25 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Added
 
+- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with saved decision charts, a review-queue CSV export, and modes for saved worked examples, a pinned public dataset, your own dataset or a saved audit JSON. It pins Kalanos 0.10.1.
 - `schema.stats_mismatch_count` reports the features whose stored per-episode statistics (`min`, `max`, `mean`, `std`, `count`), which training reads to normalise its inputs and outputs, no longer match the episode's data, for instance after the data was edited and the statistics were not regenerated. It covers LeRobot v2.1 (`meta/episodes_stats.jsonl`) and v3.0 (the `stats/*` columns of `meta/episodes`), compares every numeric feature except video and image features, and counts a statistic as stale when an element differs by more than `1e-6 + 1e-3 * abs(stored)`, or when `count` differs from the row count at all. It is report-only under the default policy, so it never moves the score or blocks an episode, and not applicable for LeRobot v2.0 and at the metadata tier.
 
 ### Fixed
 
 - LeRobot camera features named `wrist_depth`, `top_depth`, `left_depth`, `right_depth` or `overhead_depth` grade as depth images instead of unmapped, so the camera checks (exposure, brightness, contrast, sharpness and the rest) no longer run on them, and they no longer count as camera footage in coverage or the camera score, as `observation.images.depth` already did not. Some datasets store these streams as 3-channel `yuv420p` video with `video.is_depth_map` false, so the name is what marks them. Graded with `vision-imitation-v1` at the full tier, `prateeks-iu/pick_sugar_fixed` (revision `0d1c5720`) had 62 of its 100 episodes in review, each for an exposure shift on its wrist depth camera, and now has all 100 eligible.
+
+## [0.10.2] - 2026-11-22
+
+Documentation and notebooks only; no code or report schema changes.
+
+### Added
+
+- Three Colab notebooks, `kalanos_pick_and_place_audit.ipynb`, `kalanos_mimicgen_preflight.ipynb` and `kalanos_compare_dataset_audits.ipynb`, and a notebooks index with Open in Colab links. ([#129](https://github.com/KalanosAI/kalanos/pull/129))
+
+### Changed
+
+- The README is shorter: a one-line description, a runnable install and grade example, and a chart of the 11 ALOHA episodes the quickstart sends to review. ([#131](https://github.com/KalanosAI/kalanos/pull/131))
+- The Cube to Bowl notebook installs Kalanos into the notebook kernel like the quickstart, and its sharpness chart labels each camera reading by its blur flag. ([#129](https://github.com/KalanosAI/kalanos/pull/129), [#130](https://github.com/KalanosAI/kalanos/pull/130))
 
 ## [0.10.1] - 2026-11-19
 
@@ -391,6 +405,7 @@ Every episode now gets one decision, and the readiness score, the gate and the e
 
 Initial public release.
 
+[0.10.2]: https://github.com/KalanosAI/kalanos/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/KalanosAI/kalanos/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/KalanosAI/kalanos/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/KalanosAI/kalanos/compare/v0.9.2...v0.9.3
