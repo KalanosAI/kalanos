@@ -8,7 +8,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ### Added
 
-- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with saved decision charts, a review-queue CSV export, and modes for saved worked examples, a pinned public dataset, your own dataset or a saved audit JSON. It pins Kalanos 0.10.1.
+- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with decision and evidence charts and a review-queue CSV for three saved worked examples, or for your own dataset or saved report. An optional cell regrades the worked examples from their pinned sources and compares them with the saved ones. It pins Kalanos 0.10.2.
 - `schema.stats_mismatch_count` reports the features whose stored per-episode statistics (`min`, `max`, `mean`, `std`, `count`), which training reads to normalise its inputs and outputs, no longer match the episode's data, for instance after the data was edited and the statistics were not regenerated. It covers LeRobot v2.1 (`meta/episodes_stats.jsonl`) and v3.0 (the `stats/*` columns of `meta/episodes`), compares every numeric feature except video and image features, and counts a statistic as stale when an element differs by more than `1e-6 + 1e-3 * abs(stored)`, or when `count` differs from the row count at all. It is report-only under the default policy, so it never moves the score or blocks an episode, and not applicable for LeRobot v2.0 and at the metadata tier.
 
 ### Fixed
