@@ -1298,6 +1298,13 @@ def test_missing_extra_only_changes_eligibility_when_capability_required(monkeyp
             raise ImportError("missing optional NumPy")
         return original(name, *args, **kwargs)
 
+    # Each ndarray reduction imports numpy._core._methods on its own first call.
+    # Warm the ones the duplicate fingerprint uses, so the patch only hides numpy
+    # from kalanos.
+    warm = np.zeros((1, 1))
+    warm.all()
+    warm.mean(axis=1)
+    warm.var(axis=1)
     monkeypatch.setattr(builtins, "__import__", no_numpy)
     optional = audit([e], plan)
     required = audit(
