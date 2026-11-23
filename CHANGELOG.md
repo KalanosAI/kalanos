@@ -4,6 +4,14 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+Documentation and notebooks only.
+
+### Added
+
+- A Colab notebook for coursework, `notebooks/kalanos_assignment_dataset_check.ipynb`, with saved decision charts, a review-queue CSV export, and modes for saved worked examples, a pinned public dataset, your own dataset or a saved audit JSON. It pins Kalanos 0.10.1.
+
 ## [0.10.2] - 2026-11-22
 
 Documentation and notebooks only; no code or report schema changes.
