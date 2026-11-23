@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -34,7 +39,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: pytest
-        run: uv run pytest
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        # PRs into develop skip the two slow memory tests; release PRs into main and pushes to main run them.
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "main" ]; then
+            uv run pytest -n logical -m "not integration and not slow"
+          else
+            uv run pytest -n logical
+          fi
 
   wheel-smoke-test:
     runs-on: ubuntu-latest

@@ -134,6 +134,7 @@ dev = [
     "numpy",
     "opencv-python-headless>=4.10.0.84",
     "pytest>=8",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.8",
     "tomli>=2 ; python_full_version < '3.11'",
 ]
