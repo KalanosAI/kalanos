@@ -274,7 +274,8 @@ entries:
     shape: free
     unit: m
     aliases: [
-      aligned_depth_to_color, depth, depth_image, depth_static, observation.images.depth]
+      aligned_depth_to_color, depth, depth_image, depth_static, left_depth, observation.images.depth,
+      overhead_depth, right_depth, top_depth, wrist_depth]
     typical_rate_hz: [15.0, 60.0]
     plausible_range: [0, 10]
   extero.depth_confidence:
