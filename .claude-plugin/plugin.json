@@ -1,0 +1,17 @@
+{
+  "name": "kalanos",
+  "version": "1.0.0",
+  "description": "Audit recorded robotics datasets before training and look up published assessment evidence.",
+  "author": {
+    "name": "Kalanos AI",
+    "url": "https://kalanos.ai"
+  },
+  "homepage": "https://kalanos.ai/grader",
+  "repository": "https://github.com/KalanosAI/kalanos",
+  "license": "Apache-2.0",
+  "keywords": [
+    "robotics",
+    "lerobot",
+    "dataset-quality"
+  ]
+}
