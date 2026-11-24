@@ -14,6 +14,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Changed
 
 - The Compare notebook, `notebooks/kalanos_compare_dataset_audits.ipynb`, loads two saved Kalanos 0.10.2 reports instead of inline extracts, charts every episode against its camera's normal range, and has an optional cell that regrades both datasets and checks them against the saved reports. It pins Kalanos 0.10.2.
+- The MimicGen notebook, `notebooks/kalanos_mimicgen_preflight.ipynb`, grades the pinned file with the Kalanos CLI instead of `subprocess`, and charts where in each demo the held-still channels that send 9 of 10 demos to review stop moving, in place of raw action traces. It drops the D0/D1 comparison mode and the extra SHA-256 check. It pins Kalanos 0.10.2.
 
 ### Removed
 
