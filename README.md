@@ -37,7 +37,16 @@ In the [Colab quickstart](https://github.com/KalanosAI/kalanos/blob/main/noteboo
 
 ## Use Kalanos in your editor
 
-Install the [dataset audit skill](skills/audit-robot-dataset/SKILL.md) from your project directory:
+The Kalanos plugin adds the [dataset audit skill](skills/audit-robot-dataset/SKILL.md) and a read-only MCP connection for published reports. It does not install the grader CLI.
+
+- **Codex:** Add the GitHub catalog with `codex plugin marketplace add KalanosAI/kalanos`. In the Codex app's Plugins Directory, select **Kalanos AI** and install **kalanos**.
+- **Claude Code:** Run `/plugin marketplace add KalanosAI/kalanos`, then `/plugin install kalanos@kalanos-ai`. Invoke it as `/kalanos:audit-robot-dataset`.
+- **Cursor:** Use the skill-only install below, then add `https://mcp.kalanos.ai/mcp` as a Streamable HTTP server in Cursor’s MCP settings to look up published reports. The repo also includes a portable plugin for [local testing](https://cursor.com/docs/plugins#test-plugins-locally), but the bundled install hasn’t been verified in Cursor yet.
+- **VS Code / Copilot:** Use the skill-only install and connect MCP separately.
+
+### Install only the skill
+
+From your project directory:
 
 ```bash
 npx skills add KalanosAI/kalanos --skill audit-robot-dataset
@@ -45,7 +54,7 @@ npx skills add KalanosAI/kalanos --skill audit-robot-dataset
 
 Select your editor when prompted. Add `-a <agent>` to skip the prompt or `-g` to install for all projects. To refresh the skill, rerun the install command; the installed `metadata.version` shows which copy you have. Prefer a manual install? Copy the entire `skills/audit-robot-dataset/` folder into `.claude/skills/` for Claude Code, `.agents/skills/` for Codex or Cursor, or `.github/skills/` for VS Code with GitHub Copilot. Replace manual copies to update them.
 
-The install adds the skill only. For a fresh audit, install the [tested Grader CLI version](https://pypi.org/project/kalanos/0.10.2/) in your local Python environment (`python -m pip install "kalanos==0.10.2"`). For published reports, connect the read-only Kalanos MCP endpoint `https://mcp.kalanos.ai/mcp` separately using your editor's MCP settings.
+For a fresh audit with either install, install the [tested Grader CLI version](https://pypi.org/project/kalanos/0.10.2/) in your local Python environment (`python -m pip install "kalanos==0.10.2"`). To look up published reports from a skill-only install, add `https://mcp.kalanos.ai/mcp` as a Streamable HTTP server in your editor's MCP settings. No Kalanos account or API key is required for public reports.
 
 - **Local audit:** “Which episodes in `./my_recordings` should I review before training?”
 - **Published report:** “Is there a published audit for `lerobot/pusht`? Which checks did it cover?”

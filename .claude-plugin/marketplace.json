@@ -1,0 +1,13 @@
+{
+  "name": "kalanos-ai",
+  "owner": {
+    "name": "Kalanos AI"
+  },
+  "plugins": [
+    {
+      "name": "kalanos",
+      "source": "./",
+      "description": "Audit recorded robotics datasets before training and look up published assessment evidence."
+    }
+  ]
+}
