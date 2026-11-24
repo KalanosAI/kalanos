@@ -41,7 +41,7 @@ The Kalanos plugin adds the [dataset audit skill](skills/audit-robot-dataset/SKI
 
 - **Codex:** Add the GitHub catalog with `codex plugin marketplace add KalanosAI/kalanos`. In the Codex app's Plugins Directory, select **Kalanos AI** and install **kalanos**.
 - **Claude Code:** Run `/plugin marketplace add KalanosAI/kalanos`, then `/plugin install kalanos@kalanos-ai`. Invoke it as `/kalanos:audit-robot-dataset`.
-- **Cursor:** Use the skill-only install below, then add `https://mcp.kalanos.ai/mcp` as a Streamable HTTP server in Cursor’s MCP settings to look up published reports. The repo also includes a portable plugin for [local testing](https://cursor.com/docs/plugins#test-plugins-locally), but the bundled install hasn’t been verified in Cursor yet.
+- **Cursor:** The portable plugin works in Cursor Desktop. Copy `plugin.json`, `mcp.json` and `skills/` into `~/.cursor/plugins/local/kalanos/` (copy, don't symlink) and reload the window; a Cursor Marketplace listing is not live yet. Or use the skill-only install below and add `https://mcp.kalanos.ai/mcp` as a Streamable HTTP server in Cursor’s MCP settings.
 - **VS Code / Copilot:** Use the skill-only install and connect MCP separately.
 
 ### Install only the skill
