@@ -15,6 +15,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 - The Compare notebook, `notebooks/kalanos_compare_dataset_audits.ipynb`, loads two saved Kalanos 0.10.2 reports instead of inline extracts, charts every episode against its camera's normal range, and has an optional cell that regrades both datasets and checks them against the saved reports. It pins Kalanos 0.10.2.
 
+### Removed
+
+- The pick-and-place notebook, `notebooks/kalanos_pick_and_place_audit.ipynb`. It graded the same dataset as the Cube to Bowl notebook, and the assignment notebook grades your own dataset.
+
 ### Fixed
 
 - LeRobot camera features named `wrist_depth`, `top_depth`, `left_depth`, `right_depth` or `overhead_depth` grade as depth images instead of unmapped, so the camera checks (exposure, brightness, contrast, sharpness and the rest) no longer run on them, and they no longer count as camera footage in coverage or the camera score, as `observation.images.depth` already did not. Some datasets store these streams as 3-channel `yuv420p` video with `video.is_depth_map` false, so the name is what marks them. Graded with `vision-imitation-v1` at the full tier, `prateeks-iu/pick_sugar_fixed` (revision `0d1c5720`) had 62 of its 100 episodes in review, each for an exposure shift on its wrist depth camera, and now has all 100 eligible.
