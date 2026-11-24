@@ -17,6 +17,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 - The MimicGen notebook, `notebooks/kalanos_mimicgen_preflight.ipynb`, grades the pinned file with the Kalanos CLI instead of `subprocess`, and charts where in each demo the held-still channels that send 9 of 10 demos to review stop moving, in place of raw action traces. It drops the D0/D1 comparison mode and the extra SHA-256 check. It pins Kalanos 0.10.2.
 - The Cube to Bowl notebook, `notebooks/kalanos_cube_to_bowl.ipynb`, shows gripper-camera frames from episode 000008 beside a typical episode's, and plays episode 000008's clip, in place of the sharpness scatter. It pins Kalanos 0.10.2.
 - The quickstart writes the HTML report in a shell cell of its own, and zips and downloads the reports in a separate Python cell.
+- The notebook charts use the Kalanos palette and type: a warm paper background, green for pass, ochre for review, red for blocked and grey for unknown, set in IBM Plex Sans with IBM Plex Mono for metric names and axis tags where those fonts are installed, and Arial and the system monospace font otherwise. In the dot charts, review and blocked episodes also have their own symbol, and in the decision bars blocked and unknown segments carry a pattern, so these charts don't rely on colour alone to tell statuses apart, and the assignment notebook marks each camera median with a grey tick instead of a diamond. The quickstart chart's title gives the episode total, and the Cube to Bowl frames name their dataset.
 
 ### Removed
 
