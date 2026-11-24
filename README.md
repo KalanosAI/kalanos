@@ -21,6 +21,20 @@ Replace `./my_recordings` with a local dataset folder or recording file. Open `a
 
 Kalanos reads local LeRobot datasets, CSV, and JSON out of the box. For HDF5 or MCAP/ROS 2, install `"kalanos[hdf5,mcap]"` and see [adapters](https://github.com/KalanosAI/kalanos/blob/main/docs/ADAPTERS.md). For sampled camera checks, install `"kalanos[video]"` and choose a [vision profile](https://github.com/KalanosAI/kalanos/blob/main/docs/PROFILES.md).
 
+## See what needs review
+
+In the [Colab quickstart](https://github.com/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb), Kalanos checks 50 simulated ALOHA cube-transfer demonstrations: **39 pass, 11 need review**. Start with **episode 2**: its left-waist command barely moves and has low signal-to-noise. Compare it with **episode 29**, which also moves little but passes. The chart shows where to look, not proof of a fault.
+
+![Scatter plot of left-waist command movement versus signal-to-noise. Orange points identify episodes to review. Episode 2 has about −5 dB and needs review; episode 29 has about 19 dB and passes.](https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/aloha-episode-review.png)
+
+<sub>One dot per episode with a measured ratio: 47 of 50. This run checks numeric signals, not cameras. An episode decision reflects the checks that ran, not task success or training performance.</sub>
+
+## Go further
+
+[Website](https://kalanos.ai) · [Public reports](https://hub.kalanos.ai/?utm_source=github&utm_medium=referral&utm_campaign=grader_readme&utm_content=public_reports) · [How decisions work](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md) · [GitHub Action](https://github.com/marketplace/actions/kalanos-robotics-dataset-audit) · [Experiment tracking](https://github.com/KalanosAI/kalanos-tracking) · [More notebooks](https://github.com/KalanosAI/kalanos/blob/main/notebooks/README.md) · [Apache-2.0 license](https://github.com/KalanosAI/kalanos/blob/main/LICENSE)
+
+[Report a bug](https://github.com/KalanosAI/kalanos/issues/new/choose) · Private feedback: [hello@kalanos.ai](mailto:hello@kalanos.ai)
+
 ## Use Kalanos in your editor
 
 Install the [dataset audit skill](skills/audit-robot-dataset/SKILL.md) from your project directory:
@@ -37,17 +51,3 @@ The install adds the skill only. For a fresh audit, install the [tested Grader C
 - **Published report:** “Is there a published audit for `lerobot/pusht`? Which checks did it cover?”
 
 Related: [LeRobot episode selection](https://github.com/KalanosAI/kalanos-mcp) and [attaching an audit to a training run](https://github.com/KalanosAI/kalanos-tracking).
-
-## See what needs review
-
-In the [Colab quickstart](https://github.com/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb), Kalanos checks 50 simulated ALOHA cube-transfer demonstrations: **39 pass, 11 need review**. Start with **episode 2**: its left-waist command barely moves and has low signal-to-noise. Compare it with **episode 29**, which also moves little but passes. The chart shows where to look, not proof of a fault.
-
-![Scatter plot of left-waist command movement versus signal-to-noise. Orange points identify episodes to review. Episode 2 has about −5 dB and needs review; episode 29 has about 19 dB and passes.](https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/aloha-episode-review.png)
-
-<sub>One dot per episode with a measured ratio: 47 of 50. This run checks numeric signals, not cameras. An episode decision reflects the checks that ran, not task success or training performance.</sub>
-
-## Go further
-
-[Website](https://kalanos.ai) · [Public reports](https://hub.kalanos.ai/?utm_source=github&utm_medium=referral&utm_campaign=grader_readme&utm_content=public_reports) · [How decisions work](https://github.com/KalanosAI/kalanos/blob/main/docs/DECISIONS.md) · [GitHub Action](https://github.com/marketplace/actions/kalanos-robotics-dataset-audit) · [Experiment tracking](https://github.com/KalanosAI/kalanos-tracking) · [More notebooks](https://github.com/KalanosAI/kalanos/blob/main/notebooks/README.md) · [Apache-2.0 license](https://github.com/KalanosAI/kalanos/blob/main/LICENSE)
-
-[Report a bug](https://github.com/KalanosAI/kalanos/issues/new/choose) · Private feedback: [hello@kalanos.ai](mailto:hello@kalanos.ai)
