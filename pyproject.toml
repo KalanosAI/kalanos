@@ -146,7 +146,7 @@ target-version = "py310"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# The notebooks build HTML strings inline; the formatter cannot wrap string literals.
+# Notebook docstrings, comments and plotly templates hold long prose lines that the formatter can't wrap.
 "notebooks/*.ipynb" = ["E501"]
 
 [tool.ruff.lint.isort]
