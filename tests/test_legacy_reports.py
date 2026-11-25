@@ -130,10 +130,10 @@ def _assert_contains(written, loaded, path: str) -> None:
         assert written == loaded, f"{path}: {written!r} became {loaded!r}"
 
 
-def test_a_new_report_declares_8_2_0(tmp_path):
+def test_a_new_report_declares_8_3_0(tmp_path):
     out = tmp_path / "r.json"
     out.write_text(grade(TINY_V3).model_dump_json())
-    assert json.loads(out.read_text())["schema_version"] == "8.2.0"
+    assert json.loads(out.read_text())["schema_version"] == "8.3.0"
 
 
 @pytest.mark.parametrize(("path", "version"), [(V7_1, "7.1.0"), (V7_2, "7.2.0")])
@@ -309,7 +309,19 @@ def test_an_8_1_0_report_without_review_findings_still_loads(tmp_path):
         assert episode.eligibility.review_findings == 0
 
 
-@pytest.mark.parametrize("version", ["7.4.0", "8.2.1", "8.3.0", "9.0.0", "7.x.0"])
+def test_an_8_2_0_report_still_loads(tmp_path):
+    payload = grade(TINY_V3).model_dump(mode="json")
+    payload["schema_version"] = "8.2.0"
+    out = tmp_path / "r.json"
+    out.write_text(json.dumps(payload))
+
+    loaded = load_any(UPath(out))
+
+    assert isinstance(loaded, Report)
+    assert loaded.schema_version == "8.2.0"
+
+
+@pytest.mark.parametrize("version", ["7.4.0", "8.3.1", "8.4.0", "9.0.0", "7.x.0"])
 def test_a_newer_or_malformed_report_is_refused(tmp_path, version):
     payload = grade(TINY_V3).model_dump(mode="json")
     payload["schema_version"] = version

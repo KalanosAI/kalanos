@@ -47,7 +47,12 @@ from kalanos.analysis.pipeline import with_declared_limits
 from kalanos.assets.policy import load_default_policy
 
 # Local
-from helpers import CSV_FIXTURE, LEROBOT_FIXTURE
+from helpers import (
+    CSV_FIXTURE,
+    LEROBOT_FIXTURE,
+    LEROBOT_V2_1_FIXTURE,
+    with_repeated_gripper,
+)
 
 
 # ░█▀▀░█░░░█▀█░█▀▀░█▀▀░█▀▀░█▀▀
@@ -357,3 +362,22 @@ def test_a_card_tagged_dataset_reports_its_simulator(tmp_path):
     [info] = kalanos.grade(root).datasets
 
     assert info.simulator == "robosuite"
+
+
+def test_a_repeated_label_warns_once_per_feature(tmp_path):
+    """Verify two datasets repeating the same name in the same feature warn once."""
+
+    for name in ("first", "second"):
+        with_repeated_gripper(LEROBOT_V2_1_FIXTURE, tmp_path / name)
+
+    report = kalanos.grade(UPath(tmp_path))
+
+    assert len(report.datasets) == 2
+    assert [
+        w.message
+        for w in report.dataset_warnings
+        if w.code == "duplicate_channel_label"
+    ] == [
+        'observation.state uses "gripper" at indices 4 and 5. '
+        "Both were checked separately; their meanings were not inferred."
+    ]

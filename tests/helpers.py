@@ -5,8 +5,10 @@
 # ░▀▀▀░▀▀▀░▀▀░░▀░▀░▀░▀░▀░▀░▀▀▀░▀▀▀░▀▀▀
 
 # Built-in
+import json
 import math
 import random
+import shutil
 import struct
 from collections.abc import Container, Sequence
 from html.parser import HTMLParser
@@ -166,6 +168,31 @@ def copy_to_memory(source: UPath, name: str) -> UPath:
     for file in source.rglob("*"):
         if file.is_file():
             (root / file.relative_to(source).as_posix()).write_bytes(file.read_bytes())
+    return root
+
+
+def with_repeated_gripper(source: UPath, root: Path) -> Path:
+    """Copy a LeRobot fixture whose `observation.state` names indices 4 and 5 `gripper`.
+
+    Parameters
+    ----------
+    source : UPath
+        The LeRobot fixture to copy; its `observation.state` has 6 members.
+    root : Path
+        Where to put the copy. It must not exist yet.
+
+    Returns
+    -------
+    Path
+        The copy's root.
+    """
+
+    shutil.copytree(str(source), root)
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    names = info["features"]["observation.state"]["names"]
+    info["features"]["observation.state"]["names"] = [*names[:4], "gripper", "gripper"]
+    info_path.write_text(json.dumps(info))
     return root
 
 

@@ -463,7 +463,9 @@ def channels_for(
     -------
     list[Channel]
         One Channel per member. Named from `names` when its length matches
-        the feature's width, indexed otherwise. A scalar feature yields
+        the feature's width, indexed otherwise. A name that `names` repeats
+        is indexed as `feature[i]` on each member that carries it, and kept
+        as that member's declared name. A scalar feature yields
         exactly one channel, named after the feature itself.
         Each carries the feature's declared `dtype`, `None` when it declares none.
     """
@@ -475,7 +477,10 @@ def channels_for(
     if width == 1:
         channel_names = [feature]
     elif len(names) == width:
-        channel_names = names
+        channel_names = [
+            f"{feature}[{i}]" if names.count(name) > 1 else name
+            for i, name in enumerate(names)
+        ]
     else:
         channel_names = [f"{feature}_{i}" for i in range(width)]
 

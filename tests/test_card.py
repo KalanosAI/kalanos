@@ -675,6 +675,32 @@ def test_an_episode_count_warning_gets_an_episode_count_row(csv_report):
     assert not any(row.strip().startswith("episode count") for row in unwarned)
 
 
+def test_a_duplicate_label_warning_gets_a_channel_labels_row(csv_report):
+    """Verify a name a feature repeats renders as its own coverage row."""
+
+    message = (
+        'observation.state uses "gripper" at indices 6 and 7. '
+        "Both were checked separately; their meanings were not inferred."
+    )
+    warned = csv_report.model_copy(
+        update={
+            "dataset_warnings": [
+                DatasetWarning(code="duplicate_channel_label", message=message)
+            ]
+        }
+    )
+
+    rows = _section(render_terminal(warned, width=200), "Coverage")
+    unwarned = _section(render_terminal(csv_report, width=200), "Coverage")
+
+    assert [
+        row.strip().removeprefix("channel labels").strip()
+        for row in rows
+        if row.strip().startswith("channel labels")
+    ] == [message]
+    assert not any(row.strip().startswith("channel labels") for row in unwarned)
+
+
 def test_a_camera_swap_warning_gets_a_camera_swap_row(csv_report):
     """Verify two cameras holding each other's footage render as a coverage row."""
 

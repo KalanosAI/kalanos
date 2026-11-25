@@ -217,6 +217,66 @@ def _simulated(vision: VisionSpec | None, info: DatasetInfo) -> bool:
     return footage == "simulated"
 
 
+def _repeated_channel_labels(
+    episode: Episode,
+) -> list[tuple[str, str, tuple[int, ...]]]:
+    """Find the declared names a feature repeats across its members.
+
+    Parameters
+    ----------
+    episode : Episode
+        An episode as its adapter read it, before its bindings are resolved.
+
+    Returns
+    -------
+    list[tuple[str, str, tuple[int, ...]]]
+        For each feature and each name it declares for more than one member,
+        the feature, the name and its members' source indices in ascending order.
+    """
+
+    repeated: list[tuple[str, str, tuple[int, ...]]] = []
+    for stream in episode.streams:
+        if stream.source_field is None:
+            continue
+        indices: dict[str, list[int]] = {}
+        for channel in stream.channels:
+            if channel.declared_name is not None and channel.source_index is not None:
+                indices.setdefault(channel.declared_name, []).append(
+                    channel.source_index
+                )
+        for label, found in indices.items():
+            if len(found) > 1:
+                repeated.append((stream.source_field, label, tuple(sorted(found))))
+    return repeated
+
+
+def _duplicate_label_message(feature: str, label: str, indices: Sequence[int]) -> str:
+    """State a `duplicate_channel_label` warning for a reader.
+
+    Parameters
+    ----------
+    feature : str
+        The feature that repeats the name.
+    label : str
+        The repeated name.
+    indices : Sequence[int]
+        The source indices of the members that carry it, at least two.
+
+    Returns
+    -------
+    str
+        For example: `observation.state uses "gripper" at indices 6 and 7.
+        Both were checked separately; their meanings were not inferred.`
+    """
+
+    listed = ", ".join(str(i) for i in indices[:-1]) + f" and {indices[-1]}"
+    every = "Both" if len(indices) == 2 else "All"
+    return (
+        f'{feature} uses "{label}" at indices {listed}. '
+        f"{every} were checked separately; their meanings were not inferred."
+    )
+
+
 def _lies_under(path: UPath, claimed_root: UPath) -> bool:
     """Check whether `path` sits inside `claimed_root`, itself excluded."""
 
@@ -374,6 +434,8 @@ def run(
     refused_sources: list[str] = []
     inventory_notes: list[str] = []
     dataset_warnings: list[DatasetWarning] = []
+    # One warning per repeat across the run, however many episodes carry it.
+    repeated_labels: dict[tuple[str, str, tuple[int, ...]], None] = {}
 
     for candidate in candidates:
         # Step 2: a candidate a directory adapter already claimed was
@@ -461,6 +523,7 @@ def run(
                 }
                 seen |= fields
                 matched |= fields & by_feature.keys()
+                repeated_labels.update(dict.fromkeys(_repeated_channel_labels(episode)))
                 [episode] = resolve_episodes(
                     [episode],
                     dictionary=dictionary,
@@ -553,6 +616,13 @@ def run(
     if unmatched:
         raise _unmatched_override_error(unmatched, seen)
     check_matched(channel_assertions, matched_channels)
+    dataset_warnings.extend(
+        DatasetWarning(
+            code="duplicate_channel_label",
+            message=_duplicate_label_message(feature, label, indices),
+        )
+        for feature, label, indices in repeated_labels
+    )
 
     # Step 7: assemble the report from every episode graded.
     logger.info("graded %d episode(s); %d unresolved", len(builder), len(unresolved))
