@@ -1,0 +1,23 @@
+{
+  "name": "kalanos-directory",
+  "displayName": "Kalanos",
+  "version": "1.0.0",
+  "description": "Find published robotics dataset audits, see which checks ran, and inspect episode-level findings from Kalanos Hub.",
+  "author": {
+    "name": "Kalanos AI",
+    "email": "hello@kalanos.ai",
+    "url": "https://kalanos.ai"
+  },
+  "homepage": "https://kalanos.ai/grader",
+  "repository": "https://github.com/KalanosAI/kalanos",
+  "license": "Apache-2.0",
+  "keywords": [
+    "robotics",
+    "lerobot",
+    "dataset-audit"
+  ],
+  "icon": "./.claude-plugin/icon.png",
+  "documentationUrl": "https://kalanos.ai/mcp",
+  "supportUrl": "https://github.com/KalanosAI/kalanos/issues",
+  "privacyPolicyUrl": "https://kalanos.ai/privacy"
+}
