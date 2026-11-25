@@ -6,8 +6,11 @@
   "plugins": [
     {
       "name": "kalanos",
-      "source": "./",
-      "description": "Audit recorded robotics datasets before training and look up published assessment evidence."
+      "source": "./plugins/claude/kalanos",
+      "description": "Find public robotics dataset assessments and inspect episode-level evidence. In Claude Code, use an existing Kalanos CLI installation to audit recordings locally."
     }
-  ]
+  ],
+  "metadata": {
+    "description": "Kalanos plugins for auditing robotics training datasets."
+  }
 }
