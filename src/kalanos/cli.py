@@ -668,8 +668,8 @@ def failing_statuses(report: Report, gate_on: set[EligibilityStatus]) -> int:
     """How many gate conditions the report trips; 0 means the gate passes.
 
     Episode statuses count one each. An incomplete inventory — a refused
-    source, or a declared count the adapter did not deliver — is unresolved
-    evidence about episodes that have no identities, so it counts once
+    source, a declared count the adapter did not deliver, or an episode it
+    yielded that was not graded — is unresolved evidence, so it counts once
     under `unknown` without inventing an episode count. Under the default
     `blocked,unknown` an incomplete audit therefore fails, even when every
     loaded episode passed or none loaded at all. `--fail-on blocked`
@@ -704,6 +704,7 @@ def gate_warnings(report: Report, gate_on: set[EligibilityStatus]) -> list[str]:
     ):
         refused = len(inventory.refused_sources) if inventory else 0
         gap = inventory.unresolved if inventory else 0
+        failed = len(inventory.failed) if inventory else 0
         warnings.append(
             "audit incomplete and not gated: "
             + ", ".join(
@@ -711,6 +712,7 @@ def gate_warnings(report: Report, gate_on: set[EligibilityStatus]) -> list[str]:
                 for part in (
                     f"{refused} source(s) refused" if refused else "",
                     f"{gap} declared episode(s) not loaded" if gap else "",
+                    f"{failed} episode(s) not graded" if failed else "",
                 )
                 if part
             )
