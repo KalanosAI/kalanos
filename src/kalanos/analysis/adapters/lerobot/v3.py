@@ -6,6 +6,8 @@ one parquet chunk holds many episodes, split by `episode_index`.
 and `meta/episodes/**/*.parquet` maps each episode to the files that hold it.
 An episode whose rows are in the data with no row in `meta/episodes` is yielded
 after the others, with no streams, so the report can block it.
+The per-episode stats in the `stats/*` columns of `meta/episodes` are compared
+with each episode's data when numeric payloads are read.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -29,6 +31,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     check_path_template,
     check_scalar_index,
     check_schema,
+    check_stats,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -140,6 +143,46 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     if "episode_index" not in index.columns:
         return index
     return index.sort("episode_index")
+
+
+def _read_episode_stats(
+    path: UPath,
+) -> dict[int, tuple[UPath, dict[str, dict[str, Any]]]]:
+    """Read each episode's per-feature statistics from the `stats/*` columns.
+
+    Each `meta/episodes/**/*.parquet` is read and converted on its own,
+    since a `stats/*` column's type can differ from one file to the next.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+
+    Returns
+    -------
+    dict[int, tuple[UPath, dict[str, dict[str, Any]]]]
+        For each `episode_index`, the parquet its stats were read from and its stats
+        as `{feature: {stat: value}}`, a column `stats/<feature>/<stat>` split on its
+        last `/`. Empty when no file has a `stats/*` column.
+    """
+
+    per_episode: dict[int, tuple[UPath, dict[str, dict[str, Any]]]] = {}
+    for parquet_path in sorted((path / "meta" / "episodes").rglob("*.parquet")):
+        with parquet_path.open("rb") as handle:
+            names = list(pl.read_parquet_schema(handle))
+        stats_columns = [name for name in names if name.startswith("stats/")]
+        if "episode_index" not in names or not stats_columns:
+            continue
+        with parquet_path.open("rb") as handle:
+            frame = pl.read_parquet(handle, columns=["episode_index", *stats_columns])
+        for row in frame.iter_rows(named=True):
+            stats: dict[str, dict[str, Any]] = {}
+            for column in stats_columns:
+                feature, _, stat = column.removeprefix("stats/").rpartition("/")
+                if feature:
+                    stats.setdefault(feature, {})[stat] = row[column]
+            per_episode[int(row["episode_index"])] = (parquet_path, stats)
+    return per_episode
 
 
 def _data_files(path: UPath, info: dict[str, Any]) -> list[UPath]:
@@ -338,6 +381,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 frozenset({"video_key", "chunk_index", "file_index"}),
             )
             episode_index = _read_episode_index(path)
+            stats_map = _read_episode_stats(path) if reads_numeric_payloads() else {}
             plan = feature_plan(info, self._resolve_dictionary())
             required = {"episode_index", "data/chunk_index", "data/file_index"}
             for video_key in plan.video:
@@ -517,6 +561,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         pl.col("episode_index") == row["episode_index"]
                     )
                 episode_layout = layout_check(row, data_path, holding, source_paths)
+                stored_stats = stats_map.get(row["episode_index"])
+                stats_check = (
+                    check_stats(info, stored_stats[1], episode_frame, stored_stats[0])
+                    if materialise and stored_stats is not None
+                    else None
+                )
                 timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                 clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -582,6 +632,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 split=split_of(info, row["episode_index"]),
                 schema_check=cached_check,
                 layout_check=episode_layout,
+                stats_check=stats_check,
             )
 
         if sample is not None:

@@ -120,6 +120,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "schema.episode_file_mismatch":        0,
     "schema.episode_not_in_metadata":      0,
     "schema.index_range_mismatch_count":   0,
+    "schema.stats_mismatch_count":         None,
     "annotation.task_instruction_missing": 5,
 }
 # fmt: on

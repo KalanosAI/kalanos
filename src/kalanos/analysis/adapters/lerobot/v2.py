@@ -5,7 +5,8 @@ v2.0 and v2.1 share one on-disk layout: one parquet per episode under
 `videos/chunk-{episode_chunk:03d}/{video_key}/`, no episode table, boundaries
 carried by the filenames themselves. The two versions differ only in which
 stats file `meta/` holds (`meta/stats.json` for v2.0, `meta/episodes_stats.jsonl`
-for v2.1), which this reader does not read.
+for v2.1). v2.1's per-episode stats are compared with each episode's data
+when numeric payloads are read; v2.0's dataset-wide `meta/stats.json` is not read.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -28,6 +29,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     check_path_template,
     check_scalar_index,
     check_schema,
+    check_stats,
     declared_format,
     declared_series_streams,
     describe_from_info,
@@ -229,6 +231,46 @@ def _read_episode_tasks(path: UPath) -> dict[int, list[str]] | None:
     return dataset_tasks(per_episode) if per_episode else None
 
 
+def _read_episode_stats(path: UPath) -> dict[int, dict[str, Any]] | None:
+    """Read each episode's per-feature statistics from `meta/episodes_stats.jsonl`.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root.
+
+    Returns
+    -------
+    dict[int, dict[str, Any]] or None
+        Each episode's `stats` object keyed by `episode_index`;
+        `None` when the file is absent, as in a v2.0 dataset.
+
+    Raises
+    ------
+    AdapterRefusal
+        If a line is not a JSON object with an `episode_index` and a `stats` object.
+    """
+
+    stats_path = path / "meta" / "episodes_stats.jsonl"
+    if not stats_path.exists():
+        return None
+    per_episode: dict[int, dict[str, Any]] = {}
+    with stats_path.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            stats = record.get("stats") if isinstance(record, dict) else None
+            if not isinstance(stats, dict) or "episode_index" not in record:
+                raise AdapterRefusal(
+                    path,
+                    f"{stats_path} line {number} is not an object "
+                    "with an episode_index and a stats object",
+                )
+            per_episode[int(record["episode_index"])] = stats
+    return per_episode
+
+
 @adapter
 class LeRobotV2Adapter(LeRobotAdapter):
     """Reads a LeRobot v2.0/v2.1 dataset directory: one parquet and mp4 per episode."""
@@ -325,6 +367,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
             fps = float(info["fps"])
             chunks_size = int(info.get("chunks_size", _DEFAULT_CHUNKS_SIZE))
             task_map = _read_episode_tasks(path)
+            stats_map = _read_episode_stats(path) if reads_numeric_payloads() else None
         except AdapterRefusal:
             raise
         except Exception as exc:
@@ -390,6 +433,19 @@ class LeRobotV2Adapter(LeRobotAdapter):
                         )
 
                     episode_frame = frame
+                    stored_stats = (
+                        stats_map.get(episode_index) if stats_map is not None else None
+                    )
+                    stats_check = (
+                        check_stats(
+                            info,
+                            stored_stats,
+                            episode_frame,
+                            path / "meta" / "episodes_stats.jsonl",
+                        )
+                        if materialise and stored_stats is not None
+                        else None
+                    )
                     timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                     clock = episode_clock(episode_frame, fps, timestamp_dtype)
                     timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -457,6 +513,7 @@ class LeRobotV2Adapter(LeRobotAdapter):
                     tasks=None if task_map is None else task_map.get(episode_index, []),
                     split=split_of(info, episode_index),
                     schema_check=schema_check,
+                    stats_check=stats_check,
                 )
                 if prefetcher is not None:
                     # The pipeline grades an episode before asking for the next,

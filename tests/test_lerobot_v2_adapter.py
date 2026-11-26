@@ -36,6 +36,7 @@ from helpers import (
     LEROBOT_V2_0_FIXTURE,
     LEROBOT_V2_1_FIXTURE,
     copy_to_memory,
+    lerobot_stats,
 )
 
 
@@ -400,3 +401,94 @@ def test_a_declared_feature_with_no_column_blocks_every_episode(tmp_path, tier):
         report.eligibility_counts is not None
         and report.eligibility_counts.pass_count == 0
     )
+
+
+def _with_episode_stats(root):
+    """Copy the v2.1 fixture to `root` with stats computed from its own data.
+
+    Parameters
+    ----------
+    root : Path
+        Where to write the copy.
+
+    Returns
+    -------
+    list[dict]
+        Each `meta/episodes_stats.jsonl` record written, in episode order.
+    """
+
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    records = []
+    for index, data_path in enumerate(sorted((root / "data").rglob("*.parquet"))):
+        frame = pl.read_parquet(data_path)
+        records.append(
+            {"episode_index": index, "stats": lerobot_stats(frame, frame.columns)}
+        )
+    (root / "meta" / "episodes_stats.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+    return records
+
+
+def test_v2_1_stats_written_from_the_data_match_it(tmp_path):
+    """Verify every v2.1 episode's stats are compared, with no mismatch."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    _with_episode_stats(root)
+
+    episodes = _episodes(UPath(root))
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        assert episode.stats_check is not None
+        assert episode.stats_check.mismatches == []
+        assert "observation.state" in episode.stats_check.checked
+        assert Path(episode.stats_check.source_path).name == "episodes_stats.jsonl"
+
+
+def test_an_edited_v2_1_stored_mean_is_reported_on_its_episode_only(tmp_path):
+    """Verify a stale mean in one episode's stats flags that episode alone."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    records = _with_episode_stats(root)
+    records[1]["stats"]["observation.state"]["mean"][0] += 10.0
+    (root / "meta" / "episodes_stats.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records)
+    )
+
+    first, second = _episodes(UPath(root))
+
+    assert first.stats_check is not None and first.stats_check.mismatches == []
+    assert second.stats_check is not None
+    assert [(m.feature, m.stat) for m in second.stats_check.mismatches] == [
+        ("observation.state", "mean")
+    ]
+
+
+def test_v2_1_stats_are_not_read_at_the_metadata_tier(tmp_path):
+    """Verify a metadata-tier read leaves `stats_check` unset."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    _with_episode_stats(root)
+
+    with use_tier(ExecutionTier.METADATA):
+        episodes = _episodes(UPath(root))
+
+    assert [e.stats_check for e in episodes] == [None, None]
+
+
+def test_v2_0_has_no_per_episode_stats():
+    """Verify a v2.0 dataset, whose stats are dataset-wide, has no stats check."""
+
+    assert [e.stats_check for e in _episodes(LEROBOT_V2_0_FIXTURE)] == [None, None]
+
+
+def test_a_malformed_v2_1_stats_line_is_refused(tmp_path):
+    """Verify a stats record without a stats object refuses the dataset."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    _with_episode_stats(root)
+    (root / "meta" / "episodes_stats.jsonl").write_text('{"episode_index": 0}\n')
+
+    with pytest.raises(AdapterRefusal, match="episodes_stats.jsonl line 1"):
+        _episodes(UPath(root))

@@ -7,6 +7,7 @@
 # Built-in
 import math
 import random
+import struct
 from collections.abc import Container, Sequence
 from html.parser import HTMLParser
 from pathlib import Path
@@ -565,3 +566,76 @@ def all_noise(stream: Stream) -> Stream:
     return replaced_frames(
         stream, {i: noise_frame(size, i) for i in range(len(stream.payload.frames))}
     )
+
+
+def _as_float32(value: float) -> float:
+    """Round a float through float32, as LeRobot stores its stats.
+
+    Parameters
+    ----------
+    value : float
+        The value to round.
+
+    Returns
+    -------
+    float
+        The nearest float32, as a Python float.
+    """
+
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def _flat(value: object) -> list[float]:
+    """Flatten a scalar or nested lists to a flat list of floats.
+
+    Parameters
+    ----------
+    value : object
+        A cell of a numeric column.
+
+    Returns
+    -------
+    list[float]
+        Its numbers in row-major order.
+    """
+
+    if isinstance(value, (list, tuple)):
+        return [x for item in value for x in _flat(item)]
+    return [float(value)]  # type: ignore[arg-type]
+
+
+def lerobot_stats(frame: pl.DataFrame, keys: Sequence[str]) -> dict[str, dict]:
+    """Compute per-episode stats the way LeRobot writes them.
+
+    Each element's min, max, mean and population std, rounded through float32,
+    and the row count as a one-element list.
+
+    Parameters
+    ----------
+    frame : pl.DataFrame
+        One episode's rows.
+    keys : Sequence[str]
+        The numeric columns to describe.
+
+    Returns
+    -------
+    dict[str, dict]
+        `{feature: {stat: list}}`, as `meta/episodes_stats.jsonl` holds it.
+    """
+
+    stats: dict[str, dict] = {}
+    for key in keys:
+        rows = [_flat(cell) for cell in frame[key].to_list()]
+        columns = list(zip(*rows, strict=True))
+        means = [sum(c) / len(c) for c in columns]
+        stats[key] = {
+            "min": [_as_float32(min(c)) for c in columns],
+            "max": [_as_float32(max(c)) for c in columns],
+            "mean": [_as_float32(m) for m in means],
+            "std": [
+                _as_float32(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)))
+                for c, m in zip(columns, means, strict=True)
+            ],
+            "count": [frame.height],
+        }
+    return stats

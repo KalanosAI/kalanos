@@ -1,6 +1,6 @@
 [project]
 name = "kalanos"
-version = "0.10.2"
+version = "0.10.3"
 description = "Grade robot training data before you train on it: a 0-100 readiness score, the blocking episodes to exclude, and the evidence behind every finding, for LeRobot, HDF5, MCAP, CSV and JSON recordings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -134,6 +134,7 @@ dev = [
     "numpy",
     "opencv-python-headless>=4.10.0.84",
     "pytest>=8",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.8",
     "tomli>=2 ; python_full_version < '3.11'",
 ]
@@ -145,7 +146,7 @@ target-version = "py310"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# The notebooks build HTML strings inline; the formatter cannot wrap string literals.
+# Notebook docstrings, comments and plotly templates hold long prose lines that the formatter can't wrap.
 "notebooks/*.ipynb" = ["E501"]
 
 [tool.ruff.lint.isort]

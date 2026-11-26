@@ -191,3 +191,44 @@ def index_range_mismatch_count(ctx: EpisodeContext) -> MetricResult:
             "mismatches": [m.model_dump(mode="json") for m in check.range_mismatches],
         },
     )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
+    label="features whose stored stats disagree with the data",
+)
+def stats_mismatch_count(ctx: EpisodeContext) -> MetricResult:
+    """Count the features whose stored statistics disagree with the episode's data.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `stats_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source stores no per-episode statistics,
+        or the episode's data was not read (`stats_check` is `None`).
+        `report_only` otherwise, with the number of distinct features among the
+        mismatches as the value and each mismatched statistic, with the path
+        the statistics were read from, as evidence.
+    """
+
+    check = ctx.episode.stats_check
+    if check is None:
+        return not_applicable(
+            "the source stores no per-episode stats, or its data was not read"
+        )
+
+    return MetricResult(
+        value=float(len({m.feature for m in check.mismatches})),
+        unit="features",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "path": str(check.source_path),
+            "n_checked": len(check.checked),
+            "mismatches": [m.model_dump(mode="json") for m in check.mismatches],
+        },
+    )

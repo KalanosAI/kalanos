@@ -25,7 +25,7 @@ Kalanos reads local LeRobot datasets, CSV, and JSON out of the box. For HDF5 or 
 
 In the [Colab quickstart](https://github.com/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb), Kalanos checks 50 simulated ALOHA cube-transfer demonstrations: **39 pass, 11 need review**. Start with **episode 2**: its left-waist command barely moves and has low signal-to-noise. Compare it with **episode 29**, which also moves little but passes. The chart shows where to look, not proof of a fault.
 
-![Scatter plot of left-waist command movement versus signal-to-noise. Orange points identify episodes to review. Episode 2 has about −5 dB and needs review; episode 29 has about 19 dB and passes.](https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/aloha-episode-review.png)
+![Scatter plot of left-waist command movement versus signal-to-noise. Episodes to review are brown diamonds below the 15 dB line; passing episodes are green dots. Episode 2 has about −5 dB and needs review; episode 29 has about 19 dB and passes.](https://raw.githubusercontent.com/KalanosAI/kalanos/main/docs/assets/aloha-episode-review.png)
 
 <sub>One dot per episode with a measured ratio: 47 of 50. This run checks numeric signals, not cameras. An episode decision reflects the checks that ran, not task success or training performance.</sub>
 
