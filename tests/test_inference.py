@@ -15,7 +15,7 @@ from upath import UPath
 
 # Internal
 from kalanos.analysis.inference.dialect import sniff_dialect
-from kalanos.analysis.inference.entity import score_entity_candidate
+from kalanos.analysis.inference.entity import entity_key, score_entity_candidate
 from kalanos.analysis.inference.infer import infer_schema
 from kalanos.analysis.inference.regularity import entity_split_gaps, regularity
 from kalanos.analysis.inference.timestamp import (
@@ -166,6 +166,23 @@ def test_id_is_identified_as_the_entity_key():
     assert result.entity_key is not None
     assert result.entity_key.column == "id"
     assert result.entity_key.evidence
+
+
+def test_a_list_column_is_not_an_entity_key_candidate():
+    """Verify a list-of-struct column is left out of the entity-key search."""
+
+    frame = pl.DataFrame(
+        {
+            "id": ["armA", "armB", "armA", "armB"],
+            "t": [0.0, 0.1, 0.2, 0.3],
+            "episodes": [[{"episode_index": i, "fold_time": 1.5}] for i in range(4)],
+        }
+    )
+
+    key = entity_key(frame)
+
+    assert key is not None
+    assert key.column == "id"
 
 
 def test_entity_key_scoring_carries_evidence_and_confidence():

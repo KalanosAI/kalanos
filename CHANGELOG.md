@@ -9,6 +9,7 @@ Before 1.0, a minor version can break the report schema or the CLI.
 ### Fixed
 
 - A LeRobot feature that declares the same name for two of its members, as LIBERO's `observation.state` names indices 6 and 7 `gripper`, no longer stops the dataset with `projections contained duplicate output name`. Each member grades separately as `observation.state[6]` and `observation.state[7]`, keeps `gripper` as its declared name, and gets no meaning inferred from it, and a `duplicate_channel_label` dataset warning names the feature, the name and the indices (report schema 8.3.0). Episode 0 of `continuallearning/libero_goal_image_task_0_er_new` (revision `da126e11`) loaded 0 of 1 episodes before and loads 1 of 1 now.
+- A JSON file whose top-level object holds a list of records, as the `metadata.json` of `xenorobotics/towel-fold-trimmed-v5` holds its `episodes`, no longer stops the grade with `cannot cast List type to String`. List, array and struct columns are no longer candidates for the entity key, and the file is refused for having no time axis, as other metadata files are.
 
 ## [0.10.3] - 2026-11-25
 
