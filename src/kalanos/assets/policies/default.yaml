@@ -472,6 +472,16 @@ metrics:
         good: 0.5
         bad: 1
 
+  # Metadata rows that share an episode index leave a trainer unable to tell their
+  # recordings apart, so they block through the contract route. Weight 0.
+  schema.episode_index_repeated:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
   # An episode index range that disagrees with the data's `index` column contradicts
   # the data with direct evidence, so it blocks through the contract route. Weight 0.
   schema.index_range_mismatch_count:

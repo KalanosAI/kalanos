@@ -133,8 +133,9 @@ def sniff_entity_key(columns: dict[str, list[str]]) -> EntityKey | None:
 def entity_key(frame: pl.DataFrame) -> EntityKey | None:
     """Find the column that splits a parsed frame into entities, if any.
 
-    Restricts the search to non-numeric columns before scoring —
+    Restricts the search to non-numeric scalar columns before scoring —
     an entity key is categorical, and a numeric column is `time_axis`'s to consider.
+    A list, array or struct column holds no single label per row, so it is left out.
 
     Parameters
     ----------
@@ -150,7 +151,7 @@ def entity_key(frame: pl.DataFrame) -> EntityKey | None:
     columns = {
         name: frame[name].cast(pl.String).to_list()
         for name, dtype in frame.schema.items()
-        if not dtype.is_numeric()
+        if not dtype.is_numeric() and not dtype.is_nested()
     }
     key = sniff_entity_key(columns)
     if key is None:

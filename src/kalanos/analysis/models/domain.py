@@ -751,6 +751,10 @@ class LayoutCheck(BaseModel):
     pointer_effect : str or None
         What the format's own tooling does with the episode when `pointed_path`
         lacks its rows, as the adapter states it. `None` when it states nothing.
+    index_rows : int
+        How many rows of the episode metadata carry this episode's index.
+        Above 1, the rows describe different recordings under one index,
+        and none of them can be told apart by it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -760,6 +764,7 @@ class LayoutCheck(BaseModel):
     holding_paths: list[AnyPath] = Field(default_factory=list)
     range_mismatches: list[RangeMismatch] | None = None
     pointer_effect: str | None = None
+    index_rows: int = 1
 
     @property
     def pointer_matches(self) -> bool:

@@ -237,6 +237,7 @@ def layout_check(
     paths: Sequence[UPath],
     *,
     pointed_exists: bool = True,
+    index_rows: int = 1,
 ) -> LayoutCheck:
     """Compare an episode's metadata row with where its rows were found.
 
@@ -253,6 +254,8 @@ def layout_check(
     pointed_exists : bool
         Whether `pointed_path` exists. When it does not, no effect is stated,
         since `_POINTER_EFFECT` describes lerobot reading a file that exists.
+    index_rows : int
+        How many rows of the episode index carry `row`'s `episode_index`.
 
     Returns
     -------
@@ -291,4 +294,5 @@ def layout_check(
         holding_paths=holding_paths,
         range_mismatches=range_mismatches,
         pointer_effect=_POINTER_EFFECT if pointed_exists else None,
+        index_rows=index_rows,
     )

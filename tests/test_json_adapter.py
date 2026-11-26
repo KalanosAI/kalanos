@@ -92,6 +92,31 @@ def test_video_meta_is_refused_for_having_no_time_index():
     assert excinfo.value.code is RefusalCode.NO_TIME_INDEX
 
 
+def test_a_dict_holding_a_list_of_records_is_refused_for_having_no_time_index(
+    tmp_path,
+):
+    """Verify a dict holding a list of records is refused as having no time index."""
+
+    path = tmp_path / "metadata.json"
+    path.write_text(
+        json.dumps(
+            {
+                "trimmed_dataset": "x",
+                "total_episodes": 2,
+                "episodes": [
+                    {"episode_id": "a", "episode_index": 0, "fold_time": 1.5},
+                    {"episode_id": "b", "episode_index": 1, "fold_time": 2.5},
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(AdapterRefusal) as excinfo:
+        next(JsonAdapter().episodes(path))
+
+    assert excinfo.value.code is RefusalCode.NO_TIME_INDEX
+
+
 def test_a_key_with_no_recognisable_timestamp_does_not_fabricate_one(tmp_path):
     """Verify a record key without a trailing datetime contributes no timestamp."""
 
