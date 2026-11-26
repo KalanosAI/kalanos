@@ -79,6 +79,22 @@ class _PartialAdapter:
             raise AdapterRefusal(path, "simulated refusal")
 
 
+class _Repeating:
+    """Declares 2 episodes and yields the tiny fixture's first episode twice."""
+
+    name = "repeating"
+
+    def detect(self, path: UPath) -> float:
+        return 1.0
+
+    def describe(self, path: UPath) -> DatasetInfo:
+        return DatasetInfo(adapter=self.name, path=path, episode_count=2)
+
+    def episodes(self, path: UPath, sample: int | None = None) -> Iterator[Episode]:
+        for _ in range(2):
+            yield next(LeRobotV3Adapter().episodes(path))
+
+
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
 # ░█░█░█▀▀░░█░░█▀█░█░█░█░█░▀▀█
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
@@ -353,3 +369,61 @@ def test_a_directory_with_an_empty_index_is_one_source_not_two(tmp_path):
     assert (
         report.eligibility_counts is not None and report.eligibility_counts.unknown == 2
     )
+
+
+# An episode whose id repeats an earlier one is dropped and recorded
+
+
+def test_a_repeated_episode_id_is_graded_once_and_recorded():
+    report = _run_with(_Repeating(), TINY_V3)
+    assert len(report.episodes) == 1
+    inv = report.inventory
+    assert inv is not None
+    [failed] = inv.failed
+    assert failed.id == report.episodes[0].id
+    assert "its id repeats an earlier episode" in failed.reason
+    assert str(TINY_V3) in failed.reason
+    assert (inv.loaded, inv.unresolved) == (1, 0)
+
+
+def test_a_repeated_episode_id_makes_the_inventory_incomplete():
+    report = _run_with(_Repeating(), TINY_V3)
+    assert report.inventory is not None and report.inventory.complete is False
+    assert report.run is None or report.run.completion.value == "partial"
+    counts = report.eligibility_counts
+    assert counts is not None
+    assert (counts.total, counts.unknown) == (2, 1)
+    assert not any(w.code == "episode_count_mismatch" for w in report.dataset_warnings)
+
+
+def test_the_first_episode_with_a_repeated_id_grades_as_usual():
+    [kept] = _run_with(_Repeating(), TINY_V3).episodes
+    [usual] = [e for e in grade(TINY_V3).episodes if e.id == kept.id]
+    assert kept.eligibility is not None and usual.eligibility is not None
+    assert kept.eligibility.status == usual.eligibility.status
+    assert kept.score == usual.score
+
+
+def test_a_repeated_episode_id_fails_the_default_gate_and_warns_when_not_gated():
+    adapter = _Repeating()
+
+    def select(candidate, adapters):
+        return Selection(
+            path=candidate, name=adapter.name, adapter=adapter, confidence=1.0
+        )
+
+    runner = CliRunner()
+    with patch.object(pipeline, "select_adapter", side_effect=select):
+        gated = runner.invoke(app, ["grade", str(TINY_V3)])
+        result = runner.invoke(app, ["grade", str(TINY_V3), "--fail-on", "blocked"])
+    # CliRunner also exits 1 on a crash, so the gate is only proven without one.
+    assert gated.exception is None or isinstance(gated.exception, SystemExit)
+    assert gated.exit_code == 1
+    assert result.exit_code == 0
+    assert "1 episode(s) not graded" in (result.stderr or result.output)
+
+
+def test_distinct_ids_record_no_failed_episode():
+    inv = grade(TINY_V3).inventory
+    assert inv is not None
+    assert inv.failed == [] and inv.complete is True

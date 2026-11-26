@@ -194,7 +194,8 @@ class Inventory(BaseModel):
     loaded : int
         Episodes that reached grading.
     failed : list[FailedEpisode]
-        Episodes that did not, with reasons.
+        Episodes the run enumerated but did not grade, with reasons,
+        for instance an episode whose id repeats an earlier one.
     unresolved : int
         Episodes the source declared but the run never enumerated: the gap
         between a declared count and what was loaded or failed. They have no
@@ -205,9 +206,10 @@ class Inventory(BaseModel):
         number of episodes it holds is unknown, so the inventory is
         incomplete rather than short by one.
     complete : bool
-        Whether `loaded + failed` covers everything the source declared.
-        `False` whenever `unresolved > 0`. A run that finished its walk has
-        not thereby proved the inventory complete.
+        Whether every episode the sources declared was enumerated and graded.
+        `False` whenever `unresolved > 0`, a source was refused, or an episode
+        failed. A run that finished its walk has not thereby proved the
+        inventory complete.
     notes : list[str]
         Anything odd about the accounting, e.g. more episodes loaded than
         declared.

@@ -49,6 +49,7 @@ from kalanos.analysis.models.metrics import DEFAULT_VISION_SAMPLES
 from kalanos.analysis.models.policy import Policy
 from kalanos.analysis.models.provenance import (
     ExecutionTier,
+    FailedEpisode,
     Inventory,
     Producer,
     RunCompletion,
@@ -432,6 +433,8 @@ def run(
     matched_channels: set[tuple[str | None, str, int | None]] = set()
     unresolved_episodes = 0
     refused_sources: list[str] = []
+    graded_ids: set[str] = set()
+    failed: list[FailedEpisode] = []
     inventory_notes: list[str] = []
     dataset_warnings: list[DatasetWarning] = []
     # One warning per repeat across the run, however many episodes carry it.
@@ -515,6 +518,33 @@ def run(
                 # across the run.
                 [episode] = _qualify_ids([raw], path=candidate.path, base=base)
                 del raw
+                # The source did yield it, so it counts toward the layout check
+                # whether or not it is graded.
+                check = episode.layout_check
+                if check is not None:
+                    located_any = True
+                    in_metadata += check.pointed_path is not None
+                    in_data += bool(check.holding_paths)
+                # Later stages key on the id, so a second episode with it is
+                # dropped and recorded.
+                if episode.id in graded_ids:
+                    failed.append(
+                        FailedEpisode(
+                            id=episode.id,
+                            reason=(
+                                f"yielded by {candidate.path}; its id repeats an "
+                                "earlier episode; dropped"
+                            ),
+                        )
+                    )
+                    logger.warning(
+                        "%s: episode id %r repeats an earlier episode; dropped",
+                        candidate.path,
+                        episode.id,
+                    )
+                    del episode, check
+                    continue
+                graded_ids.add(episode.id)
                 # A comprehension, so no loop variable keeps a stream of this episode.
                 fields = {
                     s.source_field
@@ -542,11 +572,6 @@ def run(
                         simulated=simulated,
                     )
                 )
-                check = episode.layout_check
-                if check is not None:
-                    located_any = True
-                    in_metadata += check.pointed_path is not None
-                    in_data += bool(check.holding_paths)
                 del episode, check
         finally:
             # A failure while grading leaves the adapter's generator suspended,
@@ -634,15 +659,13 @@ def run(
     inventory = Inventory(
         expected=expected,
         loaded=len(builder),
-        # `failed` is for episodes with identities. A refused source is not
-        # one episode; it is listed as a source, and whatever it declared but
-        # did not yield is in `unresolved`.
-        failed=[],
+        # Episodes a source yielded that were not graded, such as a repeated id.
+        failed=failed,
         unresolved=unresolved_episodes,
         refused_sources=refused_sources,
         # Finishing the walk proves nothing about episodes a source declared
         # but never yielded, and a refused source may hold any number of them.
-        complete=unresolved_episodes == 0 and not refused_sources,
+        complete=unresolved_episodes == 0 and not refused_sources and not failed,
         notes=inventory_notes,
     )
     if run_info is not None:
