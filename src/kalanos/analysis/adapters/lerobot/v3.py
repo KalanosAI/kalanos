@@ -81,6 +81,30 @@ _SUPPORTED_CODEBASE_VERSION = "v3.0"
 # ░▀░▀░▀▀▀░░▀░░▀░▀░▀▀▀░▀▀░░▀▀▀
 
 
+def _parquet_files(root: UPath) -> list[UPath]:
+    """List every parquet under `root`, at any depth, sorted, leaving hidden ones out.
+
+    A file or directory below `root` whose name starts with `.` is left out,
+    such as the `._*` AppleDouble sidecars macOS writes beside each file it copies.
+
+    Parameters
+    ----------
+    root : UPath
+        The directory to search.
+
+    Returns
+    -------
+    list[UPath]
+        Every `*.parquet` under `root` with no dot-named part below `root`, sorted.
+    """
+
+    return sorted(
+        candidate
+        for candidate in root.rglob("*.parquet")
+        if not any(part.startswith(".") for part in candidate.relative_to(root).parts)
+    )
+
+
 def _read_episode_index(path: UPath) -> pl.DataFrame:
     """Read and concatenate every `meta/episodes/**/*.parquet`, sorted by episode.
 
@@ -108,7 +132,7 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
 
     episodes_dir = path / "meta" / "episodes"
     try:
-        parquet_paths = sorted(episodes_dir.rglob("*.parquet"))
+        parquet_paths = _parquet_files(episodes_dir)
         if not parquet_paths:
             raise AdapterRefusal(path, f"no episode index parquet under {episodes_dir}")
         frames = []
@@ -167,7 +191,7 @@ def _read_episode_stats(
     """
 
     per_episode: dict[int, tuple[UPath, dict[str, dict[str, Any]]]] = {}
-    for parquet_path in sorted((path / "meta" / "episodes").rglob("*.parquet")):
+    for parquet_path in _parquet_files(path / "meta" / "episodes"):
         with parquet_path.open("rb") as handle:
             names = list(pl.read_parquet_schema(handle))
         stats_columns = [name for name in names if name.startswith("stats/")]
@@ -199,11 +223,12 @@ def _data_files(path: UPath, info: dict[str, Any]) -> list[UPath]:
     Returns
     -------
     list[UPath]
-        Every `*.parquet` under the data root, at any depth, sorted.
+        Every `*.parquet` under the data root, at any depth, sorted,
+        with hidden files and directories left out.
     """
 
     data_root = path / PurePosixPath(info["data_path"]).parts[0]
-    return sorted(data_root.rglob("*.parquet"))
+    return _parquet_files(data_root)
 
 
 def _video_stream(

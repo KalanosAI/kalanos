@@ -1601,3 +1601,19 @@ def test_a_repeated_channel_name_is_indexed_and_warned(tmp_path):
         w for w in report.dataset_warnings if w.code == "duplicate_channel_label"
     ]
     assert 'observation.state uses "gripper" at indices 4 and 5' in warning.message
+
+
+def test_macos_sidecar_files_are_ignored(tmp_path):
+    """Verify `._*` AppleDouble files beside the index and data parquets are skipped."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    apple_double = b"\x00\x05\x16\x07" + b"\x00" * 60
+    for directory in ("meta/episodes/chunk-000", "data/chunk-000"):
+        (root / directory / "._file-000.parquet").write_bytes(apple_double)
+
+    plain = _episodes()
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert [e.id for e in episodes] == [e.id for e in plain]
+    assert [len(e.streams) for e in episodes] == [len(e.streams) for e in plain]
