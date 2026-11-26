@@ -75,6 +75,7 @@ BUILT_IN_DEFECTS: dict[str, Defect | None] = {
     "feature_mismatch_count": None,
     "episode_file_mismatch": None,
     "episode_not_in_metadata": None,
+    "episode_index_repeated": None,
     "index_range_mismatch_count": None,
     "stats_mismatch_count": None,
     "sharpness_score": Defect.BLUR,

@@ -155,6 +155,50 @@ def episode_not_in_metadata(ctx: EpisodeContext) -> MetricResult:
 @metric(
     level=Level.EPISODE,
     family=Family.SCHEMA,
+    label="episodes whose index repeats in the episode metadata",
+)
+def episode_index_repeated(ctx: EpisodeContext) -> MetricResult:
+    """Report whether the episode's index appears in more than one metadata row.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `layout_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source names no data file per episode,
+        or when the episode has no metadata row naming a data file.
+        `report_only` otherwise, `1.0` when the episode's index appears in more
+        than one metadata row, with the row count and the data file this row names
+        as evidence, and `0.0` when it appears in one.
+    """
+
+    check = ctx.episode.layout_check
+    if check is None:
+        return not_applicable("the source names no data file per episode")
+    if check.pointed_path is None:
+        return not_applicable("the episode has no metadata row naming a data file")
+
+    if check.index_rows > 1:
+        return MetricResult(
+            value=1.0,
+            unit="episodes",
+            status=MetricStatus.REPORT_ONLY,
+            evidence={
+                "index_rows": check.index_rows,
+                "pointed_path": str(check.pointed_path),
+            },
+        )
+    return MetricResult(
+        value=0.0, unit="episodes", status=MetricStatus.REPORT_ONLY, evidence={}
+    )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
     label="episode index range fields that disagree with the data",
 )
 def index_range_mismatch_count(ctx: EpisodeContext) -> MetricResult:

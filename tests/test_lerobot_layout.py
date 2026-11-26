@@ -25,6 +25,7 @@ from kalanos.analysis.adapters.lerobot.layout import (
 )
 from kalanos.analysis.metrics.schema import (
     episode_file_mismatch,
+    episode_index_repeated,
     episode_not_in_metadata,
     index_range_mismatch_count,
 )
@@ -373,7 +374,12 @@ def test_layout_check_reports_a_wrong_length():
 
 @pytest.mark.parametrize(
     "metric",
-    [episode_file_mismatch, episode_not_in_metadata, index_range_mismatch_count],
+    [
+        episode_file_mismatch,
+        episode_not_in_metadata,
+        episode_index_repeated,
+        index_range_mismatch_count,
+    ],
 )
 def test_the_metrics_are_not_applicable_without_a_layout_check(metric):
     """Verify an episode no adapter located reads as not applicable."""
@@ -437,6 +443,44 @@ def test_the_metadata_metric_passes_an_episode_with_a_metadata_row():
 
         assert result.status == MetricStatus.REPORT_ONLY
         assert result.value == 0.0
+
+
+def test_the_repeated_index_metric_flags_an_index_shared_by_two_rows():
+    """Verify an index carried by two metadata rows reads 1 with the row count."""
+
+    check = layout_check(_ROW, _FILE_0, _rows(0, 7), [_FILE_0], index_rows=2)
+
+    result = episode_index_repeated(_context(check))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == 1.0
+    assert result.evidence == {"index_rows": 2, "pointed_path": str(_FILE_0)}
+
+
+def test_the_repeated_index_metric_passes_an_index_in_one_row():
+    """Verify an index carried by one metadata row reads 0."""
+
+    check = layout_check(_ROW, _FILE_0, _rows(0, 7), [_FILE_0])
+
+    result = episode_index_repeated(_context(check))
+
+    assert result.status == MetricStatus.REPORT_ONLY
+    assert result.value == 0.0
+    assert result.evidence == {}
+
+
+def test_the_repeated_index_metric_is_not_applicable_without_a_metadata_row():
+    """Verify an episode found in the data alone is left to the metadata check."""
+
+    check = LayoutCheck(pointed_path=None, holding_paths=[_FILE_0])
+
+    result = episode_index_repeated(_context(check))
+
+    assert result.status == MetricStatus.NOT_APPLICABLE
+    assert (
+        result.evidence["reason"]
+        == "the episode has no metadata row naming a data file"
+    )
 
 
 def test_the_pointer_metric_on_a_match():

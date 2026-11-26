@@ -293,6 +293,36 @@ def _episode_number(episode_id):
     return int(episode_id.rsplit("episode_", 1)[1])
 
 
+def _with_repeated_index(root, kept=None):
+    """Copy the fixture and add a second episode index file repeating its rows.
+
+    The copy's rows carry their own task, so a test can tell which row an episode
+    was read from.
+
+    Parameters
+    ----------
+    root : Path
+        Where to write the copy.
+    kept : list[int] or None
+        The episode indices the second file repeats. `None` repeats them all.
+
+    Returns
+    -------
+    UPath
+        The dataset root.
+    """
+
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_dir = root / "meta" / "episodes" / "chunk-000"
+    index = pl.read_parquet(index_dir / "file-000.parquet")
+    if kept is not None:
+        index = index.filter(pl.col("episode_index").is_in(kept))
+    index.with_columns(
+        pl.lit(["fold the towel"], pl.List(pl.String)).alias("tasks")
+    ).write_parquet(index_dir / "file-001.parquet")
+    return UPath(root)
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -1617,3 +1647,79 @@ def test_macos_sidecar_files_are_ignored(tmp_path):
 
     assert [e.id for e in episodes] == [e.id for e in plain]
     assert [len(e.streams) for e in episodes] == [len(e.streams) for e in plain]
+
+
+def test_a_repeated_episode_index_loads_each_row_under_its_own_id(tmp_path):
+    """Verify each row sharing an `episode_index` gets an id naming its row."""
+
+    root = _with_repeated_index(tmp_path / "lerobot_v3_tiny")
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert [e.id for e in episodes] == [
+        "row000000_episode_000000",
+        "row000002_episode_000000",
+        "row000001_episode_000001",
+        "row000003_episode_000001",
+    ]
+    assert [e.tasks for e in episodes] == [
+        ["pick up the cube"],
+        ["fold the towel"],
+        ["pick up the cube"],
+        ["fold the towel"],
+    ]
+    for episode in episodes:
+        assert episode.layout_check is not None
+        assert episode.layout_check.index_rows == 2
+
+
+def test_a_repeated_episode_index_grades_and_blocks_every_repeated_row(tmp_path):
+    """Verify grading a repeated index finishes and blocks each repeated row."""
+
+    root = _with_repeated_index(tmp_path / "lerobot_v3_tiny")
+
+    report = grade(root)
+
+    findings = _episode_findings(report, "schema.episode_index_repeated")
+    assert sorted(findings) == sorted(e.id for e in report.episodes)
+    assert len(findings) == 4
+    for episode_findings in findings.values():
+        [finding] = episode_findings
+        assert finding.consequence == Consequence.BLOCK
+        assert finding.evidence["index_rows"] == 2
+    assert all(
+        e.eligibility is not None and e.eligibility.status == EligibilityStatus.BLOCKED
+        for e in report.episodes
+    )
+
+
+def test_a_repeated_episode_index_compares_no_stored_stats(tmp_path):
+    """Verify repeated rows skip the stats check, since stats are keyed by index."""
+
+    root = tmp_path / "lerobot_v3_tiny"
+    _with_episode_stats(root)
+    index_dir = root / "meta" / "episodes" / "chunk-000"
+    shutil.copy(index_dir / "file-000.parquet", index_dir / "file-001.parquet")
+
+    episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
+
+    assert len(episodes) == 4
+    assert [e.stats_check for e in episodes] == [None] * 4
+
+
+def test_a_unique_episode_index_keeps_its_plain_id(tmp_path):
+    """Verify only the repeated index takes row ids; the unique one keeps its own."""
+
+    root = _with_repeated_index(tmp_path / "lerobot_v3_tiny", kept=[1])
+
+    report = grade(root)
+
+    assert [e.id.rsplit("::", 1)[1] for e in report.episodes] == [
+        "episode_000000",
+        "row000001_episode_000001",
+        "row000002_episode_000001",
+    ]
+    plain = report.episodes[0]
+    assert plain.metrics["episode_index_repeated"].value == 0.0
+    findings = _episode_findings(report, "schema.episode_index_repeated")
+    assert sorted(findings) == sorted(e.id for e in report.episodes[1:])

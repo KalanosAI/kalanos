@@ -8,6 +8,8 @@ An episode whose rows are in the data with no row in `meta/episodes` is yielded
 after the others, with no streams, so the report can block it.
 The per-episode stats in the `stats/*` columns of `meta/episodes` are compared
 with each episode's data when numeric payloads are read.
+Each row whose `episode_index` repeats in `meta/episodes` is yielded under an id
+naming its row, `row<k>_episode_<index>`, so the report can block it.
 """
 
 # ░█░░░▀█▀░█▀▄░█▀▄░█▀█░█▀▄░▀█▀░█▀▀░█▀▀
@@ -74,6 +76,8 @@ from kalanos.analysis.models.domain import (
 # ░▀▀▀░▀▀▀░▀░▀░▀░░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 
 _SUPPORTED_CODEBASE_VERSION = "v3.0"
+# Each episode index row's 0-based position across `meta/episodes` in path order.
+_INDEX_ROW = "__kalanos_index_row"
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -118,6 +122,8 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
     pl.DataFrame
         Every episode's row, one per episode, sorted by `episode_index`
         when the index has that column; the caller checks that it does.
+        Rows that share an `episode_index` keep their file-path order.
+        The `_INDEX_ROW` column holds each row's 0-based position before sorting.
         Only `episode_index`, `tasks`, `dataset_from_index`, `dataset_to_index`,
         `length` and the `data/*` and `videos/*` columns are read; any other
         column has to be added here before a caller reads it.
@@ -162,11 +168,11 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
         raise AdapterRefusal(
             path, f"could not read episode index under {episodes_dir}: {exc}"
         ) from exc
-    index = pl.concat(frames)
+    index = pl.concat(frames).with_row_index(_INDEX_ROW)
     # A missing `episode_index` is refused by name in `episodes`.
     if "episode_index" not in index.columns:
         return index
-    return index.sort("episode_index")
+    return index.sort("episode_index", maintain_order=True)
 
 
 def _read_episode_stats(
@@ -384,6 +390,9 @@ class LeRobotV3Adapter(LeRobotAdapter):
             An episode whose row names a data file that does not exist has no
             streams, no `schema_check`, and a `layout_check` with `pointed_exists`
             `False`.
+            A row whose `episode_index` repeats in the episode index is yielded
+            with id `row<k>_episode_<index>`, k its `_INDEX_ROW`, no `stats_check`,
+            and a `layout_check` whose `index_rows` is the number of such rows.
 
         Raises
         ------
@@ -421,6 +430,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 raise AdapterRefusal(
                     path, f"the episode index lacks the LeRobot v3 columns {missing}"
                 )
+            repeated: dict[int, int] = dict(
+                episode_index.group_by("episode_index")
+                .len()
+                .filter(pl.col("len") > 1)
+                .iter_rows()
+            )
             fps = float(info["fps"]) if "fps" in info else None
             # Each row of the episode index lists its task instructions, when the
             # dataset records any; read for every episode, not just the sampled ones,
@@ -428,10 +443,10 @@ class LeRobotV3Adapter(LeRobotAdapter):
             task_map = (
                 dataset_tasks(
                     {
-                        row["episode_index"]: as_task_list(row["tasks"])
-                        for row in episode_index.select(
-                            "episode_index", "tasks"
-                        ).iter_rows(named=True)
+                        row[_INDEX_ROW]: as_task_list(row["tasks"])
+                        for row in episode_index.select(_INDEX_ROW, "tasks").iter_rows(
+                            named=True
+                        )
                     }
                 )
                 if "tasks" in episode_index.columns
@@ -486,6 +501,25 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 )
             return located
 
+        def episode_id(row: dict[str, Any]) -> str:
+            """Name the episode a row of the episode index describes.
+
+            Parameters
+            ----------
+            row : dict
+                The row, with its `_INDEX_ROW` position.
+
+            Returns
+            -------
+            str
+                `episode_<index>`, or `row<k>_episode_<index>` when the row's
+                `episode_index` repeats, since the index alone names several rows.
+            """
+
+            if row["episode_index"] in repeated:
+                return f"row{row[_INDEX_ROW]:06d}_episode_{row['episode_index']:06d}"
+            return f"episode_{row['episode_index']:06d}"
+
         row_iter = episode_index.iter_rows(named=True)
         if sample is not None:
             row_iter = itertools.islice(row_iter, sample)
@@ -507,7 +541,12 @@ class LeRobotV3Adapter(LeRobotAdapter):
                         pl.col("episode_index") == row["episode_index"]
                     )
                     missing_layout = layout_check(
-                        row, data_path, holding, source_paths, pointed_exists=False
+                        row,
+                        data_path,
+                        holding,
+                        source_paths,
+                        pointed_exists=False,
+                        index_rows=repeated.get(row["episode_index"], 1),
                     )
                 else:
                     missing_layout = None
@@ -523,11 +562,11 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 # blocks the episode anyway. The cache is left alone, so a later
                 # episode naming the cached file does not read it again.
                 yield Episode(
-                    id=f"episode_{row['episode_index']:06d}",
+                    id=episode_id(row),
                     streams=[],
                     tasks=None
                     if task_map is None
-                    else task_map.get(row["episode_index"], []),
+                    else task_map.get(row[_INDEX_ROW], []),
                     split=split_of(info, row["episode_index"]),
                     schema_check=None,
                     layout_check=missing_layout,
@@ -585,8 +624,20 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     holding = all_rows.filter(
                         pl.col("episode_index") == row["episode_index"]
                     )
-                episode_layout = layout_check(row, data_path, holding, source_paths)
-                stored_stats = stats_map.get(row["episode_index"])
+                episode_layout = layout_check(
+                    row,
+                    data_path,
+                    holding,
+                    source_paths,
+                    index_rows=repeated.get(row["episode_index"], 1),
+                )
+                # Stats are keyed by `episode_index`, so a repeated index's rows
+                # can't be told apart and none of them is compared.
+                stored_stats = (
+                    None
+                    if row["episode_index"] in repeated
+                    else stats_map.get(row["episode_index"])
+                )
                 stats_check = (
                     check_stats(info, stored_stats[1], episode_frame, stored_stats[0])
                     if materialise and stored_stats is not None
@@ -649,11 +700,9 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 domain=f"{path}#episode:{row['episode_index']}",
             )
             yield Episode(
-                id=f"episode_{row['episode_index']:06d}",
+                id=episode_id(row),
                 streams=streams,
-                tasks=None
-                if task_map is None
-                else task_map.get(row["episode_index"], []),
+                tasks=None if task_map is None else task_map.get(row[_INDEX_ROW], []),
                 split=split_of(info, row["episode_index"]),
                 schema_check=cached_check,
                 layout_check=episode_layout,

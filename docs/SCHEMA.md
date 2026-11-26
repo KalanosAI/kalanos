@@ -9,8 +9,9 @@ Report loading rejects duplicate episode IDs and reconciles each status count ag
 | Field | Type | What it is |
 |---|---|---|
 | `DatasetWarning.code` | `"duplicate_channel_label"` | Takes a new value: a feature declares the same name for several of its members. Each member was graded separately as a channel named `feature[index]`, keeps the name as `channel.declared_name`, and has no meaning inferred from it. The message names the feature, the name and the indices. Feeds no score. |
+| `episodes[].metrics["episode_index_repeated"]` | `MetricResult` | 1 when the episode's `episode_index` appears in more than one row of the episode metadata, else 0, with the row count and the data file the row names as evidence. Each such row is listed in `episodes` with id `row<k>_episode_<idx>`, k being the row's position across the metadata files in path order. `not_applicable` where the format names no data file per episode, or for an episode with no metadata row. |
 
-An 8.2.0 report loads unchanged: it holds no `duplicate_channel_label` warning.
+An 8.2.0 report loads unchanged: it holds no `duplicate_channel_label` warning, and its episodes have no `episode_index_repeated`.
 
 ## Added in 8.2.0
 
