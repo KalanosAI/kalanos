@@ -84,7 +84,7 @@ from kalanos.analysis.models.scoring import Finding, Grade, ScoreResult
 
 # Bumped whenever the graded tree's shape changes: two shapes can carry the same
 # field names, so a reader cannot tell them apart by content alone.
-CURRENT_SCHEMA_VERSION = "8.2.0"
+CURRENT_SCHEMA_VERSION = "8.3.0"
 
 # Significant digits a stored near-duplicate distance keeps.
 # The near limit, 0.02, is exact at 4 digits,
@@ -796,6 +796,10 @@ class DatasetWarning(BaseModel):
         the message names each camera, file and transfer, up to 10 files.
         `interlaced`: video files whose first frame is interlaced;
         the message names each camera and file, up to 10 files.
+        `duplicate_channel_label`: a feature declares the same name for several
+        of its members; each was graded separately under `feature[index]`
+        and no meaning was inferred from the name;
+        the message names the feature, the name and the indices.
     message : str
         The warning, stated for a reader.
     """
@@ -812,6 +816,7 @@ class DatasetWarning(BaseModel):
         "rotation",
         "hdr_transfer",
         "interlaced",
+        "duplicate_channel_label",
     ]
     message: str
 

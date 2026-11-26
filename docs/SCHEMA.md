@@ -1,8 +1,16 @@
 # Report schema
 
-This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0), the 8.1.0 additions and the 8.2.0 addition below.
+This page lists what changed from 6.5 to 7.0.0 (written by Kalanos 0.7.0), what a consumer must do, and what a legacy file can and cannot provide, the 7.1.0 and 7.2.0 additions, the 8.0.0 changes (written by Kalanos 0.9.0), the 8.1.0 additions, the 8.2.0 addition and the 8.3.0 addition below.
 
 Report loading rejects duplicate episode IDs and reconciles each status count against episode decisions, adding identified failures and unresolved inventory to unknown. A published eligible share must match those counts; an omitted share remains readable. Diagnostic window counts also reconcile with the recorded window statuses and explicit unexamined-budget unknowns. Valid report shapes are unchanged; contradictory summaries are rejected rather than silently repaired.
+
+## Added in 8.3.0
+
+| Field | Type | What it is |
+|---|---|---|
+| `DatasetWarning.code` | `"duplicate_channel_label"` | Takes a new value: a feature declares the same name for several of its members. Each member was graded separately as a channel named `feature[index]`, keeps the name as `channel.declared_name`, and has no meaning inferred from it. The message names the feature, the name and the indices. Feeds no score. |
+
+An 8.2.0 report loads unchanged: it holds no `duplicate_channel_label` warning.
 
 ## Added in 8.2.0
 

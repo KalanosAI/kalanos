@@ -4,6 +4,12 @@ All notable changes to Kalanos are listed here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Kalanos uses [Semantic Versioning](https://semver.org/).
 Before 1.0, a minor version can break the report schema or the CLI.
 
+## [Unreleased]
+
+### Fixed
+
+- A LeRobot feature that declares the same name for two of its members, as LIBERO's `observation.state` names indices 6 and 7 `gripper`, no longer stops the dataset with `projections contained duplicate output name`. Each member grades separately as `observation.state[6]` and `observation.state[7]`, keeps `gripper` as its declared name, and gets no meaning inferred from it, and a `duplicate_channel_label` dataset warning names the feature, the name and the indices (report schema 8.3.0). Episode 0 of `continuallearning/libero_goal_image_task_0_er_new` (revision `da126e11`) loaded 0 of 1 episodes before and loads 1 of 1 now.
+
 ## [0.10.3] - 2026-11-25
 
 Report schema 8.2.0.

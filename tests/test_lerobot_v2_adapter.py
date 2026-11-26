@@ -37,6 +37,7 @@ from helpers import (
     LEROBOT_V2_1_FIXTURE,
     copy_to_memory,
     lerobot_stats,
+    with_repeated_gripper,
 )
 
 
@@ -492,3 +493,31 @@ def test_a_malformed_v2_1_stats_line_is_refused(tmp_path):
 
     with pytest.raises(AdapterRefusal, match="episodes_stats.jsonl line 1"):
         _episodes(UPath(root))
+
+
+def test_a_repeated_channel_name_grades_each_member(tmp_path):
+    """Verify two members named `gripper` both load, each graded on its own."""
+
+    root = with_repeated_gripper(LEROBOT_V2_1_FIXTURE, tmp_path / "repeated")
+
+    report = grade(UPath(root))
+
+    assert len(report.episodes) == 2
+    assert not report.unresolved
+    for episode in report.episodes:
+        repeated = [
+            c
+            for s in episode.streams
+            if s.source_field == "observation.state"
+            for c in s.channels
+            if c.channel.declared_name == "gripper"
+        ]
+        assert [c.channel.name for c in repeated] == [
+            "observation.state[4]",
+            "observation.state[5]",
+        ]
+        assert all(c.metrics for c in repeated)
+    [warning] = [
+        w for w in report.dataset_warnings if w.code == "duplicate_channel_label"
+    ]
+    assert 'observation.state uses "gripper" at indices 4 and 5' in warning.message

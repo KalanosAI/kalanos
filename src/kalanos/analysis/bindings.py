@@ -12,6 +12,7 @@ with both values recorded on the channel.
 
 # Built-in
 import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -92,6 +93,47 @@ def _known(value: object) -> bool:
     return value is not None and value != "unknown"
 
 
+# A label shared by several channels names none of them, so it can't type them.
+def _repeated_labels(stream: Stream) -> frozenset[str]:
+    """Find the declared names that more than one of a stream's channels carry.
+
+    Parameters
+    ----------
+    stream : Stream
+        The stream whose channels are read.
+
+    Returns
+    -------
+    frozenset[str]
+        Each declared name carried by two or more channels.
+    """
+
+    labels = Counter(c.declared_name for c in stream.channels if c.declared_name)
+    return frozenset(label for label, count in labels.items() if count > 1)
+
+
+def _reading_name(channel: Channel, repeated: frozenset[str]) -> str:
+    """Pick the name a channel's meaning is read from.
+
+    Parameters
+    ----------
+    channel : Channel
+        The channel to read.
+    repeated : frozenset[str]
+        The declared names its stream repeats, from `_repeated_labels`.
+
+    Returns
+    -------
+    str
+        The channel's own name when its declared name is repeated,
+        its declared name when it has a unique one, its own name otherwise.
+    """
+
+    if channel.declared_name in repeated:
+        return channel.name
+    return channel.declared_name or channel.name
+
+
 def _quaternion_names(stream: Stream) -> frozenset[str]:
     """Find the four channels of a stream that name a quaternion's components.
 
@@ -109,11 +151,12 @@ def _quaternion_names(stream: Stream) -> frozenset[str]:
         is inferred whole or not at all.
     """
 
+    repeated = _repeated_labels(stream)
     found: dict[str, list[str]] = {part: [] for part in _QUATERNION_PARTS}
     for channel in stream.channels:
         if channel.binding is not None:
             continue
-        name = (channel.declared_name or channel.name).lower()
+        name = _reading_name(channel, repeated).lower()
         last = re.split(r"[._ ]", name)[-1]
         if last in found:
             found[last].append(channel.name)
@@ -146,6 +189,8 @@ def _inferred(
     channel: Channel,
     dictionary: Dictionary,
     quaternion: frozenset[str],
+    *,
+    repeated: frozenset[str],
 ) -> tuple[ChannelBinding, bool]:
     """Interpret names in one place and explicitly label the result inference.
 
@@ -159,6 +204,8 @@ def _inferred(
         The taxonomy whose aliases and channel patterns read the name.
     quaternion : frozenset[str]
         The names of the stream's channels that hold quaternion components.
+    repeated : frozenset[str]
+        The declared names the stream repeats, which are not read for meaning.
 
     Returns
     -------
@@ -168,7 +215,7 @@ def _inferred(
     """
 
     taxonomy = stream.taxonomy_type
-    name = channel.declared_name or channel.name
+    name = _reading_name(channel, repeated)
     [role] = roles([name], dictionary)
     # A partly recognized declared vector must not type its unresolved members.
     if taxonomy.startswith("unmapped."):
@@ -368,8 +415,9 @@ def resolve_stream(
 
     source = source_identity or str(stream.source_path)
     resolved = []
+    repeated = _repeated_labels(stream)
     named_roles = roles(
-        [c.declared_name or c.name for c in stream.channels], dictionary
+        [_reading_name(c, repeated) for c in stream.channels], dictionary
     )
     partly_named = (
         stream.taxonomy_type.startswith("unmapped.")
@@ -381,7 +429,9 @@ def resolve_stream(
         if channel.source_index is None and len(stream.channels) > 1:
             channel = channel.model_copy(update={"source_index": position})
         if channel.binding is None:
-            base, patterned = _inferred(stream, channel, dictionary, quaternion)
+            base, patterned = _inferred(
+                stream, channel, dictionary, quaternion, repeated=repeated
+            )
         else:
             base, patterned = channel.binding, False
         binding = base.model_copy(deep=True)

@@ -49,7 +49,7 @@ from kalanos.assets.policy import load_default_policy
 from kalanos.testing import check_adapter
 
 # Local
-from helpers import CSV_FIXTURE, LEROBOT_FIXTURE, lerobot_stats
+from helpers import CSV_FIXTURE, LEROBOT_FIXTURE, lerobot_stats, with_repeated_gripper
 
 
 # ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
@@ -1576,3 +1576,28 @@ def test_v3_without_stats_columns_has_no_stats_check():
     """Verify an episode index with no `stats/*` columns leaves `stats_check` unset."""
 
     assert [e.stats_check for e in _episodes()] == [None, None]
+
+
+def test_a_repeated_channel_name_is_indexed_and_warned(tmp_path):
+    """Verify a v3 feature that repeats `gripper` indexes each member and warns."""
+
+    root = UPath(with_repeated_gripper(LEROBOT_FIXTURE, tmp_path / "repeated"))
+
+    # The metadata tier grades no channel, so the names are read off the adapter.
+    with use_tier(ExecutionTier.METADATA):
+        episodes = list(LeRobotV3Adapter().episodes(root))
+    report = grade(root, tier=ExecutionTier.METADATA)
+
+    assert len(episodes) == 2
+    for episode in episodes:
+        [state] = [s for s in episode.streams if s.source_field == "observation.state"]
+        assert [(c.name, c.declared_name) for c in state.channels[4:]] == [
+            ("observation.state[4]", "gripper"),
+            ("observation.state[5]", "gripper"),
+        ]
+    assert len(report.episodes) == 2
+    assert not report.unresolved
+    [warning] = [
+        w for w in report.dataset_warnings if w.code == "duplicate_channel_label"
+    ]
+    assert 'observation.state uses "gripper" at indices 4 and 5' in warning.message

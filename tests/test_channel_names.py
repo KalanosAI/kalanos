@@ -61,6 +61,19 @@ def channel_taxonomy(stream_type: str, name: str, *, feature: str | None = None)
     return binding.taxonomy_type
 
 
+def _state_stream(channels: list[Channel]) -> Stream:
+    """An unmapped `observation.state` stream holding the given channels."""
+    return Stream(
+        taxonomy_type="unmapped.observation.state",
+        source_field="observation.state",
+        kind=Kind.SERIES,
+        timestamps=pl.Series("t", [0.0, 0.1]),
+        source_path=UPath("fixture.csv"),
+        timestamp_dtype=TimestampDtype.FLOAT64,
+        channels=channels,
+    )
+
+
 def test_names_declared_as_a_list_are_read():
     assert declared_names({"names": ["x", "y", "z"]}) == ["x", "y", "z"]
 
@@ -93,6 +106,52 @@ def test_nested_names_name_the_channels():
     channels = channels_for("observation.state", spec, load_default_dictionary())
 
     assert [channel.name for channel in channels] == ALOHA_MOTORS
+
+
+def test_repeated_names_are_indexed():
+    """LIBERO's state names indices 6 and 7 `gripper`; each gets its own name."""
+
+    names = ["x", "y", "z", "roll", "pitch", "yaw", "gripper", "gripper"]
+    spec = {"dtype": "float32", "shape": [8], "names": names}
+
+    channels = channels_for("observation.state", spec, load_default_dictionary())
+
+    assert [channel.name for channel in channels] == [
+        *names[:6],
+        "observation.state[6]",
+        "observation.state[7]",
+    ]
+    assert [channel.declared_name for channel in channels] == names
+    assert [channel.source_index for channel in channels[6:]] == [6, 7]
+
+
+def test_a_repeated_gripper_name_types_no_gripper():
+    """A name two channels share can't tell them apart, so it types neither."""
+
+    dictionary = load_default_dictionary()
+    repeated = _state_stream(
+        [
+            Channel(
+                name=f"observation.state[{i}]", declared_name="gripper", source_index=i
+            )
+            for i in (6, 7)
+        ]
+    )
+    unique = _state_stream(
+        [Channel(name="gripper", declared_name="gripper", source_index=0)]
+    )
+
+    resolved = resolve_stream(repeated, dictionary=dictionary)
+    bindings = [channel.binding for channel in resolved.channels]
+    [alone] = resolve_stream(unique, dictionary=dictionary).channels
+
+    assert [b.taxonomy_type for b in bindings if b] == [
+        "unmapped.observation.state",
+        "unmapped.observation.state",
+    ]
+    assert [b.name for b in bindings if b] == ["gripper", "gripper"]
+    assert alone.binding is not None
+    assert alone.binding.taxonomy_type == "proprio.gripper_width"
 
 
 def test_a_channel_named_as_a_gripper_grades_as_one():
