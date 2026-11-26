@@ -568,6 +568,56 @@ def test_a_dropped_first_frame_is_still_present(tmp_path):
     assert result.evidence["reason"] is None
 
 
+def test_an_unverifiable_file_bound_keeps_the_read_failure(monkeypatch):
+    """A header stating no length leaves the read failure as the reason, with counts."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: ContainerHeader(width=32, height=32, fps=30.0, pix_fmt="yuv420p"),
+    )
+
+    result = camera_stream_present(
+        stream_context(_camera(LEROBOT_VIDEO, start_s=500.0))
+    )
+
+    assert result.value == 0.0
+    assert result.evidence["reason"] == "no frame could be decoded"
+    assert "file_bounds_s" not in result.evidence
+    assert result.evidence["declared_window_s"] == [500.0, 500.0 + 6 / 30]
+    assert (result.evidence["observed_frames"], result.evidence["expected_frames"]) == (
+        0,
+        6,
+    )
+
+
+@pytest.mark.parametrize(
+    ("start_s", "file_start", "outside"),
+    [(0.0, 0.0, False), (4.4, 0.0, True), (4.4 - 1e-6, 0.0, True), (0.0, 10.0, True)],
+    ids=["at_end", "past_end", "just_short_of_end", "before_start"],
+)
+def test_a_window_ending_at_the_file_end_is_inside(start_s, file_start, outside):
+    """A window ending where its file ends is inside; one within half a frame of
+    the end, or ending before the file starts, is outside."""
+
+    payload = VideoPayload(
+        path=LEROBOT_VIDEO, frame_count=66, start_s=start_s, end_s=start_s + 4.4
+    )
+    header = ContainerHeader(
+        width=16,
+        height=16,
+        fps=15.0,
+        pix_fmt="yuv420p",
+        duration_s=4.4,
+        start_s=file_start,
+    )
+
+    bounds = vision._window_outside_file(payload, header)
+
+    expected = (file_start, pytest.approx(file_start + 4.4))
+    assert bounds == (expected if outside else None)
+
+
 def test_presence_reads_the_shared_decode_and_format_decodes_none(monkeypatch):
     """Presence takes its first frame from the vision read; format reads no frame."""
 

@@ -294,6 +294,8 @@ class VideoFormat(BaseModel):
         How many frames the video file holds. Container only.
     duration_s : float or None
         The video file's duration in seconds. Container only.
+    start_s : float or None
+        Where the video file's first frame sits, in seconds. Container only.
     color_range : str or None
         The colour range, as FFmpeg names it (`tv`). Container only.
     color_primaries : str or None
@@ -330,6 +332,7 @@ class VideoFormat(BaseModel):
     bit_rate: int | None = None
     frame_count: int | None = None
     duration_s: float | None = None
+    start_s: float | None = None
     color_range: str | None = None
     color_primaries: str | None = None
     color_transfer: str | None = None

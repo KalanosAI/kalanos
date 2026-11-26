@@ -6,6 +6,10 @@ Before 1.0, a minor version can break the report schema or the CLI.
 
 ## [Unreleased]
 
+### Changed
+
+- A camera whose declared video window lies wholly outside its video file now says `Video window outside referenced file` in its blocking `vision.camera_stream_present` finding, in place of the read failure it named before. The finding's evidence gives the declared window (`declared_window_s`), the file's bounds as its container states them (`file_bounds_s`), and the frames found in the window against those expected (`observed_frames`, `expected_frames`), and the HTML finding row shows them. Without bounds stated in the container, the read failure stays the reason and the window and frame counts are still given. The container format gains `start_s`, where the file's first frame sits (report schema 8.3.0). Episode 2142 of `lerobot/taco_play` (revision `15f69c93`) points its `observation.images.rgb_static` camera at 9424.8-9429.2 s of `file-000.mp4`, which ends at 9424.8 s, and finds 0 of 66 frames there.
+
 ### Fixed
 
 - A LeRobot feature that declares the same name for two of its members, as LIBERO's `observation.state` names indices 6 and 7 `gripper`, no longer stops the dataset with `projections contained duplicate output name`. Each member grades separately as `observation.state[6]` and `observation.state[7]`, keeps `gripper` as its declared name, and gets no meaning inferred from it, and a `duplicate_channel_label` dataset warning names the feature, the name and the indices (report schema 8.3.0). Episode 0 of `continuallearning/libero_goal_image_task_0_er_new` (revision `da126e11`) loaded 0 of 1 episodes before and loads 1 of 1 now.

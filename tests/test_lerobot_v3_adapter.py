@@ -10,6 +10,7 @@ and camera payloads that never decode while grading.
 # Built-in
 import json
 import shutil
+from fractions import Fraction
 
 # External
 import polars as pl
@@ -182,7 +183,7 @@ def _episodes():
     return list(LeRobotV3Adapter().episodes(LEROBOT_FIXTURE))
 
 
-def _layout_dataset(root, meta_rows, data_files):
+def _layout_dataset(root, meta_rows, data_files, fps=None):
     """Write a LeRobot v3 tree with the given episode pointers and data layout.
 
     Parameters
@@ -195,6 +196,8 @@ def _layout_dataset(root, meta_rows, data_files):
     data_files : dict[int, list[tuple[int, int, int]]]
         The episodes each data file holds, by file index:
         episode index and its `index` range, end exclusive.
+    fps : int or None
+        The declared rate, the fixture's when `None`.
 
     Returns
     -------
@@ -204,6 +207,8 @@ def _layout_dataset(root, meta_rows, data_files):
 
     info = json.loads((LEROBOT_FIXTURE / "meta" / "info.json").read_text())
     del info["features"]["observation.images.up"]
+    if fps is not None:
+        info["fps"] = fps
     ranges = [r for rows in data_files.values() for r in rows]
     info["total_episodes"] = len(meta_rows)
     info["total_frames"] = sum(hi - lo for _, lo, hi in ranges)
@@ -251,6 +256,128 @@ def _layout_dataset(root, meta_rows, data_files):
             root / "data" / "chunk-000" / f"file-{file_index:03d}.parquet"
         )
     return UPath(root)
+
+
+def _write_camera_file(path, frames):
+    """Encode `frames` 16x16 frames at 15 fps, each a level of its own.
+
+    Parameters
+    ----------
+    path : Path
+        Where to write the mp4.
+    frames : int
+        How many frames it holds, from pts 0.
+    """
+
+    av = pytest.importorskip("av")
+    numpy = pytest.importorskip("numpy")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    container = av.open(str(path), "w")
+    stream = container.add_stream("libx264", rate=15, options={"bf": "0"})
+    stream.width = stream.height = 16
+    stream.pix_fmt = "yuv420p"
+    stream.codec_context.time_base = Fraction(1, 15)
+    for k in range(frames):
+        ramp = (20 + (k * 7) % 150 + numpy.arange(16)).astype(numpy.uint8)
+        pixels = numpy.broadcast_to(ramp[None, :, None], (16, 16, 3)).copy()
+        frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+        frame.pts = k
+        frame.time_base = Fraction(1, 15)
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def _taco_like_dataset(root, *, fixed_pointer):
+    """Write three 66-frame episodes, the middle one's fixed camera past its file.
+
+    It copies the layout of `lerobot/taco_play` episodes 2141 to 2143:
+    `rgb_static/file-000.mp4` holds episode 2141 alone,
+    while episode 2142's pointer names it at the 4.4 s that follow,
+    and `file-001.mp4` holds 2142's frames and then 2143's.
+    `rgb_gripper/file-000.mp4` holds all three, each pointer inside it.
+
+    Parameters
+    ----------
+    root : Path
+        Where to write it.
+    fixed_pointer : bool
+        Whether episode 2142's fixed camera points at `file-001.mp4` from 0.0 s,
+        where its frames are.
+
+    Returns
+    -------
+    UPath
+        The dataset root.
+    """
+
+    episodes = (2141, 2142, 2143)
+    root = _layout_dataset(
+        root,
+        [(e, 0, 66 * k, 66 * (k + 1), 66) for k, e in enumerate(episodes)],
+        {0: [(e, 66 * k, 66 * (k + 1)) for k, e in enumerate(episodes)]},
+        fps=15,
+    )
+    static, gripper = "observation.images.rgb_static", "observation.images.rgb_gripper"
+    info = json.loads((root / "meta" / "info.json").read_text())
+    for key in (static, gripper):
+        info["features"][key] = {
+            "dtype": "video",
+            "shape": [16, 16, 3],
+            "info": {"video.fps": 15},
+        }
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+
+    videos = root / "videos"
+    _write_camera_file(videos / static / "chunk-000" / "file-000.mp4", 66)
+    _write_camera_file(videos / static / "chunk-000" / "file-001.mp4", 132)
+    _write_camera_file(videos / gripper / "chunk-000" / "file-000.mp4", 198)
+
+    # Per episode: (file index, from, to) for each camera.
+    misplaced = (0, 4.4, 8.8) if not fixed_pointer else (1, 0.0, 4.4)
+    pointers = {
+        static: [(0, 0.0, 4.4), misplaced, (1, 4.4, 8.8)],
+        gripper: [(0, 0.0, 4.4), (0, 4.4, 8.8), (0, 8.8, 13.2)],
+    }
+    index_file = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    index = pl.read_parquet(index_file)
+    for key, rows in pointers.items():
+        file_index, start, end = zip(*rows, strict=True)
+        index = index.with_columns(
+            pl.lit(0, pl.Int64).alias(f"videos/{key}/chunk_index"),
+            pl.Series(f"videos/{key}/file_index", file_index, dtype=pl.Int64),
+            pl.Series(f"videos/{key}/from_timestamp", start, dtype=pl.Float64),
+            pl.Series(f"videos/{key}/to_timestamp", end, dtype=pl.Float64),
+        )
+    index.write_parquet(index_file)
+    return root
+
+
+def _camera_presence(report):
+    """Read each camera's presence result by episode and camera key.
+
+    Parameters
+    ----------
+    report : Report
+        The graded report.
+
+    Returns
+    -------
+    dict[tuple[int, str], MetricResult]
+        `camera_stream_present` per episode index and camera key.
+    """
+
+    presence = {}
+    for episode in report.episodes:
+        for stream in episode.streams:
+            result = stream.metrics.get("camera_stream_present")
+            if result is not None:
+                camera = result.evidence.get("camera")
+                presence[(_episode_number(episode.id), camera)] = result
+    return presence
 
 
 def _episode_findings(report, metric_id):
@@ -1723,3 +1850,73 @@ def test_a_unique_episode_index_keeps_its_plain_id(tmp_path):
     assert plain.metrics["episode_index_repeated"].value == 0.0
     findings = _episode_findings(report, "schema.episode_index_repeated")
     assert sorted(findings) == sorted(e.id for e in report.episodes[1:])
+
+
+_STATIC = "observation.images.rgb_static"
+_GRIPPER = "observation.images.rgb_gripper"
+
+
+def test_a_window_past_its_file_names_the_pointer_mismatch(tmp_path):
+    """Verify a camera window past its file's end blocks, naming the window and file."""
+
+    report = grade(_taco_like_dataset(tmp_path / "taco", fixed_pointer=False))
+
+    result = _camera_presence(report)[(2142, _STATIC)]
+    assert result.value == 0.0
+    evidence = result.evidence
+    assert evidence["reason"] == "Video window outside referenced file"
+    assert evidence["path"].endswith(f"videos/{_STATIC}/chunk-000/file-000.mp4")
+    assert evidence["declared_window_s"] == [4.4, 8.8]
+    assert evidence["file_bounds_s"] == [0.0, pytest.approx(4.4)]
+    assert (evidence["observed_frames"], evidence["expected_frames"]) == (0, 66)
+    [finding] = [
+        f
+        for e, found in _episode_findings(
+            report, "vision.camera_stream_present"
+        ).items()
+        if _episode_number(e) == 2142
+        for f in found
+        if f.source_field == _STATIC
+    ]
+    assert finding.consequence == Consequence.BLOCK
+    assert 2142 in _blocked(report)
+
+
+def test_neighbours_and_the_other_camera_of_a_misplaced_window_pass(tmp_path):
+    """Verify the episodes either side, and the misplaced one's other camera, pass."""
+
+    report = grade(_taco_like_dataset(tmp_path / "taco", fixed_pointer=False))
+
+    presence = _camera_presence(report)
+    for key in [
+        (2141, _STATIC),
+        (2141, _GRIPPER),
+        (2143, _STATIC),
+        (2143, _GRIPPER),
+        (2142, _GRIPPER),
+    ]:
+        assert presence[key].value == 1.0, key
+        assert "file_bounds_s" not in presence[key].evidence
+
+
+def test_a_corrected_pointer_reads_every_frame(tmp_path):
+    """Verify pointing the episode at the file holding its frames clears the finding."""
+
+    report = grade(_taco_like_dataset(tmp_path / "taco", fixed_pointer=True))
+
+    assert _camera_presence(report)[(2142, _STATIC)].value == 1.0
+    [episode] = [e for e in report.episodes if _episode_number(e.id) == 2142]
+    [stream] = [
+        s
+        for s in episode.streams
+        if s.metrics["camera_stream_present"].evidence.get("camera") == _STATIC
+    ]
+    counted = stream.metrics["frame_count_vs_timebase"].evidence
+    assert (counted["present"], counted["implied"]) == (66, 66)
+    assert not [
+        f
+        for f in report.findings
+        if _episode_number(f.episode_id) == 2142
+        and f.source_field == _STATIC
+        and f.consequence == Consequence.BLOCK
+    ]
