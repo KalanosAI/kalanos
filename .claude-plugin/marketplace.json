@@ -1,0 +1,16 @@
+{
+  "name": "kalanos-ai",
+  "owner": {
+    "name": "Kalanos AI"
+  },
+  "plugins": [
+    {
+      "name": "kalanos",
+      "source": "./plugins/claude/kalanos",
+      "description": "Find public robotics dataset assessments and inspect episode-level evidence. In Claude Code, use an existing Kalanos CLI installation to audit recordings locally."
+    }
+  ],
+  "metadata": {
+    "description": "Kalanos plugins for auditing robotics training datasets."
+  }
+}

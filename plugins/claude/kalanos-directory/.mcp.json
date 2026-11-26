@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kalanos": {
+      "type": "http",
+      "url": "https://mcp.kalanos.ai/mcp"
+    }
+  }
+}

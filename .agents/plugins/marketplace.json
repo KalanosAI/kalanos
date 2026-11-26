@@ -1,0 +1,20 @@
+{
+  "name": "kalanos-ai",
+  "interface": {
+    "displayName": "Kalanos AI"
+  },
+  "plugins": [
+    {
+      "name": "kalanos",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
