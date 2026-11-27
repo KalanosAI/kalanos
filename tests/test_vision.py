@@ -589,6 +589,53 @@ def test_an_unverifiable_file_bound_keeps_the_read_failure(monkeypatch):
         0,
         6,
     )
+    assert result.evidence["window_check"] == "unverified"
+
+
+def test_an_unopenable_header_leaves_the_window_unverified(monkeypatch):
+    """An unreadable header keeps its failure as the reason, the window unverified."""
+
+    def unopenable(self):
+        """Fail as a container that cannot be opened does."""
+
+        raise DecodeFailed("cannot open container")
+
+    monkeypatch.setattr(VideoPayload, "header", unopenable)
+
+    result = camera_stream_present(
+        stream_context(_camera(LEROBOT_VIDEO, start_s=500.0))
+    )
+
+    assert result.value == 0.0
+    assert result.evidence["reason"] == "cannot open container"
+    assert result.evidence["window_check"] == "unverified"
+    assert "file_bounds_s" not in result.evidence
+
+
+def test_a_failure_inside_the_window_is_checked_inside(monkeypatch):
+    """A window the file's bounds cover keeps the read failure, checked inside."""
+
+    monkeypatch.setattr(
+        VideoPayload,
+        "header",
+        lambda self: ContainerHeader(
+            width=32,
+            height=32,
+            fps=30.0,
+            pix_fmt="yuv420p",
+            duration_s=1000.0,
+            start_s=0.0,
+        ),
+    )
+
+    result = camera_stream_present(
+        stream_context(_camera(LEROBOT_VIDEO, start_s=500.0))
+    )
+
+    assert result.value == 0.0
+    assert result.evidence["reason"] == "no frame could be decoded"
+    assert result.evidence["window_check"] == "inside"
+    assert "file_bounds_s" not in result.evidence
 
 
 @pytest.mark.parametrize(
