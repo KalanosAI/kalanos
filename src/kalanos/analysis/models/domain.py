@@ -709,6 +709,65 @@ class StatsCheck(BaseModel):
     mismatches: list[StatsMismatch] = Field(default_factory=list)
 
 
+class ElementCountMismatch(BaseModel):
+    """One frame whose feature holds another number of values than its shape declares.
+
+    Attributes
+    ----------
+    field : str
+        The feature key.
+    expected : int
+        The number of values the declared shape holds.
+    found : int
+        The number of values the frame holds.
+    frame : int
+        The frame's `frame_index`, or its row position in the episode when the
+        data has no such column.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    field: str
+    expected: int
+    found: int
+    frame: int
+
+    @property
+    def message(self) -> str:
+        """Describe the mismatch in one line.
+
+        Returns
+        -------
+        str
+            `<field> frame <frame>: expected <expected>, found <found>`.
+        """
+
+        return (
+            f"{self.field} frame {self.frame}: "
+            f"expected {self.expected}, found {self.found}"
+        )
+
+
+class ElementCountCheck(BaseModel):
+    """An episode's rows compared with the number of values each feature declares.
+
+    Attributes
+    ----------
+    source_path : AnyPath
+        The data file the rows were read from.
+    checked : list[str]
+        The feature keys compared, in declaration order.
+    mismatches : list[ElementCountMismatch]
+        One entry per frame and feature whose row holds another number of values.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_path: AnyPath
+    checked: list[str] = Field(default_factory=list)
+    mismatches: list[ElementCountMismatch] = Field(default_factory=list)
+
+
 class RangeMismatch(BaseModel):
     """One episode index range field that disagrees with the data's `index` column.
 
@@ -811,6 +870,10 @@ class Episode(BaseModel):
         The per-feature statistics the source stores for the episode compared with
         statistics recomputed from its data, set by an adapter whose format stores them.
         `None` when the source stores none for the episode, or its data was not read.
+    element_count_check : ElementCountCheck or None
+        Each frame's values compared with the number its feature's shape declares,
+        set by an adapter whose format declares a shape per feature.
+        `None` when nothing was declared, or the data was not read.
     """
 
     id: str
@@ -820,6 +883,7 @@ class Episode(BaseModel):
     schema_check: SchemaCheck | None = None
     layout_check: LayoutCheck | None = None
     stats_check: StatsCheck | None = None
+    element_count_check: ElementCountCheck | None = None
 
     @property
     def source_paths(self) -> list[UPath]:

@@ -30,6 +30,7 @@ from kalanos.analysis.adapters.lerobot.common import (
     CONFIDENCE,
     TIME_COLUMN,
     LeRobotAdapter,
+    check_element_counts,
     check_path_template,
     check_scalar_index,
     check_schema,
@@ -707,6 +708,11 @@ class LeRobotV3Adapter(LeRobotAdapter):
                     if materialise and stored_stats is not None
                     else None
                 )
+                element_count_check = (
+                    check_element_counts(plan, episode_frame, data_path)
+                    if materialise
+                    else None
+                )
                 timestamp_dtype = timestamp_dtype_of(episode_frame[TIME_COLUMN])
                 clock = episode_clock(episode_frame, fps, timestamp_dtype)
                 timestamps = episode_frame[TIME_COLUMN].cast(pl.Float64)
@@ -771,6 +777,7 @@ class LeRobotV3Adapter(LeRobotAdapter):
                 schema_check=cached_check,
                 layout_check=episode_layout,
                 stats_check=stats_check,
+                element_count_check=element_count_check,
             )
 
         if sample is not None:

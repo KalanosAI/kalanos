@@ -108,6 +108,37 @@ def test_nested_names_name_the_channels():
     assert [channel.name for channel in channels] == ALOHA_MOTORS
 
 
+def test_a_multi_dimensional_feature_has_one_channel_per_value():
+    """A `[1, 3]` end-effector position reads as three channels, in flat order."""
+
+    spec = {"dtype": "float32", "shape": [1, 3], "names": None}
+
+    channels = channels_for("f", spec, load_default_dictionary())
+
+    assert [channel.name for channel in channels] == ["f_0", "f_1", "f_2"]
+    assert [channel.source_index for channel in channels] == [0, 1, 2]
+
+
+def test_a_multi_dimensional_feature_takes_its_nested_names():
+    """Names nested as one list per row name the channels of a `[1, 3]` feature."""
+
+    spec = {"dtype": "float32", "shape": [1, 3], "names": [["x", "y", "z"]]}
+
+    channels = channels_for("f", spec, load_default_dictionary())
+
+    assert [channel.name for channel in channels] == ["x", "y", "z"]
+
+
+def test_a_square_grid_has_one_channel_per_cell():
+    """A `[2, 2]` grid yields four channels, not one per row."""
+
+    spec = {"dtype": "int16", "shape": [2, 2], "names": None}
+
+    channels = channels_for("f", spec, load_default_dictionary())
+
+    assert [channel.name for channel in channels] == ["f_0", "f_1", "f_2", "f_3"]
+
+
 def test_repeated_names_are_indexed():
     """LIBERO's state names indices 6 and 7 `gripper`; each gets its own name."""
 

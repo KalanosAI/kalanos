@@ -466,6 +466,34 @@ def test_an_edited_v2_1_stored_mean_is_reported_on_its_episode_only(tmp_path):
     ]
 
 
+def test_a_short_v2_1_row_is_reported_on_its_episode_only(tmp_path):
+    """Verify a row holding fewer values than declared is a mismatch on its episode."""
+
+    root = tmp_path / "lerobot_v2_1_tiny"
+    shutil.copytree(str(LEROBOT_V2_1_FIXTURE), root)
+    data_path = root / "data" / "chunk-001" / "episode_000001.parquet"
+    frame = pl.read_parquet(data_path)
+    rows = [list(row) for row in frame["observation.state"].to_list()]
+    expected = len(rows[0])
+    rows[1] = rows[1][:-1]
+    frame.with_columns(
+        pl.Series("observation.state", rows, dtype=pl.List(pl.Float32))
+    ).write_parquet(data_path)
+
+    first, second = _episodes(UPath(root))
+
+    assert first.element_count_check is not None
+    assert first.element_count_check.mismatches == []
+    assert second.element_count_check is not None
+    [mismatch] = second.element_count_check.mismatches
+    assert (mismatch.field, mismatch.expected, mismatch.found, mismatch.frame) == (
+        "observation.state",
+        expected,
+        expected - 1,
+        frame["frame_index"][1],
+    )
+
+
 def test_v2_1_stats_are_not_read_at_the_metadata_tier(tmp_path):
     """Verify a metadata-tier read leaves `stats_check` unset."""
 
