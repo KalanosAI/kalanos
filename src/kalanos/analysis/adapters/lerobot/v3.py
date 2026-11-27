@@ -109,6 +109,56 @@ def _parquet_files(root: UPath) -> list[UPath]:
     )
 
 
+def _check_same_columns(
+    path: UPath,
+    first: UPath,
+    first_schema: pl.Schema,
+    other: UPath,
+    other_schema: pl.Schema,
+) -> None:
+    """Refuse an episode index file whose columns or types differ from the first file's.
+
+    Parameters
+    ----------
+    path : UPath
+        The dataset root, named in the refusal.
+    first : UPath
+        The first episode index file, relative to `path`.
+    first_schema : pl.Schema
+        The columns read from `first`.
+    other : UPath
+        A later episode index file, relative to `path`.
+    other_schema : pl.Schema
+        The columns read from `other`.
+
+    Raises
+    ------
+    AdapterRefusal
+        At the first disagreement, checked in this order:
+        `other` lacks columns `first` holds,
+        `other` holds columns `first` lacks,
+        or a column's type differs.
+    """
+
+    lacking = ", ".join(sorted(set(first_schema) - set(other_schema)))
+    if lacking:
+        raise AdapterRefusal(
+            path, f"episode index file {other} lacks {lacking}, which {first} has"
+        )
+    extra = ", ".join(sorted(set(other_schema) - set(first_schema)))
+    if extra:
+        raise AdapterRefusal(
+            path, f"episode index file {other} has {extra}, which {first} lacks"
+        )
+    for column in sorted(first_schema):
+        if first_schema[column] != other_schema[column]:
+            raise AdapterRefusal(
+                path,
+                f"episode index file {other} stores {column} as "
+                f"{other_schema[column]} where {first} stores {first_schema[column]}",
+            )
+
+
 def _read_episode_index(path: UPath) -> pl.DataFrame:
     """Read and concatenate every `meta/episodes/**/*.parquet`, sorted by episode.
 
@@ -127,11 +177,14 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
         Only `episode_index`, `tasks`, `dataset_from_index`, `dataset_to_index`,
         `length` and the `data/*` and `videos/*` columns are read; any other
         column has to be added here before a caller reads it.
+        Columns are matched across files by name, whatever their order in each file.
 
     Raises
     ------
     AdapterRefusal
         If `meta/episodes/` holds no parquet, or any of them fail to read.
+        Files that disagree with the first file on which of those columns they hold,
+        or on a column's type, are refused, naming both files and the column.
         A v2.x tree has no such directory, so this is the seam it falls
         through on.
     """
@@ -147,7 +200,9 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
                 names = list(pl.read_parquet_schema(handle))
             # Every other column, `stats/*` among them, is left unread: its type can
             # differ from one file to the next, which would fail the concat below.
-            columns = [
+            # The order is sorted so files that list the same columns in different
+            # orders stack by name.
+            columns = sorted(
                 name
                 for name in names
                 if name
@@ -159,16 +214,25 @@ def _read_episode_index(path: UPath) -> pl.DataFrame:
                     "length",
                 )
                 or name.startswith(("data/", "videos/"))
-            ]
+            )
             with parquet_path.open("rb") as handle:
-                frames.append(pl.read_parquet(handle, columns=columns))
+                frame = pl.read_parquet(handle, columns=columns)
+            if frames:
+                _check_same_columns(
+                    path,
+                    parquet_paths[0].relative_to(path),
+                    frames[0].schema,
+                    parquet_path.relative_to(path),
+                    frame.schema,
+                )
+            frames.append(frame)
+        index = pl.concat(frames).with_row_index(_INDEX_ROW)
     except AdapterRefusal:
         raise
     except Exception as exc:
         raise AdapterRefusal(
             path, f"could not read episode index under {episodes_dir}: {exc}"
         ) from exc
-    index = pl.concat(frames).with_row_index(_INDEX_ROW)
     # A missing `episode_index` is refused by name in `episodes`.
     if "episode_index" not in index.columns:
         return index

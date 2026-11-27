@@ -323,6 +323,30 @@ def _with_repeated_index(root, kept=None):
     return UPath(root)
 
 
+def _split_episode_index(root, edit_second):
+    """Copy the fixture to `root` with its episode index split across two files.
+
+    Parameters
+    ----------
+    root : Path
+        Where to copy the fixture.
+    edit_second : Callable[[pl.DataFrame], pl.DataFrame]
+        Applied to the second file's single row before it is written.
+
+    Returns
+    -------
+    UPath
+        The copy's root.
+    """
+
+    shutil.copytree(str(LEROBOT_FIXTURE), root)
+    index_dir = root / "meta" / "episodes" / "chunk-000"
+    index = pl.read_parquet(index_dir / "file-000.parquet")
+    index.head(1).write_parquet(index_dir / "file-000.parquet")
+    edit_second(index.tail(1)).write_parquet(index_dir / "file-001.parquet")
+    return UPath(root)
+
+
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
 # ░░█░░█▀▀░▀▀█░░█░░▀▀█
 # ░░▀░░▀▀▀░▀▀▀░░▀░░▀▀▀
@@ -844,6 +868,71 @@ def test_episode_index_files_that_disagree_on_an_unread_column_still_read(tmp_pa
     episodes = list(LeRobotV3Adapter().episodes(UPath(root)))
 
     assert [e.id for e in episodes] == ["episode_000000", "episode_000001"]
+
+
+def test_episode_index_files_with_columns_in_different_orders_still_read(tmp_path):
+    """Verify index files with the same columns in another order are read by name."""
+
+    def checks(edit_second):
+        # Both copies share one root, since the checks hold absolute paths.
+        root = _split_episode_index(tmp_path / "root", edit_second)
+        found = [
+            (e.id, e.schema_check, e.layout_check, e.stats_check)
+            for e in LeRobotV3Adapter().episodes(root)
+        ]
+        shutil.rmtree(tmp_path / "root")
+        return found
+
+    in_order = checks(lambda second: second)
+    reordered = checks(lambda second: second.select(reversed(second.columns)))
+
+    assert [row[0] for row in reordered] == ["episode_000000", "episode_000001"]
+    assert reordered == in_order
+
+
+def test_an_episode_index_file_missing_a_column_is_refused(tmp_path):
+    """Verify an episode index file lacking a column the first file has is refused."""
+
+    root = _split_episode_index(tmp_path / "root", lambda second: second.drop("tasks"))
+
+    with pytest.raises(
+        AdapterRefusal,
+        match=r"file-001\.parquet lacks tasks, which .*file-000\.parquet has$",
+    ):
+        list(LeRobotV3Adapter().episodes(root))
+
+
+def test_an_episode_index_file_with_an_extra_column_is_refused(tmp_path):
+    """Verify an episode index file holding a column the first file lacks is refused."""
+
+    root = _split_episode_index(
+        tmp_path / "root",
+        lambda second: second.with_columns(pl.lit(1).alias("data/extra")),
+    )
+
+    with pytest.raises(
+        AdapterRefusal,
+        match=r"file-001\.parquet has data/extra, which .*file-000\.parquet lacks$",
+    ):
+        list(LeRobotV3Adapter().episodes(root))
+
+
+def test_an_episode_index_file_typed_differently_is_refused(tmp_path):
+    """Verify an episode index file storing a column as another type is refused."""
+
+    root = _split_episode_index(
+        tmp_path / "root",
+        lambda second: second.with_columns(pl.col("length").cast(pl.Float64)),
+    )
+
+    with pytest.raises(
+        AdapterRefusal,
+        match=(
+            r"file-001\.parquet stores length as Float64"
+            r" where .*file-000\.parquet stores Int64$"
+        ),
+    ):
+        list(LeRobotV3Adapter().episodes(root))
 
 
 @pytest.mark.parametrize(
