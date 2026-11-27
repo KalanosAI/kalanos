@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 import yaml
 from calibration_helpers import grade_with_test_calibration
+from test_lerobot_v3_adapter import _taco_like_dataset
 from upath import UPath
 
 # Internal
@@ -1085,6 +1086,21 @@ def test_write_report_writes_an_html_file_containing_the_reports_own_data(tmp_pa
     html = path.read_text()
     assert "video_meta.json" in html
     assert 'data-status="critical"' in html
+
+
+def test_a_window_past_its_file_reads_in_the_html_finding(tmp_path):
+    """Verify the HTML finding row states the reason, window, file bounds and frames."""
+
+    report = grade(_taco_like_dataset(tmp_path / "taco", fixed_pointer=False))
+    reloaded = Report.model_validate_json(
+        write_report(report, tmp_path / "r.json").read_text()
+    )
+
+    for graded in (report, reloaded):
+        html = write_report(graded, tmp_path / "r.html").read_text()
+        assert "Video window outside referenced file" in html
+        assert "window 4.4-8.8 s; file 0-4.4 s; 0 of 66 frames" in html
+        assert "rgb_static/chunk-000/file-000.mp4" in html
 
 
 def test_write_report_raises_on_an_unknown_suffix(tmp_path):

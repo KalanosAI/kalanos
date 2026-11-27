@@ -341,6 +341,9 @@ class ContainerHeader:
         How many frames the stream holds.
     duration_s : float or None
         The stream's duration in seconds.
+    start_s : float or None
+        Where the stream's first timestamp sits, in seconds,
+        `None` when the container states none.
     color_range : str or None
         The colour range, as FFmpeg names it (`tv`).
     color_primaries : str or None
@@ -372,6 +375,7 @@ class ContainerHeader:
     bit_rate: int | None = None
     frame_count: int | None = None
     duration_s: float | None = None
+    start_s: float | None = None
     color_range: str | None = None
     color_primaries: str | None = None
     color_transfer: str | None = None
@@ -1034,6 +1038,13 @@ def _read_header(container: Any) -> ContainerHeader:
         bit_rate=int(bit_rate) if bit_rate else None,
         frame_count=int(stream.frames) if stream.frames else None,
         duration_s=float(duration * time_base) if duration and time_base else None,
+        # start_time 0 is a real start; a truthiness test here
+        # would leave every file starting at 0 without bounds.
+        start_s=(
+            float(stream.start_time * time_base)
+            if stream.start_time is not None and time_base
+            else None
+        ),
         color_range=_color_name(codec, "color_range", _COLOR_RANGES),
         color_primaries=_color_name(codec, "color_primaries", _COLOR_PRIMARIES),
         color_transfer=_color_name(codec, "color_trc", _COLOR_TRANSFERS),

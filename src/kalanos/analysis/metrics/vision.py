@@ -242,6 +242,11 @@ _FPS_REL_TOL = 1e-3
 # not_applicable by design (no action stream, no video container).
 CORE_METRICS = ("sharpness_score", "exposure_shift_pct")
 
+# The presence reason when a segment's declared window lies wholly outside its file.
+# A fixed text, so the report's reason table holds it once;
+# the window and bounds go in their own evidence keys.
+WINDOW_OUTSIDE_FILE = "Video window outside referenced file"
+
 # One episode's camera streams are graded back to back,
 # so the cache only needs to span one episode's cameras.
 _CACHE_SIZE = 8
@@ -2644,6 +2649,12 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
         `report_only` with 1.0 when the frame decoded and 0.0 when it did not,
         for the policy to regrade,
         or `not_applicable` when the stream is not backed by a video file.
+        Evidence names the `camera` and its `path`, and at 0.0 the `reason`,
+        the `declared_window_s`,
+        and the `observed_frames` against the `expected_frames`.
+        When the container states the file's bounds
+        and the window lies wholly outside them,
+        the reason is `WINDOW_OUTSIDE_FILE` and `file_bounds_s` gives those bounds.
     """
 
     payload = _video_file(ctx)
@@ -2685,16 +2696,100 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
         if not decoded and reason is None:
             reason = "no frame could be decoded"
 
+    evidence: dict[str, Any] = {
+        "camera": ctx.stream.source_field,
+        "path": str(payload.path),
+        "reason": reason,
+    }
+    if reason is not None:
+        evidence.update(_absence_evidence(payload, header))
     return MetricResult(
         value=0.0 if reason is not None else 1.0,
         unit="flag",
         status=MetricStatus.REPORT_ONLY,
-        evidence={
-            "camera": ctx.stream.source_field,
-            "path": str(payload.path),
-            "reason": reason,
-        },
+        evidence=evidence,
     )
+
+
+def _absence_evidence(
+    payload: VideoPayload, header: ContainerHeader | DecodeFailed
+) -> dict[str, Any]:
+    """Describe where an absent camera's segment points and what its file holds there.
+
+    The reason becomes `WINDOW_OUTSIDE_FILE` only when the container states
+    the file's bounds and the declared window lies wholly outside them;
+    otherwise the read failure stands as the reason.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The camera's segment, with its declared window and frame count.
+    header : ContainerHeader or DecodeFailed
+        The file's header, or the failure that stopped reading it.
+
+    Returns
+    -------
+    dict[str, Any]
+        `declared_window_s`, `expected_frames` and `observed_frames`
+        (`None` when the packets cannot be read),
+        plus `reason` and `file_bounds_s` when the window lies outside the file.
+    """
+
+    try:
+        packets = _packets(payload)
+    except DecoderUnavailable:
+        packets = None
+    evidence: dict[str, Any] = {
+        "declared_window_s": [payload.start_s, payload.end_s],
+        "expected_frames": payload.frame_count,
+        "observed_frames": (
+            len(packets.pts) if isinstance(packets, SegmentPackets) else None
+        ),
+    }
+    if isinstance(header, ContainerHeader):
+        bounds = _window_outside_file(payload, header)
+        if bounds is not None:
+            evidence["reason"] = WINDOW_OUTSIDE_FILE
+            evidence["file_bounds_s"] = list(bounds)
+    return evidence
+
+
+def _window_outside_file(
+    payload: VideoPayload, header: ContainerHeader
+) -> tuple[float, float] | None:
+    """Return the file's bounds when the segment's window lies wholly outside them.
+
+    The window counts as outside when it starts within half a frame of the file's end,
+    or ends within half a frame of its start.
+    Float pointers do not land exactly on a frame's timestamp,
+    and `VideoPayload._bounds` widens a segment by the same half frame,
+    so such a window finds no packet in the file.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The segment, with its declared window and frame count.
+    header : ContainerHeader
+        The file's header, stating where the stream starts and how long it runs.
+
+    Returns
+    -------
+    tuple of (float, float) or None
+        The file's start and end in seconds, or `None` when the window overlaps them,
+        or the header or the segment states too little to tell.
+    """
+
+    if header.start_s is None or header.duration_s is None:
+        return None
+    span = payload.end_s - payload.start_s
+    if payload.frame_count <= 0 or span <= 0:
+        return None
+    file_start = header.start_s
+    file_end = header.start_s + header.duration_s
+    half = 0.5 * span / payload.frame_count
+    if payload.start_s >= file_end - half or payload.end_s <= file_start + half:
+        return file_start, file_end
+    return None
 
 
 def _first_frame(

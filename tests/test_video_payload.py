@@ -644,6 +644,14 @@ def test_one_read_converts_every_frame_through_one_reformatter(monkeypatch):
     assert [reformatter.calls for reformatter in built] == [8]
 
 
+def test_the_container_states_its_start():
+    """A file whose first frame sits at 0 states a start of 0.0, not none."""
+
+    payload = VideoPayload(path=LEROBOT_VIDEO, frame_count=6, start_s=0.0, end_s=0.2)
+
+    assert payload.header().start_s == 0.0
+
+
 def test_counting_a_segment_past_the_end_of_the_file_finds_fewer_frames():
     """Verify a segment running past the end of the mp4 counts only what it holds."""
 
