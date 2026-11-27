@@ -32,6 +32,7 @@ from kalanos.analysis.adapters.lerobot.common import (
 from kalanos.analysis.adapters.lerobot.v3 import LeRobotV3Adapter
 from kalanos.analysis.execution import use_tier
 from kalanos.analysis.models.adapters import AdapterRefusal
+from kalanos.analysis.models.binding import Representation
 from kalanos.analysis.models.domain import (
     Channel,
     Clock,
@@ -41,6 +42,7 @@ from kalanos.analysis.models.domain import (
     TimestampDtype,
 )
 from kalanos.analysis.models.eligibility import Consequence, EligibilityStatus
+from kalanos.analysis.models.metrics import MetricStatus
 from kalanos.analysis.models.provenance import ExecutionTier
 from kalanos.analysis.models.report import AnalysedEpisode
 from kalanos.analysis.reporting.assemble import assemble_report
@@ -163,6 +165,24 @@ _MISSING_FILE_DATA = {
         (232, 78001, 78327),
         (700, 217062, 217552),
     ]
+}
+
+
+# The first two frames of `obs.state.manipulator.eef_pos` in
+# `sleepyshaman123/stack_ur5_allegro`, a `[1, 3]` feature stored as one row per frame.
+_EEF_POS = [[[0.490671, -0.134666, 0.587828]], [[0.490398, -0.134538, 0.586533]]]
+
+_EEF_FEATURES = {
+    "obs.state.manipulator.eef_pos": {
+        "dtype": "float32",
+        "shape": [1, 3],
+        "names": None,
+    },
+    "obs.state.manipulator.eef_quat": {
+        "dtype": "float32",
+        "shape": [1, 4],
+        "names": None,
+    },
 }
 
 
@@ -343,7 +363,7 @@ def _taco_like_dataset(root, *, fixed_pointer):
         gripper: [(0, 0.0, 4.4), (0, 4.4, 8.8), (0, 8.8, 13.2)],
     }
     index_file = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    index = pl.read_parquet(index_file)
+    index = pl.read_parquet(str(index_file))
     for key, rows in pointers.items():
         file_index, start, end = zip(*rows, strict=True)
         index = index.with_columns(
@@ -352,7 +372,7 @@ def _taco_like_dataset(root, *, fixed_pointer):
             pl.Series(f"videos/{key}/from_timestamp", start, dtype=pl.Float64),
             pl.Series(f"videos/{key}/to_timestamp", end, dtype=pl.Float64),
         )
-    index.write_parquet(index_file)
+    index.write_parquet(str(index_file))
     return root
 
 
@@ -472,6 +492,93 @@ def _split_episode_index(root, edit_second):
     index.head(1).write_parquet(index_dir / "file-000.parquet")
     edit_second(index.tail(1)).write_parquet(index_dir / "file-001.parquet")
     return UPath(root)
+
+
+def _vector_stream(frame, channels):
+    """Build the stream of `frame`'s column `f` with `channels`.
+
+    Parameters
+    ----------
+    frame : pl.DataFrame
+        One column, `f`, one row per frame.
+    channels : list[Channel]
+        The channels the feature declares.
+
+    Returns
+    -------
+    pl.DataFrame
+        The stream's payload, one column per channel.
+    """
+
+    stream = series_stream(
+        frame,
+        "f",
+        channels,
+        "unmapped.f",
+        pl.Series([0.1 * i for i in range(frame.height)]),
+        UPath("data/chunk-000/file-000.parquet"),
+        mapping_source=None,
+        clock=Clock.UNKNOWN,
+        timestamp_dtype=TimestampDtype.FLOAT64,
+        is_regular=True,
+    )
+    assert isinstance(stream.payload, FramePayload)
+    return stream.payload.frame
+
+
+def _eef_columns(height):
+    """Build `[1, 3]` position and `[1, 4]` quaternion columns, as lists of lists.
+
+    Parameters
+    ----------
+    height : int
+        The data parquet's row count.
+
+    Returns
+    -------
+    list[pl.Series]
+        The two columns.
+    """
+
+    nested = pl.List(pl.List(pl.Float32))
+    return [
+        pl.Series(
+            "obs.state.manipulator.eef_pos",
+            [[[0.49 + 0.001 * i, -0.13, 0.58 - 0.001 * i]] for i in range(height)],
+            dtype=nested,
+        ),
+        pl.Series(
+            "obs.state.manipulator.eef_quat",
+            [[[1.0, 0.0, 0.0, 0.0]] for _ in range(height)],
+            dtype=nested,
+        ),
+    ]
+
+
+def _short_row_dataset(root):
+    """Copy the fixture with a `[3]` list feature whose second row holds 2 values.
+
+    Parameters
+    ----------
+    root : Path
+        Where to copy the fixture.
+
+    Returns
+    -------
+    UPath
+        The copied dataset root.
+    """
+
+    def columns(height):
+        rows = [[0.1 * i, 0.2 * i, 0.3 * i] for i in range(height)]
+        rows[1] = rows[1][:2]
+        return [pl.Series("ee.position", rows, dtype=pl.List(pl.Float32))]
+
+    return _with_features(
+        root,
+        {"ee.position": {"dtype": "float32", "shape": [3], "names": None}},
+        columns,
+    )
 
 
 # ░▀█▀░█▀▀░█▀▀░▀█▀░█▀▀
@@ -819,7 +926,7 @@ def test_an_extension_column_is_read_as_its_storage():
 
 @_POLARS_2
 def test_a_2d_feature_grades_under_polars_2(tmp_path):
-    """Verify a 2-D extension column reads as one channel per row of its grid."""
+    """Verify a 2-D extension column reads as one channel per value of its grid."""
 
     copy_root = tmp_path / "lerobot_v3_tiny"
     shutil.copytree(str(LEROBOT_FIXTURE), copy_root)
@@ -847,7 +954,7 @@ def test_a_2d_feature_grades_under_polars_2(tmp_path):
         tactile = next(
             s for s in episode.streams if s.source_field == "observation.tactile"
         )
-        assert len(tactile.channels) == 2
+        assert len(tactile.channels) == 4
 
 
 def test_storage_columns_leaves_a_frame_without_extensions_unchanged():
@@ -1221,7 +1328,7 @@ def test_a_boolean_feature_is_still_read(tmp_path):
 
 @_POLARS_2
 def test_a_2d_feature_is_declared_at_the_metadata_tier(tmp_path):
-    """Verify a 2-D extension column counts as numbers in the raw parquet schema."""
+    """Verify a 2-D extension column declares one channel per value of its grid."""
 
     root = _with_features(
         tmp_path / "lerobot_v3_tiny",
@@ -1243,7 +1350,7 @@ def test_a_2d_feature_is_declared_at_the_metadata_tier(tmp_path):
         tactile = next(
             s for s in episode.streams if s.source_field == "observation.tactile"
         )
-        assert len(tactile.channels) == 2
+        assert len(tactile.channels) == 4
 
 
 @pytest.mark.parametrize("tier", [ExecutionTier.STANDARD, ExecutionTier.METADATA])
@@ -2009,3 +2116,127 @@ def test_a_corrected_pointer_reads_every_frame(tmp_path):
         and f.source_field == _STATIC
         and f.consequence == Consequence.BLOCK
     ]
+
+
+def test_a_nested_list_feature_reads_one_channel_per_value():
+    """Verify a `[1, 3]` row stored as a list of lists splits into three channels."""
+
+    frame = pl.DataFrame({"f": _EEF_POS}, schema={"f": pl.List(pl.List(pl.Float32))})
+    channels = [Channel(name=f"f_{i}", source_index=i) for i in range(3)]
+
+    payload = _vector_stream(frame, channels)
+
+    assert payload.columns == ["f_0", "f_1", "f_2"]
+    assert all(dtype == pl.Float32 for dtype in payload.dtypes)
+    assert payload["f_0"].to_list() == pytest.approx([0.490671, 0.490398])
+    assert payload["f_2"].to_list() == pytest.approx([0.587828, 0.586533])
+
+
+def test_a_grid_feature_reads_its_values_row_major():
+    """Verify a `[2, 2]` grid's channels read its cells row by row."""
+
+    frame = pl.DataFrame(
+        {"f": [[[1, 2], [3, 4]]]}, schema={"f": pl.Array(pl.Int16, (2, 2))}
+    )
+    channels = [Channel(name=f"f_{i}", source_index=i) for i in range(4)]
+
+    payload = _vector_stream(frame, channels)
+
+    assert payload.row(0) == (1, 2, 3, 4)
+
+
+def test_a_short_row_nulls_every_channel_of_its_frame():
+    """Verify a list row holding 2 values of 3 reads as null, the others as stored."""
+
+    frame = pl.DataFrame(
+        {"f": [[1.0, 2.0, 3.0], [4.0, 5.0], [7.0, 8.0, 9.0]]},
+        schema={"f": pl.List(pl.Float32)},
+    )
+    channels = [Channel(name=f"f_{i}", source_index=i) for i in range(3)]
+
+    payload = _vector_stream(frame, channels)
+
+    assert payload.rows() == [(1.0, 2.0, 3.0), (None, None, None), (7.0, 8.0, 9.0)]
+
+
+def test_a_multi_dimensional_feature_grades_one_numeric_channel_per_value(tmp_path):
+    """Verify `[1, 3]` and `[1, 4]` features grade as 3 and 4 numeric channels."""
+
+    root = _with_features(tmp_path / "lerobot_v3_tiny", _EEF_FEATURES, _eef_columns)
+
+    report = grade(root)
+
+    for episode in report.episodes:
+        by_field = {s.source_field: s for s in episode.streams}
+        position = by_field["obs.state.manipulator.eef_pos"]
+        quaternion = by_field["obs.state.manipulator.eef_quat"]
+        assert [g.channel.name for g in position.channels] == [
+            f"obs.state.manipulator.eef_pos_{i}" for i in range(3)
+        ]
+        assert len(quaternion.channels) == 4
+        for graded in position.channels + quaternion.channels:
+            missing = graded.metrics["missing_pct"]
+            assert missing.status != MetricStatus.NOT_APPLICABLE
+            assert missing.value == 0.0
+        assert [
+            g.channel.binding and g.channel.binding.representation
+            for g in quaternion.channels
+        ] == [Representation.UNKNOWN] * 4
+        rotation = quaternion.metrics["rotation_snr_db"]
+        assert rotation.status == MetricStatus.NOT_APPLICABLE
+        assert rotation.evidence["reason"] == "stream holds no single unit quaternion"
+        assert episode.metrics["element_count_mismatch_count"].value == 0.0
+    assert report.coverage is not None
+    numeric = next(r for r in report.coverage.capabilities if r.key == "numeric")
+    assert numeric.unavailable == 0
+    assert numeric.computed == len(report.episodes)
+
+
+def test_a_short_row_is_reported_and_every_episode_still_loads(tmp_path):
+    """Verify a short row is reported per frame and the dataset still loads."""
+
+    root = _short_row_dataset(tmp_path / "lerobot_v3_tiny")
+    frame = pl.read_parquet(str(root / "data" / "chunk-000" / "file-000.parquet"))
+    short = frame.row(1, named=True)
+    short_episode, short_frame = short["episode_index"], short["frame_index"]
+
+    episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert len(episodes) == 2
+    checks = {e.id: e.element_count_check for e in episodes}
+    assert all(c is not None and c.checked for c in checks.values())
+    [mismatch] = [m for c in checks.values() if c is not None for m in c.mismatches]
+    assert (mismatch.field, mismatch.expected, mismatch.found, mismatch.frame) == (
+        "ee.position",
+        3,
+        2,
+        short_frame,
+    )
+    assert mismatch.message == f"ee.position frame {short_frame}: expected 3, found 2"
+    assert checks[f"episode_{short_episode:06d}"].mismatches == [mismatch]
+
+
+def test_a_short_row_blocks_its_episode(tmp_path):
+    """Verify the episode holding the short row is blocked by the contract route."""
+
+    root = _short_row_dataset(tmp_path / "lerobot_v3_tiny")
+
+    report = grade(root)
+
+    findings = _episode_findings(report, "schema.element_count_mismatch_count")
+    assert len(findings) == 1
+    [finding] = next(iter(findings.values()))
+    assert finding.consequence == Consequence.BLOCK
+    [field] = finding.evidence["fields"]
+    assert field["frames"][0]["message"].endswith("expected 3, found 2")
+
+
+def test_the_element_count_check_is_skipped_at_the_metadata_tier(tmp_path):
+    """Verify a metadata-tier read leaves `element_count_check` unset."""
+
+    root = _short_row_dataset(tmp_path / "lerobot_v3_tiny")
+
+    with use_tier(ExecutionTier.METADATA):
+        episodes = list(LeRobotV3Adapter().episodes(root))
+
+    assert [e.element_count_check for e in episodes] == [None, None]

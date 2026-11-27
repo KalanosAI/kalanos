@@ -15,6 +15,7 @@ from typing import Any
 # Internal
 from kalanos.analysis.metrics.registry import metric
 from kalanos.analysis.metrics.results import not_applicable
+from kalanos.analysis.models.domain import ElementCountMismatch
 from kalanos.analysis.models.metrics import (
     EpisodeContext,
     Family,
@@ -22,6 +23,15 @@ from kalanos.analysis.models.metrics import (
     MetricResult,
     MetricStatus,
 )
+
+
+# ░█▀▀░█▀█░█▀█░█▀▀░▀█▀░█▀█░█▀█░▀█▀░█▀▀
+# ░█░░░█░█░█░█░▀▀█░░█░░█▀█░█░█░░█░░▀▀█
+# ░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░▀░▀░░▀░░▀▀▀
+
+# Frames listed per field in the element count evidence, so an episode whose
+# every row is malformed still gives a bounded report.
+ELEMENT_COUNT_FRAMES_SHOWN = 10
 
 
 # ░█▄█░█▀▀░▀█▀░█░█░█▀█░█▀▄░█▀▀
@@ -274,5 +284,64 @@ def stats_mismatch_count(ctx: EpisodeContext) -> MetricResult:
             "path": str(check.source_path),
             "n_checked": len(check.checked),
             "mismatches": [m.model_dump(mode="json") for m in check.mismatches],
+        },
+    )
+
+
+@metric(
+    level=Level.EPISODE,
+    family=Family.SCHEMA,
+    label="frames whose feature holds another number of values than declared",
+)
+def element_count_mismatch_count(ctx: EpisodeContext) -> MetricResult:
+    """Count the frames holding another number of values than their shape declares.
+
+    Parameters
+    ----------
+    ctx : EpisodeContext
+        The episode to check; only its `element_count_check` is read.
+
+    Returns
+    -------
+    MetricResult
+        `not_applicable` when the source declares no shape per feature,
+        or the episode's data was not read (`element_count_check` is `None`).
+        `report_only` otherwise, with the number of malformed frame and feature
+        pairs as the value. The evidence holds, per mismatched field, the expected
+        count, how many frames disagree and the first of them in frame order.
+    """
+
+    check = ctx.episode.element_count_check
+    if check is None:
+        return not_applicable(
+            "the source declares no shape per feature, or its data was not read"
+        )
+
+    by_field: dict[str, list[ElementCountMismatch]] = {}
+    for mismatch in check.mismatches:
+        by_field.setdefault(mismatch.field, []).append(mismatch)
+    fields = []
+    for field, mismatches in by_field.items():
+        in_order = sorted(mismatches, key=lambda m: m.frame)
+        fields.append(
+            {
+                "field": field,
+                "expected": in_order[0].expected,
+                "n_frames": len(in_order),
+                "frames": [
+                    {"frame": m.frame, "found": m.found, "message": m.message}
+                    for m in in_order[:ELEMENT_COUNT_FRAMES_SHOWN]
+                ],
+            }
+        )
+
+    return MetricResult(
+        value=float(len(check.mismatches)),
+        unit="frames",
+        status=MetricStatus.REPORT_ONLY,
+        evidence={
+            "path": str(check.source_path),
+            "n_checked": len(check.checked),
+            "fields": fields,
         },
     )

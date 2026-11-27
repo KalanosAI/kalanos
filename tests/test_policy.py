@@ -122,6 +122,7 @@ DEFAULT_METRIC_WEIGHTS: dict[str, float | None] = {
     "schema.episode_index_repeated":       0,
     "schema.index_range_mismatch_count":   0,
     "schema.stats_mismatch_count":         None,
+    "schema.element_count_mismatch_count": 0,
     "annotation.task_instruction_missing": 5,
 }
 # fmt: on

@@ -492,6 +492,16 @@ metrics:
         good: 0.5
         bad: 1
 
+  # A frame whose feature holds another number of values than its declared shape
+  # can't be read as channels, so it blocks through the contract route. Weight 0.
+  schema.element_count_mismatch_count:
+    weight: 0
+    route: contract
+    thresholds:
+      default:
+        good: 0.5
+        bad: 1
+
   # Stats that disagree with the data make training normalise with the wrong values,
   # but the recorded data is sound and regenerating the stats fixes it,
   # so this reports and never blocks.

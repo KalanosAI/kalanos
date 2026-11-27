@@ -31,6 +31,8 @@ from kalanos.analysis.models.domain import (
     Clock,
     ClockInfo,
     ClockOrigin,
+    ElementCountCheck,
+    ElementCountMismatch,
     FramePayload,
     Kind,
     MappingSource,
@@ -462,8 +464,9 @@ def channels_for(
     Returns
     -------
     list[Channel]
-        One Channel per member. Named from `names` when its length matches
-        the feature's width, indexed otherwise. A name that `names` repeats
+        One Channel per value of the declared shape, in row-major order, so a
+        `[1, 3]` feature yields three. Named from `names` when its length matches
+        that count, indexed by flat position otherwise. A name that `names` repeats
         is indexed as `feature[i]` on each member that carries it, and kept
         as that member's declared name. A scalar feature yields
         exactly one channel, named after the feature itself.
@@ -471,8 +474,8 @@ def channels_for(
     """
 
     names: list[str] = declared_names(spec)
-    shape = spec.get("shape") or [1]
-    width = shape[0] if shape else 1
+    shape = _declared_shape(spec)
+    width = math.prod(shape) if shape else 1
 
     if width == 1:
         channel_names = [feature]
@@ -1068,6 +1071,92 @@ def check_stats(
     return StatsCheck(source_path=source_path, checked=checked, mismatches=mismatches)
 
 
+def _flat_values(feature: str, dtype: pl.List | pl.Array) -> pl.Expr:
+    """Express each row of a List or Array column as one flat list, row-major.
+
+    Parameters
+    ----------
+    feature : str
+        The column name.
+    dtype : pl.List or pl.Array
+        The column's type, past `storage_columns`.
+
+    Returns
+    -------
+    pl.Expr
+        A `pl.List` of the innermost values per row. A null row stays null.
+    """
+
+    expr = pl.col(feature)
+    if isinstance(dtype, pl.Array):
+        expr = expr.arr.to_list()
+    inner = dtype.inner
+    while isinstance(inner, (pl.List, pl.Array)):
+        element = (
+            pl.element().arr.to_list() if isinstance(inner, pl.Array) else pl.element()
+        )
+        expr = expr.list.eval(element.explode())
+        inner = inner.inner
+    return expr
+
+
+def check_element_counts(
+    plan: FeaturePlan, frame: pl.DataFrame, source_path: UPath
+) -> ElementCountCheck:
+    """Find the frames whose feature holds another number of values than declared.
+
+    Only List and Array columns holding numbers are compared, each against the
+    channel count its declared shape gives. A null row is a missing value,
+    left to the metrics that count those, and is not compared.
+
+    Parameters
+    ----------
+    plan : FeaturePlan
+        The dataset's resolved feature plan.
+    frame : pl.DataFrame
+        The episode's rows, with numeric payloads read.
+    source_path : UPath
+        The data file the rows were read from.
+
+    Returns
+    -------
+    ElementCountCheck
+        The features compared and one mismatch per malformed frame and feature.
+        A frame is named by its `frame_index`, or by its row position when the
+        data has no such column.
+    """
+
+    frames = (
+        frame["frame_index"]
+        if "frame_index" in frame.columns
+        else pl.Series(range(frame.height))
+    )
+    checked = []
+    mismatches = []
+    for feature, (_, _, channels) in plan.series.items():
+        if feature not in frame.columns:
+            continue
+        dtype = frame.schema[feature]
+        if not isinstance(dtype, (pl.List, pl.Array)) or not holds_numbers(dtype):
+            continue
+        checked.append(feature)
+        expected = len(channels)
+        counts = frame.select(_flat_values(feature, dtype).list.len())[feature]
+        for frame_number, found in zip(frames, counts, strict=True):
+            if found is not None and found != expected:
+                mismatches.append(
+                    ElementCountMismatch(
+                        field=feature,
+                        expected=expected,
+                        found=found,
+                        frame=frame_number,
+                    )
+                )
+    return ElementCountCheck(
+        source_path=source_path, checked=checked, mismatches=mismatches
+    )
+
+
 def check_scalar_index(path: UPath, schema: Mapping[str, pl.DataType]) -> None:
     """Refuse a data parquet whose index columns hold lists instead of scalars.
 
@@ -1131,17 +1220,23 @@ def series_stream(
     Returns
     -------
     Stream
-        One series stream, its List or Array column unnested into one channel each,
-        or its single scalar column carried through unchanged.
+        One series stream, its List or Array column flattened row-major into one
+        channel per value, or its single scalar column carried through unchanged.
+        A frame whose row holds another number of values than `channels` is null
+        in every channel.
     """
 
     dtype = frame.schema[feature]
     if isinstance(dtype, (pl.List, pl.Array)):
-        members = (
-            pl.col(feature).arr if isinstance(dtype, pl.Array) else pl.col(feature).list
-        )
+        values = _flat_values(feature, dtype)
+        # A row with another number of values than declared can't be split into
+        # channels, so every channel of the feature is null on that frame.
+        ok = values.list.len() == len(channels)
         payload_frame = frame.select(
-            [members.get(i).alias(c.name) for i, c in enumerate(channels)]
+            [
+                pl.when(ok).then(values.list.get(i, null_on_oob=True)).alias(c.name)
+                for i, c in enumerate(channels)
+            ]
         )
     else:
         [channel] = channels
