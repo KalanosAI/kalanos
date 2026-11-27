@@ -1103,6 +1103,40 @@ def test_a_window_past_its_file_reads_in_the_html_finding(tmp_path):
         assert "rgb_static/chunk-000/file-000.mp4" in html
 
 
+def test_an_unverified_window_reads_in_the_html_finding(tmp_path):
+    """Verify the HTML finding row says when the file's bounds could not be read."""
+
+    report = _sample_report()
+    absent = Finding(
+        metric_id="vision.camera_stream_present",
+        family="vision",
+        severity=Severity.CRITICAL,
+        value=0.0,
+        unit="flag",
+        points=0.0,
+        episode_id="arm_multi_device",
+        stream="video.rgb",
+        instance=None,
+        channel=None,
+        evidence={
+            "reason": "no frame could be decoded",
+            "declared_window_s": [370.0, 380.0],
+            "observed_frames": 0,
+            "expected_frames": 500,
+            "window_check": "unverified",
+        },
+    )
+    report = report.model_copy(update={"findings": [*report.findings, absent]})
+    reloaded = Report.model_validate_json(
+        write_report(report, tmp_path / "r.json").read_text()
+    )
+
+    for graded in (report, reloaded):
+        html = write_report(graded, tmp_path / "r.html").read_text()
+        assert "window 370-380 s; 0 of 500 frames; file bounds unverified" in html
+        assert "file 0-" not in html
+
+
 def test_write_report_raises_on_an_unknown_suffix(tmp_path):
     """Verify an unsupported extension fails loudly, naming what is supported."""
 

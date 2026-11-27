@@ -247,6 +247,11 @@ CORE_METRICS = ("sharpness_score", "exposure_shift_pct")
 # the window and bounds go in their own evidence keys.
 WINDOW_OUTSIDE_FILE = "Video window outside referenced file"
 
+# The values of an absent camera's `window_check` evidence key.
+WINDOW_CHECK_OUTSIDE = "outside"
+WINDOW_CHECK_INSIDE = "inside"
+WINDOW_CHECK_UNVERIFIED = "unverified"
+
 # One episode's camera streams are graded back to back,
 # so the cache only needs to span one episode's cameras.
 _CACHE_SIZE = 8
@@ -2655,6 +2660,9 @@ def camera_stream_present(ctx: StreamContext) -> MetricResult:
         When the container states the file's bounds
         and the window lies wholly outside them,
         the reason is `WINDOW_OUTSIDE_FILE` and `file_bounds_s` gives those bounds.
+        `window_check` says whether the window was found `outside` or `inside` the file,
+        or is `unverified` when the header cannot be read or states no bounds,
+        or the segment declares no frames or an empty window.
     """
 
     payload = _video_file(ctx)
@@ -2732,6 +2740,9 @@ def _absence_evidence(
     dict[str, Any]
         `declared_window_s`, `expected_frames` and `observed_frames`
         (`None` when the packets cannot be read),
+        `window_check` (`WINDOW_CHECK_OUTSIDE`, `WINDOW_CHECK_INSIDE`
+        or `WINDOW_CHECK_UNVERIFIED`, the last when `_bounds_known` is false
+        or the header could not be read),
         plus `reason` and `file_bounds_s` when the window lies outside the file.
     """
 
@@ -2746,12 +2757,42 @@ def _absence_evidence(
             len(packets.pts) if isinstance(packets, SegmentPackets) else None
         ),
     }
-    if isinstance(header, ContainerHeader):
-        bounds = _window_outside_file(payload, header)
-        if bounds is not None:
-            evidence["reason"] = WINDOW_OUTSIDE_FILE
-            evidence["file_bounds_s"] = list(bounds)
+    if not isinstance(header, ContainerHeader) or not _bounds_known(payload, header):
+        evidence["window_check"] = WINDOW_CHECK_UNVERIFIED
+        return evidence
+    bounds = _window_outside_file(payload, header)
+    if bounds is None:
+        evidence["window_check"] = WINDOW_CHECK_INSIDE
+    else:
+        evidence["window_check"] = WINDOW_CHECK_OUTSIDE
+        evidence["reason"] = WINDOW_OUTSIDE_FILE
+        evidence["file_bounds_s"] = list(bounds)
     return evidence
+
+
+def _bounds_known(payload: VideoPayload, header: ContainerHeader) -> bool:
+    """Whether the header and the segment state enough to place the window in the file.
+
+    Parameters
+    ----------
+    payload : VideoPayload
+        The segment, with its declared window and frame count.
+    header : ContainerHeader
+        The file's header.
+
+    Returns
+    -------
+    bool
+        True when the header states the stream's start and duration,
+        and the segment declares frames over a window of positive length.
+    """
+
+    return (
+        header.start_s is not None
+        and header.duration_s is not None
+        and payload.frame_count > 0
+        and payload.end_s > payload.start_s
+    )
 
 
 def _window_outside_file(
@@ -2779,11 +2820,10 @@ def _window_outside_file(
         or the header or the segment states too little to tell.
     """
 
-    if header.start_s is None or header.duration_s is None:
+    if not _bounds_known(payload, header):
         return None
+    assert header.start_s is not None and header.duration_s is not None
     span = payload.end_s - payload.start_s
-    if payload.frame_count <= 0 or span <= 0:
-        return None
     file_start = header.start_s
     file_end = header.start_s + header.duration_s
     half = 0.5 * span / payload.frame_count

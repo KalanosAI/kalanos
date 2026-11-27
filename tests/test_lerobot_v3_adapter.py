@@ -1869,6 +1869,13 @@ def test_a_window_past_its_file_names_the_pointer_mismatch(tmp_path):
     assert evidence["declared_window_s"] == [4.4, 8.8]
     assert evidence["file_bounds_s"] == [0.0, pytest.approx(4.4)]
     assert (evidence["observed_frames"], evidence["expected_frames"]) == (0, 66)
+    assert evidence["window_check"] == "outside"
+    assert [
+        f
+        for f in report.findings
+        if _episode_number(f.episode_id) == 2142
+        and f.metric_id != "vision.camera_stream_present"
+    ]
     [finding] = [
         f
         for e, found in _episode_findings(
@@ -1897,6 +1904,7 @@ def test_neighbours_and_the_other_camera_of_a_misplaced_window_pass(tmp_path):
     ]:
         assert presence[key].value == 1.0, key
         assert "file_bounds_s" not in presence[key].evidence
+        assert "window_check" not in presence[key].evidence
 
 
 def test_a_corrected_pointer_reads_every_frame(tmp_path):
