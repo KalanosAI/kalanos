@@ -2,9 +2,13 @@
 
 [![PyPI](https://img.shields.io/pypi/v/kalanos)](https://pypi.org/project/kalanos/) [![Python](https://img.shields.io/pypi/pyversions/kalanos)](https://pypi.org/project/kalanos/) [![CI](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml/badge.svg)](https://github.com/KalanosAI/kalanos/actions/workflows/ci.yaml) [![License](https://img.shields.io/github/license/KalanosAI/kalanos)](https://github.com/KalanosAI/kalanos/blob/main/LICENSE)
 
-**Find which robot episodes need a closer look before training.**
+Training a robot on ungraded data means finding flatlined sensors, dropped samples, and mistimed cameras after the training run is already spent.
 
-Kalanos audits recorded demonstrations for issues such as noisy commands, flatlined signals, and missing data. It runs where your data lives and writes an HTML report for inspection or JSON for automation. Nothing is uploaded unless you publish. No account or API key is needed for local audits.
+- Scores LeRobot, HDF5, MCAP/ROS 2, CSV, and JSON datasets from 0–100 where the evidence supports a score. Decides every episode: pass, blocked, review, or unknown.
+- Finds flatlined channels, dropped samples, clock jitter, and noisy commands. Each finding names the episode, stream, and channel behind it.
+- Writes an HTML report to inspect and JSON to automate. Gate CI with `--fail-on`.
+- Runs on your machine. Nothing is uploaded unless you publish, and local audits need no account or API key.
+- Publishing to [hub.kalanos.ai](https://hub.kalanos.ai) is opt-in. You get a public report and a badge for the dataset card.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/KalanosAI/kalanos/blob/main/notebooks/kalanos_quickstart.ipynb)
 
